@@ -20,10 +20,8 @@ FUNCTION_LABEL_MAP = {
     'tools': 'Tool'
 }
 
-CATEGORIES_ID = Literal[tuple(CATEGORIES_LABEL_MAP.keys())]
-CATEGORIES_LABEL = Literal[tuple(CATEGORIES_LABEL_MAP.values())]
-FUNCTION_ID = Literal[tuple(FUNCTION_LABEL_MAP.keys())]
-FUNCTION_LABEL = Literal[tuple(FUNCTION_LABEL_MAP.values())]
+CATEGORIES = Literal[*(CATEGORIES_LABEL_MAP.keys())]
+FUNCTIONS = Literal[*FUNCTION_LABEL_MAP.keys()]
 
 if __name__ == "__main__":
-    print(FUNCTION_ID)
+    print(CATEGORIES)
