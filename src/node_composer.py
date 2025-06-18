@@ -1,88 +1,95 @@
-import inspect
+# backend/node_discovery.py
+
 import json
 import pkgutil
 import importlib
 from pathlib import Path
+from typing import Literal, List, Dict, Any
+
+from node_config import CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP
+
+CATEGORIES_ID = Literal[*CATEGORIES_LABEL_MAP.keys()]
+CATEGORIES_LABEL = Literal[*CATEGORIES_LABEL_MAP.values()]
+FUNCTION_ID = Literal[*FUNCTION_LABEL_MAP.keys()]
+FUNCTION_LABEL = Literal[*FUNCTION_LABEL_MAP.values()]
+
 NODE_REGISTRY = []
 
-TYPE_MAP = {
-    int: "INT",
-    float: "FLOAT",
-    str: "STR",
-}
+class BaseNode:
+    categoryId: CATEGORIES_ID
+    functionId: FUNCTION_ID
+    
+    nodeId: str = "unimplemented"
+    nodeName: str = "Unimplemented Node"
+    
+    inputs: List[Dict[str, Any]] = []
+    outputs: List[Dict[str, Any]] = []
+    parameters: List[Dict[str, Any]] = []
 
-def node(id: str, name: str, category: str = "Default"):
-    def decorator(func):
-        sig = inspect.signature(func)
-        
-        inputs = []
-        parameters = []
-        
-        for param in sig.parameters.values():
-            param_type = TYPE_MAP.get(param.annotation, "ANY")
-            # 기본값이 없는 파라미터는 '입력(Input)' 포트로 간주
-            if param.default is inspect.Parameter.empty:
-                inputs.append({"id": param.name, "name": param.name.capitalize(), "type": param_type})
-            # 기본값이 있는 파라미터는 '파라미터(Parameter)'로 간주
-            else:
-                parameters.append({
-                    "id": f"p_{param.name}", 
-                    "name": param.name.capitalize(), 
-                    "value": param.default,
-                    "type": param_type
-                })
-
-        # 반환값 타입 힌트를 '출력(Output)' 포트로 간주
-        return_type = TYPE_MAP.get(sig.return_annotation, "ANY")
-        outputs = [{"id": "output", "name": "Output", "type": return_type}]
-
-        node_spec = {
-            "id": id,
-            "nodeName": name,
-            "category": category,
-            "inputs": inputs,
-            "outputs": outputs,
-            "parameters": parameters,
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if cls.__name__ == 'BaseNode':
+            return
+            
+        spec = {
+            # 나중에 그룹화를 위해 모든 정보를 일단 저장
+            "categoryId": cls.categoryId,
+            "categoryName": cls.categoryName,
+            "functionId": cls.functionId,
+            "functionName": cls.functionName,
+            # 프론트엔드 노드 레벨에서 사용하는 최종 데이터
+            "id": cls.nodeId,
+            "nodeName": cls.nodeName,
+            "inputs": cls.inputs,
+            "outputs": cls.outputs,
+            "parameters": cls.parameters,
         }
-        
-        NODE_REGISTRY.append(node_spec)
-        return func
-    return decorator
+        NODE_REGISTRY.append(spec)
 
+    def execute(self, *args, **kwargs):
+        raise NotImplementedError("모든 노드는 execute 메서드를 구현해야 합니다.")
 
 def run_discovery():
-    """'nodes' 디렉토리의 모든 모듈을 임포트하여 노드를 등록합니다."""
-    nodes_dir = Path(__file__).parent / "nodes"
-    # nodes 디렉토리의 모든 파이썬 파일을 순회하며 동적으로 임포트
-    for (_, module_name, _) in pkgutil.iter_modules([str(nodes_dir)]):
-        importlib.import_module(f"nodes.{module_name}")
+    nodes_root_dir = Path(__file__).parent / "nodes"
+    for module_info in pkgutil.walk_packages(path=[str(nodes_root_dir)], prefix='nodes.'):
+        try:
+            importlib.import_module(module_info.name)
+        except Exception as e:
+            print(f"Error importing module {module_info.name}: {e}")
 
-
-def generate_json_spec(output_path="node_spec.json"):
-    """등록된 노드 정보를 JSON 파일로 저장합니다."""
+def generate_json_spec(output_path="export_nodes.json"):
+    """등록된 노드 정보를 새로운 프론트엔드 형식에 맞춰 JSON 파일로 저장합니다."""
     
-    # 카테고리별로 노드를 그룹화
-    grouped_nodes = {}
-    for node in NODE_REGISTRY:
-        category = node.pop("category", "Default")
-        if category not in grouped_nodes:
-            grouped_nodes[category] = []
-        grouped_nodes[category].append(node)
+    categories = {}
+    for node_spec in NODE_REGISTRY:
+        cat_id = node_spec["categoryId"]
+        if cat_id not in categories:
+            categories[cat_id] = {
+                "categoryId": cat_id,
+                "categoryName": node_spec["categoryName"],
+                "icon": "LuWrench",
+                "functions": {}
+            }
         
-    # 프론트엔드 `NODE_DATA` 형식에 맞게 최종 데이터 구조화
-    # 이 부분은 프론트엔드 형식에 맞게 자유롭게 커스터마이징 가능
-    final_spec = [
-        {
-            "id": "dynamic-nodes",
-            "name": "My Nodes",
-            "icon": "LuWrench", # 예시 아이콘
-            "categories": [
-                {"id": cat_name.lower(), "name": cat_name, "nodes": nodes}
-                for cat_name, nodes in grouped_nodes.items()
-            ]
-        }
-    ]
+        # 2. Category 내부에서 Function별로 그룹화
+        func_id = node_spec["functionId"]
+        if func_id not in categories[cat_id]["functions"]:
+            categories[cat_id]["functions"][func_id] = {
+                "functionId": func_id,
+                "functionName": node_spec["functionName"],
+                "nodes": []
+            }
+        
+        # 노드 정보 추가
+        node_info = {k: v for k, v in node_spec.items() if k not in ['categoryId', 'categoryName', 'functionId', 'functionName']}
+        categories[cat_id]["functions"][func_id]["nodes"].append(node_info)
+
+    # 최종 포맷으로 변환
+    final_spec = []
+    for cat in categories.values():
+        cat["functions"] = list(cat["functions"].values())
+        final_spec.append(cat)
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(final_spec, f, indent=4, ensure_ascii=False)
-    print(f"✅ Node specification generated at {output_path}")
+    print(f"✅ Node specification generated with {len(NODE_REGISTRY)} nodes.")
