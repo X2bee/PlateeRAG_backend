@@ -5,7 +5,7 @@ import importlib
 from pathlib import Path
 from typing import List, Dict, Any
 from abc import ABC, abstractmethod
-from src.model.node import BaseNode
+from src.model.node import NodeSpec, Port, Parameter
 
 from src.node_config import CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP
 
@@ -16,9 +16,9 @@ class Node(ABC):
     functionId: str = "Default"
     nodeId: str = "Default"
     nodeName: str = "Default"
-    inputs: List[Dict[str, Any]] = []
-    outputs: List[Dict[str, Any]] = []
-    parameters: List[Dict[str, Any]] = []
+    inputs: List[Port] = []
+    outputs: List[Port] = []
+    parameters: List[Parameter] = []
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -50,7 +50,7 @@ class Node(ABC):
         category_name = CATEGORIES_LABEL_MAP.get(cls.categoryId, "Unknown Category")
         function_name = FUNCTION_LABEL_MAP.get(cls.functionId, "Unknown Function")
 
-        spec = {
+        spec: NodeSpec = {
             "categoryId": cls.categoryId,
             "categoryName": category_name,
             "functionId": cls.functionId,
@@ -59,7 +59,7 @@ class Node(ABC):
             "nodeName": cls.nodeName,
             "inputs": cls.inputs,
             "outputs": cls.outputs,
-            "parameters": cls.parameters,
+            "parameters": cls.parameters
         }
         NODE_REGISTRY.append(spec)
         print(f" -> 노드 '{cls.nodeName}' 등록 완료.")

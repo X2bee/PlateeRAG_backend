@@ -1,14 +1,31 @@
-from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Any, TypedDict, Literal, Type
 
-class BaseNode(BaseModel):
-    categoryId: str = "Default"
-    functionId: str = "Default"
-    nodeId: str = "Default"
-    nodeName: str = "Default"
-    inputs: List[Dict[str, Any]] = []
-    outputs: List[Dict[str, Any]] = []
-    parameters: List[Dict[str, Any]] = []
+class Port(TypedDict):
+    """노드의 입력 또는 출력 포트 구조를 정의합니다."""
+    id: str
+    name: str
+    type: str
+
+
+class Parameter(TypedDict):
+    """노드가 사용할 파라미터의 구조를 정의합니다."""
+    id: str
+    name: str
+    type: Literal["STRING", "INTEGER", "FLOAT", "BOOLEAN"]
+    default: Any
+
+
+class NodeSpec(TypedDict):
+    """NODE_REGISTRY에 저장될 노드의 전체 명세 구조를 정의합니다."""
+    id: str
+    nodeName: str
+    categoryId: str
+    categoryName: str
+    functionId: str
+    functionName: str
+    inputs: List[Port]
+    outputs: List[Port]
+    parameters: List[Parameter]
 
 CATEGORIES_LABEL_MAP = {
     'langchain': 'LangChain',
