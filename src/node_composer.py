@@ -71,8 +71,8 @@ class Node(ABC):
 
 def run_discovery() -> None:
     """Desc"""
-    nodes_root_dir = Path(__file__).parent / "src.nodes"
-    for module_info in pkgutil.walk_packages(path=[str(nodes_root_dir)], prefix='nodes.'):
+    nodes_root_dir = Path(__file__).parent / "nodes"
+    for module_info in pkgutil.walk_packages(path=[str(nodes_root_dir)], prefix='src.nodes.'):
         try:
             importlib.import_module(module_info.name)
         except Exception as e:

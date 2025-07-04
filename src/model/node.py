@@ -13,7 +13,8 @@ class BaseNode(BaseModel):
 CATEGORIES_LABEL_MAP = {
     'langchain': 'LangChain',
     'polar': 'POLAR',
-    'utilities': 'Utilities'
+    'utilities': 'Utilities',
+    'math': 'Math'
 }
 
 FUNCTION_LABEL_MAP = {
@@ -27,5 +28,6 @@ FUNCTION_LABEL_MAP = {
     'memory': 'Memory',
     'moderation': 'Moderation',
     'output_parsers': 'Output Parser',
-    'tools': 'Tool'
+    'tools': 'Tool',
+    'arithmetic':'Arithmetic'
 }
