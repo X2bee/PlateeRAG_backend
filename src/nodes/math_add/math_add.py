@@ -1,8 +1,9 @@
 # backend/nodes/math/add.py
+from src.node_composer import (
+    Node
+)
 
-from src.node_composer import BaseNode
-
-class AddIntegersNode(BaseNode):
+class AddIntegersNode(Node):
     categoryId = "math"
     categoryName = "Math"
     
