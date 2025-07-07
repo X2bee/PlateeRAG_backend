@@ -1,10 +1,11 @@
-from typing import List, Any, TypedDict, Literal, Type
+from typing import List, Any, TypedDict, Literal, Type, Optional
 
 class Port(TypedDict):
     """노드의 입력 또는 출력 포트 구조를 정의합니다."""
     id: str
     name: str
     type: str
+    multi: Optional[bool] = False
 
 
 class Parameter(TypedDict):
@@ -12,7 +13,10 @@ class Parameter(TypedDict):
     id: str
     name: str
     type: Literal["STRING", "INTEGER", "FLOAT", "BOOLEAN"]
-    default: Any
+    value: Any
+    step: Optional[float] = None
+    min: Optional[float] = None
+    max: Optional[float] = None
 
 
 class NodeSpec(TypedDict):

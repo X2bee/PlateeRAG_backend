@@ -14,11 +14,25 @@ class AddIntegersNode(Node):
     nodeName = "Add Integers"
     
     inputs = [
-        {"id": "a", "name": "A", "type": "INT"},
-        {"id": "b", "name": "B", "type": "INT"},
+        {
+            "id": "a", 
+            "name": "A", 
+            "type": "INT",
+            "multi": False
+        },
+        {
+            "id": "b", 
+            "name": "B", 
+            "type": "INT",
+            "multi": False
+        },
     ]
     outputs = [
-        {"id": "result", "name": "Result", "type": "INT"},
+        {
+            "id": "result", 
+            "name": "Result", 
+            "type": "INT"
+        },
     ]
     parameters = []
 
