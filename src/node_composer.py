@@ -3,13 +3,14 @@ import json
 import pkgutil
 import importlib
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Type
 from abc import ABC, abstractmethod
 from src.model.node import NodeSpec, Port, Parameter
 
 from src.node_config import CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP
 
 NODE_REGISTRY = []
+NODE_CLASS_REGISTRY: Dict[str, Type['Node']] = {}
 
 class Node(ABC):
     categoryId: str = "Default"
@@ -62,6 +63,8 @@ class Node(ABC):
             "parameters": cls.parameters
         }
         NODE_REGISTRY.append(spec)
+        NODE_CLASS_REGISTRY[cls.nodeId] = cls
+
         print(f" -> 노드 '{cls.nodeName}' 등록 완료.")
 
     @abstractmethod
