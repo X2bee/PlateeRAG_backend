@@ -37,7 +37,7 @@ def get_node_list():
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-@router.get("/get/nodes", response_model=List[Dict[str, Any]])
+@router.get("/get", response_model=List[Dict[str, Any]])
 async def list_nodes():
     try:
         nodes = get_node_list()
@@ -48,7 +48,7 @@ async def list_nodes():
         logging.error(f"Error listing nodes: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-@router.get("/export/nodes", response_model=Dict[str, Any])
+@router.get("/export", response_model=Dict[str, Any])
 async def export_nodes():
     """
     Refesh and export the list of nodes to a JSON file.
