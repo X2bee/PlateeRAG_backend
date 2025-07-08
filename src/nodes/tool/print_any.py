@@ -1,9 +1,6 @@
-# backend/nodes/math/add.py
-from src.node_composer import (
-    Node
-)
+from src.node_composer import Node
 
-class PrintAny(Node):
+class PrintAnyNode(Node):
     categoryId = "utilities"
     functionId = "endnode"
 
@@ -15,7 +12,8 @@ class PrintAny(Node):
             "id": "input_print", 
             "name": "Print", 
             "type": "ANY",
-            "multi": False
+            "multi": False,
+            "required": True
         },
     ]
 

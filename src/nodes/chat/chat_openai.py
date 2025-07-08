@@ -1,11 +1,11 @@
 from src.node_composer import Node
 
-class AddIntegersNode(Node):
-    categoryId = "math"
-    functionId = "arithmetic"
+class ChatOpenAINode(Node):
+    categoryId = "langchain"
+    functionId = "chat_models"
 
-    nodeId = "math/add_integers"
-    nodeName = "Add Integers"
+    nodeId = "chat/openai"
+    nodeName = "Chat OpenAI"
     
     inputs = [
         {
@@ -20,7 +20,7 @@ class AddIntegersNode(Node):
             "name": "B", 
             "type": "INT",
             "multi": False,
-            "required": True
+            "required": False
         },
     ]
     outputs = [

@@ -1,6 +1,4 @@
-from src.node_composer import (
-    Node
-)
+from src.node_composer import Node
 
 class InputStringNode(Node):
     categoryId = "utilities"
