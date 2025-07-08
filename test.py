@@ -28,38 +28,9 @@ if __name__ == "__main__":
         },
         "nodes": [
             {
-            "id": "math/input_int-1751932725883",
+            "id": "math/add_integers-1751944056168",
             "data": {
-                "id": "math/input_int",
-                "nodeName": "Input Integer",
-                "inputs": [],
-                "outputs": [
-                {
-                    "id": "result",
-                    "name": "Result",
-                    "type": "INT"
-                }
-                ],
-                "parameters": [
-                {
-                    "id": "input_int",
-                    "name": "Integer",
-                    "type": "INT",
-                    "value": 10,
-                    "step": 1,
-                    "min": -2147483648,
-                    "max": 2147483647
-                }
-                ]
-            },
-            "position": {
-                "x": 8767.876511619374,
-                "y": 4119.318597079693
-            }
-            },
-            {
-            "id": "math/add_integers-1751932726810",
-            "data": {
+                "functionId": "arithmetic",
                 "id": "math/add_integers",
                 "nodeName": "Add Integers",
                 "inputs": [
@@ -86,13 +57,14 @@ if __name__ == "__main__":
                 "parameters": []
             },
             "position": {
-                "x": 9206.971654363102,
-                "y": 4277.140920285132
+                "x": 9142.55813973802,
+                "y": 4106.731173862441
             }
             },
             {
-            "id": "math/input_int-1751933108563",
+            "id": "math/input_int-1751944068980",
             "data": {
+                "functionId": "arithmetic",
                 "id": "math/input_int",
                 "nodeName": "Input Integer",
                 "inputs": [],
@@ -108,7 +80,7 @@ if __name__ == "__main__":
                     "id": "input_int",
                     "name": "Integer",
                     "type": "INT",
-                    "value": 50,
+                    "value": 10,
                     "step": 1,
                     "min": -2147483648,
                     "max": 2147483647
@@ -116,13 +88,45 @@ if __name__ == "__main__":
                 ]
             },
             "position": {
-                "x": 8766.274641887663,
-                "y": 4389.821485351686
+                "x": 8572.86676435361,
+                "y": 4037.5711097725625
             }
             },
             {
-            "id": "tools/print_any-1751935004370",
+            "id": "math/input_int-1751944070288",
             "data": {
+                "functionId": "arithmetic",
+                "id": "math/input_int",
+                "nodeName": "Input Integer",
+                "inputs": [],
+                "outputs": [
+                {
+                    "id": "result",
+                    "name": "Result",
+                    "type": "INT"
+                }
+                ],
+                "parameters": [
+                {
+                    "id": "input_int",
+                    "name": "Integer",
+                    "type": "INT",
+                    "value": 15,
+                    "step": 1,
+                    "min": -2147483648,
+                    "max": 2147483647
+                }
+                ]
+            },
+            "position": {
+                "x": 8615.066125493195,
+                "y": 4358.755136223856
+            }
+            },
+            {
+            "id": "tools/print_any-1751944087053",
+            "data": {
+                "functionId": "endnode",
                 "id": "tools/print_any",
                 "nodeName": "Print Any",
                 "inputs": [
@@ -137,56 +141,56 @@ if __name__ == "__main__":
                 "parameters": []
             },
             "position": {
-                "x": 9688.805425600438,
-                "y": 4302.489321371075
+                "x": 9713.421719598527,
+                "y": 4204.024145378708
             }
             }
         ],
         "edges": [
             {
-            "id": "edge-math/input_int-1751932725883:result-math/add_integers-1751932726810:a-1751932729452",
+            "id": "edge-math/input_int-1751944068980:result-math/add_integers-1751944056168:a-1751944077203",
             "source": {
-                "nodeId": "math/input_int-1751932725883",
+                "nodeId": "math/input_int-1751944068980",
                 "portId": "result",
                 "portType": "output",
                 "type": "INT"
             },
             "target": {
-                "nodeId": "math/add_integers-1751932726810",
+                "nodeId": "math/add_integers-1751944056168",
                 "portId": "a",
                 "portType": "input"
             }
             },
             {
-            "id": "edge-math/input_int-1751933108563:result-math/add_integers-1751932726810:b-1751933113352",
+            "id": "edge-math/input_int-1751944070288:result-math/add_integers-1751944056168:b-1751944078597",
             "source": {
-                "nodeId": "math/input_int-1751933108563",
+                "nodeId": "math/input_int-1751944070288",
                 "portId": "result",
                 "portType": "output",
                 "type": "INT"
             },
             "target": {
-                "nodeId": "math/add_integers-1751932726810",
+                "nodeId": "math/add_integers-1751944056168",
                 "portId": "b",
                 "portType": "input"
             }
             },
             {
-            "id": "edge-math/add_integers-1751932726810:result-tools/print_any-1751935004370:input_print-1751935006931",
+            "id": "edge-math/add_integers-1751944056168:result-tools/print_any-1751944087053:input_print-1751944088992",
             "source": {
-                "nodeId": "math/add_integers-1751932726810",
+                "nodeId": "math/add_integers-1751944056168",
                 "portId": "result",
                 "portType": "output",
                 "type": "INT"
             },
             "target": {
-                "nodeId": "tools/print_any-1751935004370",
+                "nodeId": "tools/print_any-1751944087053",
                 "portId": "input_print",
                 "portType": "input"
             }
             }
         ]
-    }
+        }
     print("워크플로우 실행기를 생성합니다.")
     executor = WorkflowExecutor(mock_workflow_data)
     

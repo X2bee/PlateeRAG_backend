@@ -52,6 +52,8 @@ class WorkflowExecutor:
 
         print("--- 워크플로우 실행 시작 ---")
         print(f"실행 순서: {' -> '.join(execution_order)}")
+        
+        execution_final_outputs = None
 
         for node_id in execution_order:
             node_info = self.nodes[node_id]
@@ -85,12 +87,21 @@ class WorkflowExecutor:
             instance = NodeClass()
             result = instance.execute(**kwargs)
             
-            # 실행 결과를 node_outputs에 저장
-            # 현재는 출력이 하나라고 가정, 다중 출력 시 수정 필요
-            output_port_id = node_info['data']['outputs'][0]['id']
-            node_outputs[node_id] = {output_port_id: result}
+            if node_info['data']['functionId'] == 'endnode':
+                execution_final_outputs = result
+                print(f" -> 최종 출력: {execution_final_outputs}")
             
-            print(f" -> 출력: {node_outputs[node_id]}")
+            else:
+                if not node_info['data']['outputs']:
+                    raise ValueError(f"노드 '{node_info['data']['nodeName']}'에 출력 포트가 정의되어 있지 않습니다.")
+                
+                if not node_info['data']['outputs'][0].get('id'):
+                    raise ValueError(f"노드 '{node_info['data']['nodeName']}'의 첫 번째 출력 포트에 ID가 정의되어 있지 않습니다.")
+                
+                output_port_id = node_info['data']['outputs'][0]['id']
+                node_outputs[node_id] = {output_port_id: result}
+                
+                print(f" -> 출력: {node_outputs[node_id]}")
 
         print("\n--- 워크플로우 실행 종료 ---")
         return node_outputs

@@ -102,7 +102,7 @@ def generate_json_spec(output_path="export_nodes.json"):
                 "nodes": []
             }
         
-        node_info = {k: v for k, v in node_spec.items() if k not in ['categoryId', 'categoryName', 'functionId', 'functionName']}
+        node_info = {k: v for k, v in node_spec.items() if k not in ['categoryId', 'categoryName', 'functionName']}
         categories[cat_id]["functions"][func_id]["nodes"].append(node_info)
 
     final_spec = []
