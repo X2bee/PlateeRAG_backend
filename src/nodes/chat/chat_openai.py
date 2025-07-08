@@ -1,4 +1,11 @@
+import os
 from src.node_composer import Node
+
+if "OPENAI_API_KEY" not in os.environ:
+    with open('/openai_api_key.txt', 'r') as api:
+        os.environ["OPENAI_API_KEY"] = api.read()
+
+from langchain_openai import ChatOpenAI
 
 class ChatOpenAINode(Node):
     categoryId = "langchain"
@@ -9,28 +16,35 @@ class ChatOpenAINode(Node):
     
     inputs = [
         {
-            "id": "a", 
-            "name": "A", 
-            "type": "INT",
+            "id": "text", 
+            "name": "Text", 
+            "type": "STR",
             "multi": False,
             "required": True
-        },
-        {
-            "id": "b", 
-            "name": "B", 
-            "type": "INT",
-            "multi": False,
-            "required": False
         },
     ]
     outputs = [
         {
             "id": "result", 
             "name": "Result", 
-            "type": "INT"
+            "type": "STR"
         },
     ]
-    parameters = []
+    parameters = [
+        {
+            "id": "model", 
+            "name": "Model", 
+            "type": "STR",
+            "value": "gpt-3.5-turbo",
+            "options": [
+                {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
+                {"value": "gpt-4", "label": "GPT-4"},
+                {"value": "gpt-4o", "label": "GPT-4o"}
+            ]
+        }
+    ]
 
-    def execute(self, a: int, b: int) -> int:
-        return a + b
+    def execute(self, text: str, model: str) -> str:
+        llm = ChatOpenAI(model=model, temperature=0.7, max_tokens=1000)
+        result = llm.invoke(text)
+        return result.content if hasattr(result, 'content') else str(result)
