@@ -1,6 +1,7 @@
 from collections import deque
 from typing import Dict, Any, List
 from src.node_composer import NODE_CLASS_REGISTRY, run_discovery
+from src.model.node import Port, Parameter, NodeSpec
 
 class WorkflowExecutor:
     def __init__(self, workflow_data: Dict[str, Any]):
@@ -9,8 +10,6 @@ class WorkflowExecutor:
         self.graph: Dict[str, List[str]] = {node_id: [] for node_id in self.nodes}
         self.in_degree: Dict[str, int] = {node_id: 0 for node_id in self.nodes}
         
-        # 노드 디스커버리를 실행하여 NODE_CLASS_REGISTRY를 채웁니다.
-        # 실제 애플리케이션에서는 시작 시 한 번만 호출하는 것이 좋습니다.
         if not NODE_CLASS_REGISTRY:
             print("Node class registry is empty. Running discovery...")
             run_discovery()
@@ -62,21 +61,23 @@ class WorkflowExecutor:
             if not NodeClass:
                 raise ValueError(f"ID가 '{node_spec_id}'인 노드 클래스를 찾을 수 없습니다.")
 
-            # 노드 실행에 필요한 입력값 준비
             kwargs = {}
-            # 엣지로부터 입력값을 가져옴
             connected_edges = [edge for edge in self.edges if edge['target']['nodeId'] == node_id]
             for edge in connected_edges:
                 source_node_id = edge['source']['nodeId']
                 source_port_id = edge['source']['portId']
                 target_port_id = edge['target']['portId']
                 
-                # 소스 노드의 출력값에서 필요한 값을 찾아 입력으로 연결
                 if source_node_id in node_outputs and source_port_id in node_outputs[source_node_id]:
                     kwargs[target_port_id] = node_outputs[source_node_id][source_port_id]
 
-            # TODO: 노드의 'parameters' 값을 kwargs에 추가하는 로직 (필요 시)
-
+            if 'parameters' in node_info['data'] and node_info['data']['parameters']:
+                for param in node_info['data']['parameters']:
+                    param_key = param.get('id')
+                    param_value = param.get('value')
+                    if param_key and param_key not in kwargs:
+                        kwargs[param_key] = param_value
+            
             print(f"\n[실행] {node_info['data']['nodeName']} ({node_id})")
             print(f" -> 입력: {kwargs}")
             
@@ -93,3 +94,4 @@ class WorkflowExecutor:
 
         print("\n--- 워크플로우 실행 종료 ---")
         return node_outputs
+    

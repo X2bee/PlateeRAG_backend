@@ -1,4 +1,3 @@
-# backend/nodes/math/add.py
 from src.node_composer import (
     Node
 )

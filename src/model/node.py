@@ -31,12 +31,14 @@ class NodeSpec(TypedDict):
     outputs: List[Port]
     parameters: List[Parameter]
 
+
 CATEGORIES_LABEL_MAP = {
     'langchain': 'LangChain',
     'polar': 'POLAR',
     'utilities': 'Utilities',
     'math': 'Math'
 }
+
 
 FUNCTION_LABEL_MAP = {
     'agents': 'Agent', 
@@ -50,5 +52,6 @@ FUNCTION_LABEL_MAP = {
     'moderation': 'Moderation',
     'output_parsers': 'Output Parser',
     'tools': 'Tool',
-    'arithmetic':'Arithmetic'
+    'arithmetic':'Arithmetic',
+    'endnode': 'End Node',
 }
