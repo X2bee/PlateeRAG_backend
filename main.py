@@ -5,6 +5,7 @@ import logging
 import os
 from controller.nodeController import router as nodeRouter
 from controller.configController import router as configRouter
+from controller.workflowController import router as workflowRouter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +37,7 @@ app.add_middleware(
 
 app.include_router(nodeRouter)
 app.include_router(configRouter)
+app.include_router(workflowRouter)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
