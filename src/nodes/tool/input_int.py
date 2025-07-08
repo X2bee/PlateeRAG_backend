@@ -3,12 +3,8 @@ from src.node_composer import (
 )
 
 class InputIntegersNode(Node):
-    categoryId = "math"
-    categoryName = "Math"
-    
-    functionId = "arithmetic"
-    functionName = "Arithmetic"
-
+    categoryId = "utilities"
+    functionId = "tools"
     nodeId = "math/input_int"
     nodeName = "Input Integer"
     

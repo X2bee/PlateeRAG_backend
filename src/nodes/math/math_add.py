@@ -4,10 +4,7 @@ from src.node_composer import (
 
 class AddIntegersNode(Node):
     categoryId = "math"
-    categoryName = "Math"
-    
     functionId = "arithmetic"
-    functionName = "Arithmetic"
 
     nodeId = "math/add_integers"
     nodeName = "Add Integers"

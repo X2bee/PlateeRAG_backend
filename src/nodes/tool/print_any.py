@@ -5,10 +5,7 @@ from src.node_composer import (
 
 class PrintAny(Node):
     categoryId = "utilities"
-    categoryName = "Utilities"
-    
     functionId = "endnode"
-    functionName = "End Node"
 
     nodeId = "tools/print_any"
     nodeName = "Print Any"
