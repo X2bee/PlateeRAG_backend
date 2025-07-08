@@ -195,7 +195,3 @@ if __name__ == "__main__":
     executor = WorkflowExecutor(mock_workflow_data)
     
     final_outputs = executor.execute_workflow()
-    
-    print("\n최종 노드 출력 데이터:")
-    import json
-    print(json.dumps(final_outputs, indent=2, ensure_ascii=False))

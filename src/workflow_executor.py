@@ -93,7 +93,9 @@ class WorkflowExecutor:
             
             else:
                 if not node_info['data']['outputs']:
-                    raise ValueError(f"노드 '{node_info['data']['nodeName']}'에 출력 포트가 정의되어 있지 않습니다.")
+                    print(f" -> 출력 없음. (결과: {result})")
+                    node_outputs[node_id] = {}
+                    continue
                 
                 if not node_info['data']['outputs'][0].get('id'):
                     raise ValueError(f"노드 '{node_info['data']['nodeName']}'의 첫 번째 출력 포트에 ID가 정의되어 있지 않습니다.")
@@ -103,6 +105,14 @@ class WorkflowExecutor:
                 
                 print(f" -> 출력: {node_outputs[node_id]}")
 
-        print("\n--- 워크플로우 실행 종료 ---")
-        return node_outputs
+        if execution_final_outputs is not None:
+            print("\n--- 워크플로우 실행 완료 ---")
+            print("최종 출력:", execution_final_outputs)
+            return execution_final_outputs
+        
+        else:
+            print("\n--- 워크플로우 실행 완료 ---")
+            print("최종 출력이 정의되지 않았습니다. 모든 노드의 중간 결과물을 반환합니다.")
+            print("노드 출력 데이터:")
+            return node_outputs
     

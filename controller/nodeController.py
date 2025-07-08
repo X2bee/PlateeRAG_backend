@@ -80,10 +80,11 @@ async def execute_workflow(workflow: Workflow):
     """
     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
     """
+    
+    # print("DEBUG: 워크플로우 실행 요청\n", workflow)
+    
     try:
-        # Pydantic 모델을 dict로 변환
         workflow_data = workflow.dict()
-        
         executor = WorkflowExecutor(workflow_data)
         final_outputs = executor.execute_workflow()
         
