@@ -1,10 +1,5 @@
 import os
 from src.node_composer import Node
-
-if "OPENAI_API_KEY" not in os.environ:
-    with open('/openai_api_key.txt', 'r') as api:
-        os.environ["OPENAI_API_KEY"] = api.read()
-
 from langchain_openai import ChatOpenAI
 
 class ChatOpenAINode(Node):
