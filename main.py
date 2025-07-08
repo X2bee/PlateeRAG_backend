@@ -22,7 +22,7 @@ app = FastAPI(
 )
 
 if "OPENAI_API_KEY" not in os.environ:
-    with open('/openai_api_key.txt', 'r') as api:
+    with open('openai_api_key.txt', 'r') as api:
         os.environ["OPENAI_API_KEY"] = api.read()
 
 # Add CORS middleware
