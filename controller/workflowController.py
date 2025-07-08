@@ -9,7 +9,6 @@ import logging
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/workflow", tags=["workflow"])
 
-# Pydantic models for request/response
 class WorkflowData(BaseModel):
     view: Dict[str, Any]
     nodes: List[Dict[str, Any]]
