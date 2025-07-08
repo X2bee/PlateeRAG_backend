@@ -17,6 +17,7 @@ class Parameter(TypedDict):
     step: Optional[float] = None
     min: Optional[float] = None
     max: Optional[float] = None
+    options: Optional[List[dict[str, Any]]] = None
 
 
 class NodeSpec(TypedDict):
