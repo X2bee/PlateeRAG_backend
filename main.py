@@ -17,6 +17,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("polar-trainer")
 
+def ensure_directories():
+    """필요한 디렉토리들이 존재하는지 확인하고 없으면 생성"""
+    directories = ["constants", "downloads"]
+    
+    for directory in directories:
+        if not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+            logger.info(f"Created {directory} directory")
+        else:
+            logger.info(f"{directory} directory already exists")
+
 app = FastAPI(
     title="PlateeRAG Backend",
     description="API for training models with customizable parameters",
@@ -43,10 +54,19 @@ app.include_router(workflowRouter)
 @app.on_event("startup")
 async def startup_event():
     """애플리케이션 시작 시 노드 discovery 실행"""
-    logger.info("Starting node discovery...")
-    run_discovery()
-    generate_json_spec("constants/exported_nodes.json")
-    logger.info("Node discovery completed successfully!")
+    try:
+        logger.info("Starting node discovery...")
+        
+        # 필요한 디렉토리들 생성
+        ensure_directories()
+        
+        run_discovery()
+        generate_json_spec("constants/exported_nodes.json")
+        logger.info("Node discovery completed successfully!")
+        
+    except Exception as e:
+        logger.error(f"Error during startup: {e}")
+        logger.info("Application will continue despite startup error")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

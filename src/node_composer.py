@@ -101,6 +101,12 @@ def run_discovery() -> None:
 
 def generate_json_spec(output_path="export_nodes.json"):
     """등록된 노드 정보를 새로운 프론트엔드 형식에 맞춰 JSON 파일로 저장합니다."""
+    # 출력 디렉토리가 존재하지 않으면 생성
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Created directory: {output_dir}")
+    
     categories = {}
     for node_spec in NODE_REGISTRY:
         cat_id = node_spec["categoryId"]
@@ -128,6 +134,10 @@ def generate_json_spec(output_path="export_nodes.json"):
         cat["functions"] = list(cat["functions"].values())
         final_spec.append(cat)
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(final_spec, f, indent=4, ensure_ascii=False)
-    print(f"\n✅ Node specification generated with {len(NODE_REGISTRY)} nodes.")
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(final_spec, f, indent=4, ensure_ascii=False)
+        print(f"\n✅ Node specification generated with {len(NODE_REGISTRY)} nodes at: {output_path}")
+    except Exception as e:
+        print(f"\n❌ Error generating node specification: {e}")
+        raise
