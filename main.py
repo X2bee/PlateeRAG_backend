@@ -6,6 +6,7 @@ import os
 from controller.nodeController import router as nodeRouter
 from controller.configController import router as configRouter
 from controller.workflowController import router as workflowRouter
+from src.node_composer import run_discovery, generate_json_spec
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +40,13 @@ app.include_router(nodeRouter)
 app.include_router(configRouter)
 app.include_router(workflowRouter)
 
+@app.on_event("startup")
+async def startup_event():
+    """애플리케이션 시작 시 노드 discovery 실행"""
+    logger.info("Starting node discovery...")
+    run_discovery()
+    generate_json_spec("constants/exported_nodes.json")
+    logger.info("Node discovery completed successfully!")
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
-    
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)

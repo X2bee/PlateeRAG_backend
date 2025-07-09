@@ -15,6 +15,8 @@ from src.workflow_executor import WorkflowExecutor
 from src.node_composer import (
     run_discovery,
     generate_json_spec,
+    get_node_registry,
+    get_node_class_registry
 )
 
 router = APIRouter(
@@ -95,4 +97,57 @@ async def execute_workflow(workflow: Workflow):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/registry", response_model=Dict[str, Any])
+async def get_node_registry_info():
+    """
+    전역 NODE_REGISTRY에서 노드 정보를 가져옵니다.
+    """
+    try:
+        node_registry = get_node_registry()
+        node_class_registry = get_node_class_registry()
+        
+        return {
+            "status": "success",
+            "node_count": len(node_registry),
+            "available_nodes": [node["id"] for node in node_registry],
+            "registry_data": node_registry,
+            "class_registry_keys": list(node_class_registry.keys())
+        }
+        
+    except Exception as e:
+        logging.error(f"Error getting node registry: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/registry/nodes", response_model=List[Dict[str, Any]])
+async def get_all_nodes():
+    """
+    등록된 모든 노드의 정보를 반환합니다.
+    """
+    try:
+        node_registry = get_node_registry()
+        return node_registry
+        
+    except Exception as e:
+        logging.error(f"Error getting all nodes: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/registry/node/{node_id}", response_model=Dict[str, Any])
+async def get_node_by_id(node_id: str):
+    """
+    특정 ID의 노드 정보를 반환합니다.
+    """
+    try:
+        node_registry = get_node_registry()
+        for node in node_registry:
+            if node["id"] == node_id:
+                return node
+        
+        raise HTTPException(status_code=404, detail=f"Node with id '{node_id}' not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting node by id: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")

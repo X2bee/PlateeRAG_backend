@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 import os
 import json
 import logging
+from src.node_composer import get_node_registry, get_node_class_registry
 
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/workflow", tags=["workflow"])

@@ -12,6 +12,24 @@ from src.node_config import CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP
 NODE_REGISTRY = []
 NODE_CLASS_REGISTRY: Dict[str, Type['Node']] = {}
 
+def get_node_registry() -> List[NodeSpec]:
+    """전역 NODE_REGISTRY에 접근하는 함수"""
+    return NODE_REGISTRY
+
+def get_node_class_registry() -> Dict[str, Type['Node']]:
+    """전역 NODE_CLASS_REGISTRY에 접근하는 함수"""
+    return NODE_CLASS_REGISTRY
+
+def get_node_by_id(node_id: str) -> Type['Node']:
+    """특정 node_id로 노드 클래스를 가져오는 함수"""
+    return NODE_CLASS_REGISTRY.get(node_id)
+
+def clear_registries():
+    """레지스트리를 초기화하는 함수 (테스트용)"""
+    global NODE_REGISTRY, NODE_CLASS_REGISTRY
+    NODE_REGISTRY = []
+    NODE_CLASS_REGISTRY = {}
+
 class Node(ABC):
     categoryId: str = "Default"
     functionId: str = "Default"
