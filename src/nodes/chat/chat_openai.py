@@ -8,6 +8,8 @@ class ChatOpenAINode(Node):
 
     nodeId = "chat/openai"
     nodeName = "Chat OpenAI"
+    description = "OpenAI의 GPT 모델을 사용하여 텍스트 입력에 대한 대화형 응답을 생성합니다. GPT-3.5, GPT-4, GPT-4o 등의 모델을 선택할 수 있습니다."
+    tags = ["openai", "gpt", "chat", "ai", "language_model", "conversation", "text_generation"]
     
     inputs = [
         {

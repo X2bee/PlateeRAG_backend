@@ -21,11 +21,9 @@ def get_node_class_registry() -> Dict[str, Type['Node']]:
     return NODE_CLASS_REGISTRY
 
 def get_node_by_id(node_id: str) -> Type['Node']:
-    """특정 node_id로 노드 클래스를 가져오는 함수"""
     return NODE_CLASS_REGISTRY.get(node_id)
 
 def clear_registries():
-    """레지스트리를 초기화하는 함수 (테스트용)"""
     global NODE_REGISTRY, NODE_CLASS_REGISTRY
     NODE_REGISTRY = []
     NODE_CLASS_REGISTRY = {}
@@ -35,6 +33,8 @@ class Node(ABC):
     functionId: str = "Default"
     nodeId: str = "Default"
     nodeName: str = "Default"
+    description: str = "Default description"
+    tags: List[str] = [] 
     inputs: List[Port] = []
     outputs: List[Port] = []
     parameters: List[Parameter] = []
@@ -76,6 +76,8 @@ class Node(ABC):
             "functionName": function_name,
             "id": cls.nodeId,
             "nodeName": cls.nodeName,
+            "description": cls.description,
+            "tags": cls.tags,
             "inputs": cls.inputs,
             "outputs": cls.outputs,
             "parameters": cls.parameters

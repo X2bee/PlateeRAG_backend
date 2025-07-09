@@ -25,6 +25,8 @@ class NodeSpec(TypedDict):
     """NODE_REGISTRY에 저장될 노드의 전체 명세 구조를 정의합니다."""
     id: str
     nodeName: str
+    description: str
+    tags: List[str]
     categoryId: str
     categoryName: str
     functionId: str

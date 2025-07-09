@@ -6,6 +6,8 @@ class AddIntegersNode(Node):
 
     nodeId = "math/add_integers"
     nodeName = "Add Integers"
+    description = "두 개의 정수를 입력받아 더한 결과를 반환합니다. 기본적인 수학 연산 노드입니다."
+    tags = ["math", "arithmetic", "addition", "integer", "calculation", "basic_operation"]
     
     inputs = [
         {
