@@ -31,6 +31,7 @@ class ChatOpenAINode(Node):
             "name": "Model", 
             "type": "STR",
             "value": "gpt-3.5-turbo",
+            "required": True,
             "options": [
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
                 {"value": "gpt-4", "label": "GPT-4"},
