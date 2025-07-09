@@ -14,6 +14,7 @@ class Parameter(TypedDict):
     name: str
     type: Literal["STRING", "INTEGER", "FLOAT", "BOOLEAN"]
     value: Any
+    required: bool = False
     step: Optional[float] = None
     min: Optional[float] = None
     max: Optional[float] = None

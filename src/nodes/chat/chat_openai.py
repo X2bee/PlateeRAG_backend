@@ -1,10 +1,5 @@
 import os
 from src.node_composer import Node
-
-if "OPENAI_API_KEY" not in os.environ:
-    with open('/openai_api_key.txt', 'r') as api:
-        os.environ["OPENAI_API_KEY"] = api.read()
-
 from langchain_openai import ChatOpenAI
 
 class ChatOpenAINode(Node):
@@ -36,6 +31,7 @@ class ChatOpenAINode(Node):
             "name": "Model", 
             "type": "STR",
             "value": "gpt-3.5-turbo",
+            "required": True,
             "options": [
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
                 {"value": "gpt-4", "label": "GPT-4"},
