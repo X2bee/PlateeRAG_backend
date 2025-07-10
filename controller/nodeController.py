@@ -245,3 +245,76 @@ async def get_all_categories():
     except Exception as e:
         logging.error(f"Error getting all categories: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/parameters/categorized/{node_id}", response_model=Dict[str, Any])
+async def get_categorized_parameters(node_id: str):
+    """
+    특정 노드의 파라미터를 기본/고급으로 분류하여 반환합니다.
+    """
+    try:
+        node_registry = get_node_registry()
+        for node in node_registry:
+            if node["id"] == node_id:
+                parameters = node.get("parameters", [])
+                
+                basic_params = []
+                advanced_params = []
+                
+                for param in parameters:
+                    if param.get("optional", False):
+                        advanced_params.append(param)
+                    else:
+                        basic_params.append(param)
+                
+                return {
+                    "node_id": node_id,
+                    "node_name": node.get("nodeName", ""),
+                    "description": node.get("description", ""),
+                    "basic_parameters": basic_params,
+                    "advanced_parameters": advanced_params,
+                    "has_advanced": len(advanced_params) > 0
+                }
+        
+        raise HTTPException(status_code=404, detail=f"Node with id '{node_id}' not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting categorized parameters: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/parameters/validation", response_model=Dict[str, Any])
+async def validate_all_parameters():
+    """
+    등록된 모든 노드의 파라미터 유효성을 검사합니다.
+    """
+    try:
+        from src.model.node import validate_parameters
+        
+        node_registry = get_node_registry()
+        validation_results = []
+        
+        for node in node_registry:
+            parameters = node.get("parameters", [])
+            if parameters:
+                is_valid, errors = validate_parameters(parameters)
+                validation_results.append({
+                    "node_id": node["id"],
+                    "node_name": node.get("nodeName", ""),
+                    "is_valid": is_valid,
+                    "errors": errors,
+                    "parameter_count": len(parameters)
+                })
+        
+        valid_count = sum(1 for result in validation_results if result["is_valid"])
+        
+        return {
+            "total_nodes": len(validation_results),
+            "valid_nodes": valid_count,
+            "invalid_nodes": len(validation_results) - valid_count,
+            "validation_results": validation_results
+        }
+        
+    except Exception as e:
+        logging.error(f"Error validating parameters: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")

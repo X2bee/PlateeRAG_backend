@@ -5,7 +5,7 @@ import importlib
 from pathlib import Path
 from typing import List, Dict, Any, Type
 from abc import ABC, abstractmethod
-from src.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP
+from src.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP, validate_parameters
 
 NODE_REGISTRY = []
 NODE_CLASS_REGISTRY: Dict[str, Type['Node']] = {}
@@ -60,6 +60,15 @@ class Node(ABC):
                 f"[Node Registration Failed] Node '{cls.__name__}': 'functionId' is invalid.\n"
                 f"-> Assigned value: '{getattr(cls, 'functionId', 'not defined')}' (Allowed values: {allowed})\n"
             )
+        
+        # 3. 파라미터 유효성 검사
+        if hasattr(cls, 'parameters') and cls.parameters:
+            params_valid, param_errors = validate_parameters(cls.parameters)
+            if not params_valid:
+                is_valid = False
+                print(f"[Node Registration Failed] Node '{cls.__name__}': Parameter validation failed.")
+                for error in param_errors:
+                    print(f"  -> {error}")
             
         if not is_valid:
             return
