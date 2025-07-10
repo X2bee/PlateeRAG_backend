@@ -5,9 +5,7 @@ import importlib
 from pathlib import Path
 from typing import List, Dict, Any, Type
 from abc import ABC, abstractmethod
-from src.model.node import NodeSpec, Port, Parameter
-
-from src.node_config import CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP
+from src.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP
 
 NODE_REGISTRY = []
 NODE_CLASS_REGISTRY: Dict[str, Type['Node']] = {}
@@ -113,10 +111,12 @@ def generate_json_spec(output_path="export_nodes.json"):
     for node_spec in NODE_REGISTRY:
         cat_id = node_spec["categoryId"]
         if cat_id not in categories:
+            
+            icon_name = ICON_LABEL_MAP.get(cat_id, "Unknown Function")
             categories[cat_id] = {
                 "categoryId": cat_id,
                 "categoryName": node_spec["categoryName"],
-                "icon": "LuWrench",
+                "icon": icon_name,
                 "functions": {}
             }
         

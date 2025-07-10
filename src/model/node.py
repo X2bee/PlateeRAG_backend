@@ -43,6 +43,13 @@ CATEGORIES_LABEL_MAP = {
     'math': 'Math'
 }
 
+ICON_LABEL_MAP = {
+    'langchain': 'SiLangchain',
+    'polar': 'POLAR',
+    'utilities': 'LuWrench',
+    'math': 'LuWrench'
+}
+
 
 FUNCTION_LABEL_MAP = {
     'agents': 'Agent', 
