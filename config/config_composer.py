@@ -4,7 +4,7 @@ Config Composer - 모든 설정을 통합 관리 (자동 발견 기능 포함)
 import os
 import importlib
 import logging
-from typing import Dict, Any, Type
+from typing import Dict, Any
 from pathlib import Path
 from config.base_config import BaseConfig
 from config.persistent_config import PersistentConfig, export_config_summary, refresh_all_configs, save_all_configs
@@ -42,7 +42,7 @@ class ConfigComposer:
             if file.name != "__init__.py":
                 config_files.append(file)
         
-        self.logger.info(f"Found {len(config_files)} config files: {[f.name for f in config_files]}")
+        self.logger.info("Found %d config files: %s", len(config_files), [f.name for f in config_files])
         
         # 각 설정 파일을 동적으로 로드
         for config_file in config_files:
@@ -127,6 +127,9 @@ class ConfigComposer:
                         self.logger.info("Initialized %s config: %d settings", category_name, len(category_configs))
                     except AttributeError as e:
                         self.logger.error("Failed to initialize %s config: %s", category_name, e)
+            
+            # 4. 모든 config 값들을 DB에 초기값으로 저장 (첫 실행 시)
+            self._ensure_initial_config_values_in_db()
             
             self.logger.info("Successfully initialized %d configurations", len(self.all_configs))
             
@@ -240,6 +243,35 @@ class ConfigComposer:
                     validation_results["valid"] = False
         
         return validation_results
+    
+    def _ensure_initial_config_values_in_db(self):
+        """
+        모든 config 값들을 DB에 초기값으로 저장 (첫 실행 시)
+        이미 DB에 값이 있으면 건드리지 않고, 없는 값들만 저장
+        """
+        try:
+            self.logger.info("Ensuring all initial config values are in database...")
+            saved_count = 0
+            
+            # 모든 PersistentConfig 객체들을 확인
+            for config_obj in self.all_configs.values():
+                if isinstance(config_obj, PersistentConfig):
+                    # DB에 값이 없고 현재 값이 기본값/env값인 경우에만 저장
+                    if config_obj.config_value is None:
+                        try:
+                            config_obj.save()
+                            saved_count += 1
+                            self.logger.debug("Saved initial value for %s: %s", 
+                                            config_obj.env_name, config_obj.value)
+                        except (ImportError, AttributeError, ValueError) as e:
+                            self.logger.warning("Failed to save initial value for %s: %s", 
+                                              config_obj.env_name, e)
+            
+            self.logger.info("Successfully ensured %d initial config values in database", saved_count)
+            
+        except Exception as e:
+            self.logger.error("Failed to ensure initial config values in database: %s", e)
+            raise
 
 # 전역 설정 컴포저 인스턴스
 config_composer = ConfigComposer()

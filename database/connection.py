@@ -51,10 +51,19 @@ class AppDatabaseManager:
                 self.logger.info("Creating table: %s", table_name)
                 self.config_db_manager.execute_query(create_query)
                 
+                # PersistentConfigModel의 경우 인덱스도 생성
+                if hasattr(model_class, '__name__') and model_class.__name__ == 'PersistentConfigModel':
+                    index_query = "CREATE INDEX IF NOT EXISTS idx_config_path ON persistent_configs(config_path)"
+                    try:
+                        self.config_db_manager.execute_query(index_query)
+                        self.logger.info("Created index for table: %s", table_name)
+                    except (ImportError, AttributeError, ValueError) as e:
+                        self.logger.warning("Failed to create index for %s: %s", table_name, e)
+                
             self.logger.info("All application tables created successfully")
             return True
             
-        except Exception as e:
+        except (ImportError, AttributeError, ValueError) as e:
             self.logger.error("Failed to create application tables: %s", e)
             return False
     

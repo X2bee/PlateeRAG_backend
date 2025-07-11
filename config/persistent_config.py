@@ -237,6 +237,10 @@ class PersistentConfig(Generic[T]):
         logger.info("Resetting '%s' to default value: %s", self.env_name, self.env_value)
         self.value = self.env_value
         self.save()
+    
+    def refresh(self):
+        """데이터베이스에서 최신 값을 다시 로드 (update의 별칭)"""
+        return self.update()
 
 # 유틸리티 함수들
 def get_all_persistent_configs() -> List[PersistentConfig]:

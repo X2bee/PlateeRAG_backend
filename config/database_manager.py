@@ -56,6 +56,10 @@ class DatabaseManager:
     
     def get_connection_string(self) -> str:
         """데이터베이스 연결 문자열 생성"""
+        # db_type이 설정되지 않았으면 먼저 결정
+        if not self.db_type:
+            self.db_type = self.determine_database_type()
+            
         if self.db_type == "postgresql":
             host = self.config.POSTGRES_HOST.value
             port = self.config.POSTGRES_PORT.value
@@ -98,11 +102,12 @@ class DatabaseManager:
                 password=self.config.POSTGRES_PASSWORD.value,
                 cursor_factory=RealDictCursor
             )
-            self.connection.autocommit = True
+            # autocommit을 False로 설정하여 명시적 트랜잭션 관리
+            self.connection.autocommit = False
             self.logger.info("Successfully connected to PostgreSQL")
             return True
-        except Exception as e:
-            self.logger.error(f"PostgreSQL connection failed: {e}")
+        except psycopg2.Error as e:
+            self.logger.error("PostgreSQL connection failed: %s", e)
             return False
     
     def _connect_sqlite(self) -> bool:
@@ -146,14 +151,30 @@ class DatabaseManager:
                 result = cursor.fetchall()
                 return [dict(row) for row in result]
             else:
-                if self.db_type == "sqlite":
-                    self.connection.commit()
+                # INSERT, UPDATE, DELETE 등의 경우 commit 필요
+                self.connection.commit()
                 return []
                 
-        except Exception as e:
-            self.logger.error(f"Query execution failed: {e}")
-            if self.db_type == "sqlite":
+        except psycopg2.Error as e:
+            self.logger.error("PostgreSQL query execution failed: %s", e)
+            try:
                 self.connection.rollback()
+            except psycopg2.Error:
+                pass
+            return None
+        except sqlite3.Error as e:
+            self.logger.error("SQLite query execution failed: %s", e)
+            try:
+                self.connection.rollback()
+            except sqlite3.Error:
+                pass
+            return None
+        except Exception as e:
+            self.logger.error("Query execution failed: %s", e)
+            try:
+                self.connection.rollback()
+            except:
+                pass
             return None
     
     def execute_query_one(self, query: str, params: tuple = None) -> Optional[Dict]:
@@ -183,14 +204,24 @@ class DatabaseManager:
             else:  # postgresql
                 # PostgreSQL의 경우 RETURNING id를 쿼리에 포함해야 함
                 result = cursor.fetchone()
+                self.connection.commit()
                 if result:
                     return result[0]  # id 값
                 return None
                 
-        except Exception as e:
-            self.logger.error("Insert query execution failed: %s", e)
-            if self.db_type == "sqlite":
+        except psycopg2.Error as e:
+            self.logger.error("PostgreSQL insert query execution failed: %s", e)
+            try:
                 self.connection.rollback()
+            except psycopg2.Error:
+                pass
+            return None
+        except sqlite3.Error as e:
+            self.logger.error("SQLite insert query execution failed: %s", e)
+            try:
+                self.connection.rollback()
+            except sqlite3.Error:
+                pass
             return None
     
     def execute_update_delete(self, query: str, params: tuple = None) -> Optional[int]:
@@ -207,16 +238,22 @@ class DatabaseManager:
                 cursor.execute(query)
             
             affected_rows = cursor.rowcount
-            
-            if self.db_type == "sqlite":
-                self.connection.commit()
-            
+            self.connection.commit()
             return affected_rows
                 
-        except Exception as e:
-            self.logger.error("Update/Delete query execution failed: %s", e)
-            if self.db_type == "sqlite":
+        except psycopg2.Error as e:
+            self.logger.error("PostgreSQL update/delete query execution failed: %s", e)
+            try:
                 self.connection.rollback()
+            except psycopg2.Error:
+                pass
+            return None
+        except sqlite3.Error as e:
+            self.logger.error("SQLite update/delete query execution failed: %s", e)
+            try:
+                self.connection.rollback()
+            except sqlite3.Error:
+                pass
             return None
     
     def table_exists(self, table_name: str) -> bool:
@@ -238,47 +275,12 @@ class DatabaseManager:
         
         return bool(result)
     
-    def create_config_table(self) -> bool:
-        """설정 테이블 생성"""
-        if self.db_type == "postgresql":
-            query = """
-                CREATE TABLE IF NOT EXISTS persistent_configs (
-                    id SERIAL PRIMARY KEY,
-                    config_path VARCHAR(255) UNIQUE NOT NULL,
-                    config_value TEXT,
-                    data_type VARCHAR(50) DEFAULT 'string',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """
-        else:  # sqlite
-            query = """
-                CREATE TABLE IF NOT EXISTS persistent_configs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    config_path TEXT UNIQUE NOT NULL,
-                    config_value TEXT,
-                    data_type TEXT DEFAULT 'string',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """
-        
-        result = self.execute_query(query)
-        if result is not None:
-            self.logger.info("Config table created successfully")
-            return True
-        return False
-    
     def run_migrations(self) -> bool:
         """데이터베이스 마이그레이션 실행"""
         try:
-            self.logger.info(f"Running migrations for {self.db_type}")
+            self.logger.info("Running migrations for %s", self.db_type)
             
-            # 1. 기본 설정 테이블 생성
-            if not self.create_config_table():
-                return False
-            
-            # 2. 추가 마이그레이션 (향후 확장 가능)
+            # 마이그레이션 (향후 확장 가능)
             migrations = [
                 self._migration_001_add_indexes,
                 # 향후 마이그레이션 함수들 추가
@@ -286,34 +288,24 @@ class DatabaseManager:
             
             for migration in migrations:
                 if not migration():
-                    self.logger.error(f"Migration failed: {migration.__name__}")
+                    self.logger.error("Migration failed: %s", migration.__name__)
                     return False
             
             self.logger.info("All migrations completed successfully")
             return True
             
-        except Exception as e:
-            self.logger.error(f"Migration failed: {e}")
+        except (sqlite3.Error, ImportError, AttributeError) as e:
+            self.logger.error("Migration failed: %s", e)
             return False
     
     def _migration_001_add_indexes(self) -> bool:
         """마이그레이션 001: 인덱스 추가"""
         try:
-            if self.db_type == "postgresql":
-                query = """
-                    CREATE INDEX IF NOT EXISTS idx_config_path 
-                    ON persistent_configs(config_path);
-                """
-            else:  # sqlite
-                query = """
-                    CREATE INDEX IF NOT EXISTS idx_config_path 
-                    ON persistent_configs(config_path);
-                """
-            
-            result = self.execute_query(query)
-            return result is not None
-        except Exception as e:
-            self.logger.error(f"Failed to create indexes: {e}")
+            # 이제 persistent_configs 테이블은 모델에서 인덱스와 함께 생성되므로
+            # 여기서는 아무것도 하지 않음
+            return True
+        except (sqlite3.Error, ImportError, AttributeError) as e:
+            self.logger.error("Failed to create indexes: %s", e)
             return False
 
 _db_manager = None
@@ -321,9 +313,17 @@ _db_manager = None
 def get_database_manager(database_config=None) -> DatabaseManager:
     """데이터베이스 매니저 싱글톤 인스턴스 반환"""
     global _db_manager
-    if _db_manager is None:
+    if _db_manager is None or database_config is not None:
+        # database_config가 제공되면 새로운 인스턴스 생성
         _db_manager = DatabaseManager(database_config)
     return _db_manager
+
+def reset_database_manager():
+    """데이터베이스 매니저 싱글톤 리셋 (테스트용)"""
+    global _db_manager
+    if _db_manager and _db_manager.connection:
+        _db_manager.disconnect()
+    _db_manager = None
 
 def initialize_database(database_config=None) -> bool:
     """데이터베이스 초기화 및 마이그레이션"""
