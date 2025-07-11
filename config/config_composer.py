@@ -142,6 +142,62 @@ class ConfigComposer:
             self.logger.error("Failed to initialize configurations: %s", e)
             raise
     
+    def initialize_database_config_only(self) -> Dict[str, Any]:
+        """
+        데이터베이스 설정만 먼저 초기화 (테이블 생성을 위해)
+        """
+        try:
+            self.logger.info("Initializing database configuration only...")
+            
+            if "database" in self.config_categories:
+                database_configs = self.config_categories["database"].initialize()
+                self.all_configs.update(database_configs)
+                
+                # 데이터베이스 연결만 설정 (마이그레이션은 하지 않음)
+                db_initialized = initialize_database(self.config_categories["database"])
+                if db_initialized:
+                    self.logger.info("Database connection initialized successfully")
+                    return self.config_categories["database"]
+                else:
+                    self.logger.warning("Database connection failed")
+                    
+            return None
+            
+        except Exception as e:
+            self.logger.error("Failed to initialize database configuration: %s", e)
+            return None
+    
+    def initialize_remaining_configs(self) -> Dict[str, Any]:
+        """
+        데이터베이스 외의 나머지 설정들을 초기화 (DB 테이블이 생성된 후)
+        """
+        try:
+            self.logger.info("Initializing remaining configurations...")
+            
+            # 나머지 설정 카테고리들 초기화
+            for category_name, config_instance in self.config_categories.items():
+                if category_name != "database":  # 데이터베이스는 이미 초기화됨
+                    try:
+                        category_configs = config_instance.initialize()
+                        self.all_configs.update(category_configs)
+                        self.logger.info("Initialized %s config: %d settings", category_name, len(category_configs))
+                    except AttributeError as e:
+                        self.logger.error("Failed to initialize %s config: %s", category_name, e)
+            
+            # 모든 config 값들을 DB에 초기값으로 저장 (첫 실행 시)
+            self._ensure_initial_config_values_in_db()
+            
+            self.logger.info("Successfully initialized %d configurations", len(self.all_configs))
+            
+            # app.state에 저장할 구조화된 데이터 반환
+            result = self.config_categories.copy()
+            result["all_configs"] = self.all_configs
+            return result
+            
+        except Exception as e:
+            self.logger.error("Failed to initialize remaining configurations: %s", e)
+            raise
+    
     def get_config_by_name(self, config_name: str) -> PersistentConfig:
         """
         이름으로 특정 설정 가져오기

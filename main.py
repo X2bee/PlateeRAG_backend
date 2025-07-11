@@ -30,19 +30,16 @@ async def lifespan(app: FastAPI):
     """애플리케이션 라이프사이클 관리"""
     try:
         logger.info("Starting application lifespan...")
-        configs = config_composer.initialize_all_configs()
-        app.state.config = configs
-        config_composer.ensure_directories()
-        validation_result = config_composer.validate_critical_configs()
-        if not validation_result["valid"]:
-            for error in validation_result["errors"]:
-                logger.error(f"Configuration error: {error}")
-        for warning in validation_result["warnings"]:
-            logger.warning(f"Configuration warning: {warning}")
         
-        # 애플리케이션 데이터베이스 초기화
+        # 1. 데이터베이스 설정만 먼저 초기화
+        database_config = config_composer.initialize_database_config_only()
+        if not database_config:
+            logger.error("Failed to initialize database configuration")
+            return
+        
+        # 2. 애플리케이션 데이터베이스 초기화 (모든 모델 테이블 생성)
         logger.info("Initializing application database...")
-        app_db = AppDatabaseManager(configs["database"])
+        app_db = AppDatabaseManager(database_config)
         app_db.register_models(APPLICATION_MODELS)
         
         if app_db.initialize_database():
@@ -51,6 +48,19 @@ async def lifespan(app: FastAPI):
         else:
             logger.error("Failed to initialize application database")
             app.state.app_db = None
+            return
+        
+        # 3. 나머지 설정들 초기화 (이제 DB 테이블이 존재함)
+        configs = config_composer.initialize_remaining_configs()
+        app.state.config = configs
+        
+        config_composer.ensure_directories()
+        validation_result = config_composer.validate_critical_configs()
+        if not validation_result["valid"]:
+            for error in validation_result["errors"]:
+                logger.error(f"Configuration error: {error}")
+        for warning in validation_result["warnings"]:
+            logger.warning(f"Configuration warning: {warning}")
         
         if configs["node"].AUTO_DISCOVERY.value:
             logger.info("Starting node discovery...")
