@@ -22,7 +22,7 @@ class WorkflowConfig(BaseConfig):
         self.MAX_NODES = self.create_persistent_config(
             env_name="MAX_WORKFLOW_NODES",
             config_path="workflow.max_nodes",
-            default_value=100,
+            default_value=1000,
             type_converter=convert_to_int
         )
         

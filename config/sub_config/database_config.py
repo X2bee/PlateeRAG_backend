@@ -54,22 +54,7 @@ class DatabaseConfig(BaseConfig):
             config_path="database.sqlite.path",
             default_value="constants/config.db"
         )
-        
-        # 데이터베이스 연결 풀 설정
-        self.DB_POOL_SIZE = self.create_persistent_config(
-            env_name="DB_POOL_SIZE",
-            config_path="database.pool_size",
-            default_value=5,
-            type_converter=convert_to_int
-        )
-        
-        self.DB_POOL_MAX_OVERFLOW = self.create_persistent_config(
-            env_name="DB_POOL_MAX_OVERFLOW",
-            config_path="database.pool_max_overflow",
-            default_value=10,
-            type_converter=convert_to_int
-        )
-        
+                
         # 마이그레이션 설정
         self.AUTO_MIGRATION = self.create_persistent_config(
             env_name="AUTO_MIGRATION",
