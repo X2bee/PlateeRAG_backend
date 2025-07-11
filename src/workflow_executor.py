@@ -1,10 +1,15 @@
 from collections import deque
+import logging
 from typing import Dict, Any, List
 from src.node_composer import NODE_CLASS_REGISTRY, run_discovery
 from src.model.node import Port, Parameter, NodeSpec
+from src.monitoring.performance_logger import PerformanceLogger
+
+logger = logging.getLogger('Workflow-Executor')
 
 class WorkflowExecutor:
     def __init__(self, workflow_data: Dict[str, Any]):
+        self.workflow_id = workflow_data['id']
         self.nodes = {node['id']: node for node in workflow_data['nodes']}
         self.edges = workflow_data['edges']
         self.graph: Dict[str, List[str]] = {node_id: [] for node_id in self.nodes}
@@ -85,7 +90,27 @@ class WorkflowExecutor:
             
             # 노드 인스턴스 생성 및 실행
             instance = NodeClass()
-            result = instance.execute(**kwargs)
+            node_name_for_logging = node_info['data']['nodeName']
+            
+            result = None
+            try:
+                # PerformanceLogger 컨텍스트 시작
+                with PerformanceLogger(
+                    workflow_id=self.workflow_id, 
+                    node_id=node_id,
+                    node_name=node_name_for_logging
+                ) as perf_logger:
+                    
+                    result = instance.execute(**kwargs)
+                    
+                    # 노드 실행 완료 후 로그 기록
+                    perf_logger.log(input_data=kwargs, output_data=result)
+                    logger.info(f" -> 완료. 결과: {perf_logger._summarize_data(result)}")
+
+            except Exception as e:
+                logger.error(f"Error executing node {node_id}: {e}", exc_info=True)
+                raise
+
             
             if node_info['data']['functionId'] == 'endnode':
                 execution_final_outputs = result

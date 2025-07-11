@@ -26,6 +26,7 @@ router = APIRouter(
 )
 
 class Workflow(BaseModel):
+    id: str
     nodes: List[Dict[str, Any]]
     edges: List[Dict[str, Any]]
     view: Dict[str, Any]
