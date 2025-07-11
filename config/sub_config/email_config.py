@@ -26,13 +26,13 @@ class EmailConfig(BaseConfig):
         self.SMTP_USERNAME = self.create_persistent_config(
             env_name="EMAIL_SMTP_USERNAME",
             config_path="email.smtp.username",
-            default_value=""
+            default_value="Unset",
         )
 
         self.SMTP_PASSWORD = self.create_persistent_config(
             env_name="EMAIL_SMTP_PASSWORD",
             config_path="email.smtp.password",
-            default_value="",
+            default_value="Unset",
             file_path="email_password.txt"
         )
 
