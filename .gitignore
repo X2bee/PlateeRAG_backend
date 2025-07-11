@@ -197,3 +197,8 @@ cython_debug/
 
 #API keys
 *api_key.txt
+
+# Local configuration files
+trash/
+trash/persistent_config_backup.py
+trash/persistent_config_new.py

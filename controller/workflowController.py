@@ -11,6 +11,7 @@ logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/workflow", tags=["workflow"])
 
 class WorkflowData(BaseModel):
+    id: str
     view: Dict[str, Any]
     nodes: List[Dict[str, Any]]
     edges: List[Dict[str, Any]]
