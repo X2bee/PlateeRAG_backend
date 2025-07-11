@@ -253,7 +253,6 @@ class DatabaseManager:
             self.logger.error(f"Failed to create indexes: {e}")
             return False
 
-# 전역 데이터베이스 매니저 인스턴스
 _db_manager = None
 
 def get_database_manager(database_config=None) -> DatabaseManager:

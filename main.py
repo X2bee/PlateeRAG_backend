@@ -159,6 +159,7 @@ async def update_app_config(new_config: dict):
     """애플리케이션 설정 업데이트"""
     return {"message": "Config update not implemented yet", "received": new_config}
 
+
 if __name__ == "__main__":
     try:
         host = os.environ.get("APP_HOST", "0.0.0.0")
