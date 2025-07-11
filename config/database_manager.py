@@ -156,6 +156,69 @@ class DatabaseManager:
                 self.connection.rollback()
             return None
     
+    def execute_query_one(self, query: str, params: tuple = None) -> Optional[Dict]:
+        """쿼리 실행하여 단일 결과 반환"""
+        result = self.execute_query(query, params)
+        if result and len(result) > 0:
+            return result[0]
+        return None
+    
+    def execute_insert(self, query: str, params: tuple = None) -> Optional[int]:
+        """INSERT 쿼리 실행하여 생성된 ID 반환"""
+        if not self.connection:
+            self.logger.error("No database connection available")
+            return None
+        
+        try:
+            cursor = self.connection.cursor()
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            if self.db_type == "sqlite":
+                insert_id = cursor.lastrowid
+                self.connection.commit()
+                return insert_id
+            else:  # postgresql
+                # PostgreSQL의 경우 RETURNING id를 쿼리에 포함해야 함
+                result = cursor.fetchone()
+                if result:
+                    return result[0]  # id 값
+                return None
+                
+        except Exception as e:
+            self.logger.error("Insert query execution failed: %s", e)
+            if self.db_type == "sqlite":
+                self.connection.rollback()
+            return None
+    
+    def execute_update_delete(self, query: str, params: tuple = None) -> Optional[int]:
+        """UPDATE/DELETE 쿼리 실행하여 영향받은 행 수 반환"""
+        if not self.connection:
+            self.logger.error("No database connection available")
+            return None
+        
+        try:
+            cursor = self.connection.cursor()
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            affected_rows = cursor.rowcount
+            
+            if self.db_type == "sqlite":
+                self.connection.commit()
+            
+            return affected_rows
+                
+        except Exception as e:
+            self.logger.error("Update/Delete query execution failed: %s", e)
+            if self.db_type == "sqlite":
+                self.connection.rollback()
+            return None
+    
     def table_exists(self, table_name: str) -> bool:
         """테이블 존재 여부 확인"""
         if self.db_type == "postgresql":
