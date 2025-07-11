@@ -90,21 +90,23 @@ class WorkflowExecutor:
             
             # 노드 인스턴스 생성 및 실행
             instance = NodeClass()
-            result = None
+            node_name_for_logging = node_info['data']['nodeName']
             
+            result = None
             try:
                 # PerformanceLogger 컨텍스트 시작
                 with PerformanceLogger(
                     workflow_id=self.workflow_id, 
                     node_id=node_id,
-                    node_name=node_info['data']['nodeName']
+                    node_name=node_name_for_logging
                 ) as perf_logger:
-                    logger.info(f"Executing node {node_id} ({node_info['data']['nodeName']}) with kwargs: {kwargs}")
+                    
                     result = instance.execute(**kwargs)
-                    logger.info(f"Node {node_id} executed successfully. Result: {result}")
                     
                     # 노드 실행 완료 후 로그 기록
                     perf_logger.log(input_data=kwargs, output_data=result)
+                    logger.info(f" -> 완료. 결과: {perf_logger._summarize_data(result)}")
+
             except Exception as e:
                 logger.error(f"Error executing node {node_id}: {e}", exc_info=True)
                 raise
