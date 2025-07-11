@@ -25,9 +25,9 @@ async def lifespan(app: FastAPI):
     """애플리케이션 라이프사이클 관리"""
     try:
         logger.info("Starting application lifespan...")
-        config_composer.ensure_directories()
         configs = config_composer.initialize_all_configs()
         app.state.config = configs
+        config_composer.ensure_directories()
         validation_result = config_composer.validate_critical_configs()
         if not validation_result["valid"]:
             for error in validation_result["errors"]:
