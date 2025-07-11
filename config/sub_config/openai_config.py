@@ -22,7 +22,7 @@ class OpenAIConfig(BaseConfig):
         self.MODEL_DEFAULT = self.create_persistent_config(
             env_name="OPENAI_MODEL_DEFAULT",
             config_path="openai.model_default",
-            default_value="gpt-3.5-turbo"
+            default_value="gpt-4o-2024-11-20"
         )
         
         # API Base URL (프록시나 다른 엔드포인트 사용시)
