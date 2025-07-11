@@ -17,7 +17,6 @@ class DatabaseConfig(BaseConfig):
             default_value="auto"
         )
         
-        # PostgreSQL 설정
         self.POSTGRES_HOST = self.create_persistent_config(
             env_name="POSTGRES_HOST",
             config_path="database.postgres.host",
