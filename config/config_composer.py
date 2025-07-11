@@ -7,7 +7,9 @@ from config.sub_config.openai_config import OpenAIConfig
 from config.sub_config.app_config import AppConfig
 from config.sub_config.workflow_config import WorkflowConfig
 from config.sub_config.node_config import NodeConfig
+from config.sub_config.database_config import DatabaseConfig
 from config.persistent_config import PersistentConfig, export_config_summary, refresh_all_configs, save_all_configs
+from config.database_manager import initialize_database
 
 logger = logging.getLogger("config-composer")
 
@@ -21,6 +23,7 @@ class ConfigComposer:
         self.app: AppConfig = AppConfig()
         self.workflow: WorkflowConfig = WorkflowConfig()
         self.node: NodeConfig = NodeConfig()
+        self.database: DatabaseConfig = DatabaseConfig()
         
         # 모든 설정을 저장하는 딕셔너리
         self.all_configs: Dict[str, PersistentConfig] = {}
@@ -34,7 +37,18 @@ class ConfigComposer:
         try:
             self.logger.info("Initializing all configurations...")
             
-            # 각 설정 카테고리 초기화
+            # 1. 먼저 데이터베이스 설정 초기화
+            database_configs = self.database.initialize()
+            self.all_configs.update(database_configs)
+            
+            # 2. 데이터베이스 초기화 (마이그레이션 포함) - 다른 설정들이 DB를 사용할 수 있도록
+            db_initialized = initialize_database(self.database)
+            if db_initialized:
+                self.logger.info("Database initialized successfully")
+            else:
+                self.logger.warning("Database initialization failed, using JSON fallback")
+            
+            # 3. 이제 나머지 설정 카테고리 초기화 (DB 연결 상태에서)
             openai_configs = self.openai.initialize()
             app_configs = self.app.initialize()
             workflow_configs = self.workflow.initialize()
@@ -54,6 +68,7 @@ class ConfigComposer:
                 "app": self.app,
                 "workflow": self.workflow,
                 "node": self.node,
+                "database": self.database,
                 "all_configs": self.all_configs
             }
             
@@ -79,7 +94,8 @@ class ConfigComposer:
                 "openai": self.openai.get_config_summary(),
                 "app": self.app.get_config_summary(),
                 "workflow": self.workflow.get_config_summary(),
-                "node": self.node.get_config_summary()
+                "node": self.node.get_config_summary(),
+                "database": self.database.get_config_summary()
             },
             "persistent_summary": export_config_summary()
         }

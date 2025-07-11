@@ -2,7 +2,6 @@ import json
 import os
 import logging
 from typing import Generic, TypeVar, Any, List, Dict, Optional
-from pathlib import Path
 
 T = TypeVar('T')
 
@@ -11,7 +10,7 @@ logger = logging.getLogger("persistent-config")
 # 전역 설정 레지스트리
 PERSISTENT_CONFIG_REGISTRY: List['PersistentConfig'] = []
 
-# 설정 데이터를 저장할 파일 경로
+# 설정 데이터를 저장할 파일 경로 (데이터베이스 실패 시 fallback)
 CONFIG_DB_PATH = "constants/config.json"
 
 def ensure_config_directory():
@@ -19,39 +18,126 @@ def ensure_config_directory():
     config_dir = os.path.dirname(CONFIG_DB_PATH)
     if config_dir and not os.path.exists(config_dir):
         os.makedirs(config_dir, exist_ok=True)
-        logger.info(f"Created config directory: {config_dir}")
+        logger.info("Created config directory: %s", config_dir)
 
 def load_config_data() -> Dict[str, Any]:
-    """JSON 파일에서 설정 데이터를 로드"""
+    """JSON 파일에서 설정 데이터를 로드 (fallback)"""
     ensure_config_directory()
     
     if not os.path.exists(CONFIG_DB_PATH):
-        logger.info(f"Config file not found at {CONFIG_DB_PATH}, creating new one")
+        logger.info("Config file not found at %s, creating new one", CONFIG_DB_PATH)
         return {}
     
     try:
         with open(CONFIG_DB_PATH, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            logger.info(f"Loaded config data from {CONFIG_DB_PATH}")
+            logger.info("Loaded config data from %s", CONFIG_DB_PATH)
             return data
     except (json.JSONDecodeError, FileNotFoundError) as e:
-        logger.warning(f"Failed to load config data: {e}, using empty config")
+        logger.warning("Failed to load config data: %s, using empty config", e)
         return {}
 
 def save_config_data(config_data: Dict[str, Any]):
-    """설정 데이터를 JSON 파일에 저장"""
+    """설정 데이터를 JSON 파일에 저장 (fallback)"""
     ensure_config_directory()
     
     try:
         with open(CONFIG_DB_PATH, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved config data to {CONFIG_DB_PATH}")
+        logger.info("Saved config data to %s", CONFIG_DB_PATH)
     except Exception as e:
-        logger.error(f"Failed to save config data: {e}")
+        logger.error("Failed to save config data: %s", e)
         raise
 
-def get_config_value(config_path: str) -> Optional[Any]:
-    """점으로 구분된 경로를 사용하여 설정 값을 가져옴"""
+def get_config_value_from_db(config_path: str) -> Optional[Any]:
+    """데이터베이스에서 설정 값을 가져옴"""
+    try:
+        from config.database_manager import get_database_manager
+        
+        db_manager = get_database_manager()
+        if not db_manager.connection:
+            # 데이터베이스 연결이 없으면 JSON fallback 사용
+            return get_config_value_from_json(config_path)
+        
+        if db_manager.db_type == "postgresql":
+            query = "SELECT config_value, data_type FROM persistent_configs WHERE config_path = %s"
+        else:  # sqlite
+            query = "SELECT config_value, data_type FROM persistent_configs WHERE config_path = ?"
+        
+        result = db_manager.execute_query(query, (config_path,))
+        
+        if result and len(result) > 0:
+            config_value = result[0]['config_value']
+            data_type = result[0].get('data_type', 'string')
+            
+            # 타입에 따라 값 변환
+            if data_type == 'json':
+                return json.loads(config_value) if config_value else None
+            elif data_type == 'boolean':
+                return config_value.lower() in ('true', '1', 'yes') if isinstance(config_value, str) else bool(config_value)
+            elif data_type == 'integer':
+                return int(config_value)
+            elif data_type == 'float':
+                return float(config_value)
+            else:
+                return config_value
+        
+        return None
+        
+    except Exception as e:
+        logger.warning("Failed to get config from database: %s, using JSON fallback", e)
+        return get_config_value_from_json(config_path)
+
+def set_config_value_to_db(config_path: str, value: Any):
+    """데이터베이스에 설정 값을 저장"""
+    try:
+        from config.database_manager import get_database_manager
+        
+        db_manager = get_database_manager()
+        if not db_manager.connection:
+            # 데이터베이스 연결이 없으면 JSON fallback 사용
+            return set_config_value_to_json(config_path, value)
+        
+        # 데이터 타입 결정
+        if isinstance(value, bool):
+            data_type = 'boolean'
+            config_value = str(value)
+        elif isinstance(value, int):
+            data_type = 'integer'
+            config_value = str(value)
+        elif isinstance(value, float):
+            data_type = 'float'
+            config_value = str(value)
+        elif isinstance(value, (list, dict)):
+            data_type = 'json'
+            config_value = json.dumps(value)
+        else:
+            data_type = 'string'
+            config_value = str(value)
+        
+        if db_manager.db_type == "postgresql":
+            query = """
+                INSERT INTO persistent_configs (config_path, config_value, data_type, updated_at)
+                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (config_path) 
+                DO UPDATE SET config_value = EXCLUDED.config_value, 
+                             data_type = EXCLUDED.data_type,
+                             updated_at = CURRENT_TIMESTAMP
+            """
+        else:  # sqlite
+            query = """
+                INSERT OR REPLACE INTO persistent_configs (config_path, config_value, data_type, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """
+        
+        db_manager.execute_query(query, (config_path, config_value, data_type))
+        
+    except Exception as e:
+        logger.warning("Failed to save config to database: %s, using JSON fallback", e)
+        set_config_value_to_json(config_path, value)
+
+def get_config_value_from_json(config_path: str) -> Optional[Any]:
+    """JSON 파일에서 설정 값을 가져옴 (fallback)"""
     config_data = load_config_data()
     
     path_parts = config_path.split(".")
@@ -64,8 +150,8 @@ def get_config_value(config_path: str) -> Optional[Any]:
     except (KeyError, TypeError):
         return None
 
-def set_config_value(config_path: str, value: Any):
-    """점으로 구분된 경로를 사용하여 설정 값을 저장"""
+def set_config_value_to_json(config_path: str, value: Any):
+    """JSON 파일에 설정 값을 저장 (fallback)"""
     config_data = load_config_data()
     
     path_parts = config_path.split(".")
@@ -83,6 +169,10 @@ def set_config_value(config_path: str, value: Any):
     # 파일에 저장
     save_config_data(config_data)
 
+# 호환성을 위한 별칭
+get_config_value = get_config_value_from_db
+set_config_value = set_config_value_to_db
+
 class PersistentConfig(Generic[T]):
     """
     데이터베이스와 연동되는 지속적 설정 클래스
@@ -94,14 +184,14 @@ class PersistentConfig(Generic[T]):
         self.config_path = config_path
         self.env_value = env_value
         
-        # 저장된 설정 값 확인
+        # 저장된 설정 값 확인 (데이터베이스 우선, JSON fallback)
         self.config_value = get_config_value(config_path)
         
         if self.config_value is not None:
-            logger.info(f"'{env_name}' loaded from database: {self.config_value}")
+            logger.info("'%s' loaded from database: %s", env_name, self.config_value)
             self.value = self.config_value
         else:
-            logger.info(f"'{env_name}' using default value: {env_value}")
+            logger.info("'%s' using default value: %s", env_name, env_value)
             self.value = env_value
         
         # 전역 레지스트리에 등록
@@ -132,19 +222,19 @@ class PersistentConfig(Generic[T]):
         if new_value is not None:
             self.value = new_value
             self.config_value = new_value
-            logger.info(f"Updated {self.env_name} to new value: {self.value}")
+            logger.info("Updated %s to new value: %s", self.env_name, self.value)
         else:
-            logger.warning(f"No saved value found for {self.env_name}, keeping current value")
+            logger.warning("No saved value found for %s, keeping current value", self.env_name)
     
     def save(self):
         """현재 값을 데이터베이스에 저장"""
-        logger.info(f"Saving '{self.env_name}' to database: {self.value}")
+        logger.info("Saving '%s' to database: %s", self.env_name, self.value)
         set_config_value(self.config_path, self.value)
         self.config_value = self.value
     
     def reset_to_default(self):
         """기본값으로 재설정"""
-        logger.info(f"Resetting '{self.env_name}' to default value: {self.env_value}")
+        logger.info("Resetting '%s' to default value: %s", self.env_name, self.env_value)
         self.value = self.env_value
         self.save()
 
