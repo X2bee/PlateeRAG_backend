@@ -21,7 +21,7 @@ class DatabaseConfig(BaseConfig):
         self.POSTGRES_HOST = self.create_persistent_config(
             env_name="POSTGRES_HOST",
             config_path="database.postgres.host",
-            default_value=""
+            default_value="0.0.0.0"
         )
         
         self.POSTGRES_PORT = self.create_persistent_config(
