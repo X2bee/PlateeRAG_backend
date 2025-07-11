@@ -40,13 +40,13 @@ class DatabaseConfig(BaseConfig):
         self.POSTGRES_USER = self.create_persistent_config(
             env_name="POSTGRES_USER",
             config_path="database.postgres.user",
-            default_value=""
+            default_value="Unset"
         )
         
         self.POSTGRES_PASSWORD = self.create_persistent_config(
             env_name="POSTGRES_PASSWORD",
             config_path="database.postgres.password",
-            default_value=""
+            default_value="Unset"
         )
         
         # SQLite 설정
