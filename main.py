@@ -23,20 +23,11 @@ logger = logging.getLogger("plateerag-backend")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """애플리케이션 라이프사이클 관리"""
-    # 시작 시 초기화
     try:
         logger.info("Starting application lifespan...")
-        
-        # 1. 설정 시스템 초기화
-        configs = config_composer.initialize_all_configs()
-        
-        # 2. app.state에 설정 저장
-        app.state.config = configs
-        
-        # 3. 필요한 디렉토리들 생성
         config_composer.ensure_directories()
-        
-        # 4. 설정 유효성 검증
+        configs = config_composer.initialize_all_configs()
+        app.state.config = configs
         validation_result = config_composer.validate_critical_configs()
         if not validation_result["valid"]:
             for error in validation_result["errors"]:
@@ -44,16 +35,11 @@ async def lifespan(app: FastAPI):
         for warning in validation_result["warnings"]:
             logger.warning(f"Configuration warning: {warning}")
         
-        # 5. 노드 discovery 실행 (설정에 따라)
         if configs["node"].AUTO_DISCOVERY.value:
             logger.info("Starting node discovery...")
             run_discovery()
-            
-            # 노드 레지스트리 파일 생성
             registry_path = configs["node"].REGISTRY_FILE_PATH.value
             generate_json_spec(registry_path)
-            
-            # app.state에 노드 정보 저장
             app.state.node_registry = get_node_registry()
             app.state.node_count = len(app.state.node_registry)
             
@@ -67,12 +53,10 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error during startup: {e}")
         logger.info("Application will continue despite startup error")
     
-    yield  # 애플리케이션 실행
+    yield 
     
-    # 종료 시 정리
     logger.info("Application shutdown...")
     try:
-        # 설정을 데이터베이스에 저장
         config_composer.save_all()
         logger.info("Configurations saved on shutdown")
     except Exception as e:
@@ -85,8 +69,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS 설정은 startup 이벤트에서 추가됩니다 (lifespan에서 처리)
-# 기본적으로는 모든 오리진 허용
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 시작시 기본값, config 로드 후 업데이트 가능
@@ -100,7 +82,6 @@ app.include_router(configRouter)
 app.include_router(workflowRouter)
 app.include_router(nodeStateRouter)
 
-# app.state를 활용하는 새로운 엔드포인트들
 @app.get("/app/status")
 async def get_app_status():
     """애플리케이션 상태 정보 반환"""
@@ -120,7 +101,6 @@ async def get_app_status():
 async def get_app_config():
     """애플리케이션 설정 반환"""
     try:
-        # 설정 요약 정보 가져오기
         config_summary = config_composer.get_config_summary()
         return config_summary
     except Exception as e:
@@ -177,13 +157,10 @@ async def save_persistent_configs():
 @app.put("/app/config")
 async def update_app_config(new_config: dict):
     """애플리케이션 설정 업데이트"""
-    # 이 기능은 설정에 따라 구현 필요
     return {"message": "Config update not implemented yet", "received": new_config}
 
 if __name__ == "__main__":
-    # 개발 모드에서는 환경변수를 우선으로 하여 실행
     try:
-        # 환경변수에서 직접 설정 읽기 (PersistentConfig보다 우선)
         host = os.environ.get("APP_HOST", "0.0.0.0")
         port = int(os.environ.get("APP_PORT", "8000"))
         debug = os.environ.get("DEBUG_MODE", "false").lower() in ('true', '1', 'yes', 'on')
