@@ -42,18 +42,6 @@ class AppConfig(BaseConfig):
             type_converter=int
         )
         
-        self.CORS_ORIGINS = self.create_persistent_config(
-            env_name="CORS_ORIGINS",
-            config_path="app.cors_origins",
-            default_value=["*"]
-        )
-        
-        self.DATA_DIRECTORIES = self.create_persistent_config(
-            env_name="DATA_DIRECTORIES",
-            config_path="app.data_directories",
-            default_value=["constants", "downloads"]
-        )
-        
         # 로그 포맷
         self.LOG_FORMAT = self.create_persistent_config(
             env_name="LOG_FORMAT",

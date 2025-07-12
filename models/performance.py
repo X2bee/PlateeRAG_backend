@@ -34,13 +34,13 @@ class WorkflowExecution(BaseModel):
             'status': 'VARCHAR(20) NOT NULL',
             'start_time': 'TIMESTAMP',
             'end_time': 'TIMESTAMP',
-            'execution_time': 'DECIMAL(10,3)',  # seconds
+            'execution_time': 'DECIMAL(10,3)', 
             'node_count': 'INTEGER DEFAULT 0',
             'nodes_executed': 'INTEGER DEFAULT 0',
             'error_message': 'TEXT',
-            'input_data': 'TEXT',    # JSON string
-            'output_data': 'TEXT',   # JSON string
-            'metadata': 'TEXT'       # JSON string
+            'input_data': 'TEXT',
+            'output_data': 'TEXT',
+            'metadata': 'TEXT'
         }
 
 class NodeExecution(BaseModel):

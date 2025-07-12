@@ -9,9 +9,14 @@ logger = logging.getLogger("persistent-config")
 
 # 전역 설정 레지스트리
 PERSISTENT_CONFIG_REGISTRY: List['PersistentConfig'] = []
-
 # 설정 데이터를 저장할 파일 경로 (데이터베이스 실패 시 fallback)
 CONFIG_DB_PATH = "constants/config.json"
+# DISABLE_JSON_FALLBACK=true 로 설정하면 JSON fallback을 비활성화
+JSON_FALLBACK_ENABLED = os.environ.get("DISABLE_JSON_FALLBACK", "false").lower() != "true"
+if JSON_FALLBACK_ENABLED:
+    logger.info("JSON fallback is ENABLED - will use constants/config.json if database connection fails")
+else:
+    logger.warning("JSON fallback is DISABLED - application will fail if database connection is unavailable")
 
 def ensure_config_directory():
     """설정 파일 디렉토리가 존재하는지 확인하고 없으면 생성"""
@@ -56,8 +61,15 @@ def get_config_value_from_db(config_path: str) -> Optional[Any]:
         
         db_manager = get_database_manager()
         if not db_manager.connection:
-            # 데이터베이스 연결이 없으면 JSON fallback 사용
+            # 데이터베이스 연결이 없을 때 JSON fallback 사용 여부 확인
+            if not JSON_FALLBACK_ENABLED:
+                logger.error("Database connection failed and JSON fallback is disabled (DISABLE_JSON_FALLBACK=true)")
+                raise ConnectionError("Database connection failed and JSON fallback is disabled")
+            
+            logger.info("Database connection unavailable, using JSON fallback for config: %s", config_path)
             return get_config_value_from_json(config_path)
+        
+        logger.debug("Fetching config from database: %s", config_path)
         
         if db_manager.db_type == "postgresql":
             query = "SELECT config_value, data_type FROM persistent_configs WHERE config_path = %s"
@@ -69,6 +81,8 @@ def get_config_value_from_db(config_path: str) -> Optional[Any]:
         if result and len(result) > 0:
             config_value = result[0]['config_value']
             data_type = result[0].get('data_type', 'string')
+            
+            logger.debug("Config loaded from database: %s = %s (type: %s)", config_path, config_value, data_type)
             
             # 타입에 따라 값 변환
             if data_type == 'json':
@@ -82,10 +96,15 @@ def get_config_value_from_db(config_path: str) -> Optional[Any]:
             else:
                 return config_value
         
+        logger.debug("Config not found in database: %s", config_path)
         return None
         
     except Exception as e:
-        logger.warning("Failed to get config from database: %s, using JSON fallback", e)
+        if not JSON_FALLBACK_ENABLED:
+            logger.error("Failed to get config from database and JSON fallback is disabled: %s", e)
+            raise ConnectionError(f"Failed to get config from database and JSON fallback is disabled: {e}")
+        
+        logger.warning("Failed to get config '%s' from database: %s, using JSON fallback", config_path, e)
         return get_config_value_from_json(config_path)
 
 def set_config_value_to_db(config_path: str, value: Any):
@@ -95,7 +114,12 @@ def set_config_value_to_db(config_path: str, value: Any):
         
         db_manager = get_database_manager()
         if not db_manager.connection:
-            # 데이터베이스 연결이 없으면 JSON fallback 사용
+            # 데이터베이스 연결이 없을 때 JSON fallback 사용 여부 확인
+            if not JSON_FALLBACK_ENABLED:
+                logger.error("Database connection failed and JSON fallback is disabled (DISABLE_JSON_FALLBACK=true)")
+                raise ConnectionError("Database connection failed and JSON fallback is disabled")
+            
+            logger.info("Database connection unavailable, using JSON fallback to save config: %s", config_path)
             return set_config_value_to_json(config_path, value)
         
         # 데이터 타입 결정
@@ -115,6 +139,8 @@ def set_config_value_to_db(config_path: str, value: Any):
             data_type = 'string'
             config_value = str(value)
         
+        logger.debug("Saving config to database: %s = %s (type: %s)", config_path, value, data_type)
+        
         if db_manager.db_type == "postgresql":
             query = """
                 INSERT INTO persistent_configs (config_path, config_value, data_type, updated_at)
@@ -131,9 +157,14 @@ def set_config_value_to_db(config_path: str, value: Any):
             """
         
         db_manager.execute_query(query, (config_path, config_value, data_type))
+        logger.info("Config successfully saved to database: %s = %s", config_path, value)
         
     except Exception as e:
-        logger.warning("Failed to save config to database: %s, using JSON fallback", e)
+        if not JSON_FALLBACK_ENABLED:
+            logger.error("Failed to save config to database and JSON fallback is disabled: %s", e)
+            raise ConnectionError(f"Failed to save config to database and JSON fallback is disabled: {e}")
+        
+        logger.warning("Failed to save config '%s' to database: %s, using JSON fallback", config_path, e)
         set_config_value_to_json(config_path, value)
 
 def get_config_value_from_json(config_path: str) -> Optional[Any]:
@@ -183,8 +214,6 @@ class PersistentConfig(Generic[T]):
         self.env_name = env_name
         self.config_path = config_path
         self.env_value = env_value
-        
-        # 저장된 설정 값 확인 (데이터베이스 우선, JSON fallback)
         self.config_value = get_config_value(config_path)
         
         if self.config_value is not None:
@@ -218,19 +247,21 @@ class PersistentConfig(Generic[T]):
     
     def update(self):
         """데이터베이스에서 최신 값을 다시 로드"""
+        logger.info("Refreshing config '%s' from database...", self.env_name)
         new_value = get_config_value(self.config_path)
         if new_value is not None:
             self.value = new_value
             self.config_value = new_value
-            logger.info("Updated %s to new value: %s", self.env_name, self.value)
+            logger.info("Config '%s' successfully refreshed from database: %s", self.env_name, self.value)
         else:
-            logger.warning("No saved value found for %s, keeping current value", self.env_name)
+            logger.warning("No saved value found in database for '%s', keeping current value: %s", self.env_name, self.value)
     
     def save(self):
         """현재 값을 데이터베이스에 저장"""
-        logger.info("Saving '%s' to database: %s", self.env_name, self.value)
+        logger.info("Saving config '%s' to database: %s", self.env_name, self.value)
         set_config_value(self.config_path, self.value)
         self.config_value = self.value
+        logger.info("Config '%s' successfully saved to database", self.env_name)
     
     def reset_to_default(self):
         """기본값으로 재설정"""
@@ -247,17 +278,47 @@ def get_all_persistent_configs() -> List[PersistentConfig]:
     """등록된 모든 PersistentConfig 객체 반환"""
     return PERSISTENT_CONFIG_REGISTRY.copy()
 
+def is_json_fallback_enabled() -> bool:
+    """JSON fallback이 활성화되어 있는지 확인"""
+    return JSON_FALLBACK_ENABLED
+
+def get_json_fallback_status() -> Dict[str, Any]:
+    """JSON fallback 상태 정보 반환"""
+    return {
+        "json_fallback_enabled": JSON_FALLBACK_ENABLED,
+        "config_file_path": CONFIG_DB_PATH,
+        "environment_variable": "DISABLE_JSON_FALLBACK",
+        "current_env_value": os.environ.get("DISABLE_JSON_FALLBACK", "not_set"),
+        "description": "Set DISABLE_JSON_FALLBACK=true to disable JSON fallback when database connection fails"
+    }
+
 def refresh_all_configs():
     """모든 PersistentConfig 객체를 데이터베이스에서 다시 로드"""
-    logger.info("Refreshing all persistent configs...")
+    logger.info("Starting refresh of all persistent configs from database...")
+    refreshed_count = 0
+    
     for config in PERSISTENT_CONFIG_REGISTRY:
-        config.update()
+        try:
+            config.update()
+            refreshed_count += 1
+        except Exception as e:
+            logger.error("Failed to refresh config '%s': %s", config.env_name, e)
+    
+    logger.info("Completed refresh of %d/%d persistent configs from database", refreshed_count, len(PERSISTENT_CONFIG_REGISTRY))
 
 def save_all_configs():
     """모든 PersistentConfig 객체를 데이터베이스에 저장"""
-    logger.info("Saving all persistent configs...")
+    logger.info("Starting save of all persistent configs to database...")
+    saved_count = 0
+    
     for config in PERSISTENT_CONFIG_REGISTRY:
-        config.save()
+        try:
+            config.save()
+            saved_count += 1
+        except Exception as e:
+            logger.error("Failed to save config '%s': %s", config.env_name, e)
+    
+    logger.info("Completed save of %d/%d persistent configs to database", saved_count, len(PERSISTENT_CONFIG_REGISTRY))
 
 def export_config_summary() -> Dict[str, Any]:
     """모든 설정의 요약 정보 반환"""

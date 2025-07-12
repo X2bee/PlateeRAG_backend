@@ -229,38 +229,31 @@ class ConfigComposer:
         """
         모든 설정을 데이터베이스에서 다시 로드
         """
-        self.logger.info("Refreshing all configurations from database...")
+        self.logger.info("=== Starting database refresh for all configurations ===")
         refresh_all_configs()
-        self.logger.info("All configurations refreshed successfully")
+        self.logger.info("=== Database refresh completed for all configurations ===")
     
     def save_all(self):
         """
         모든 설정을 데이터베이스에 저장
         """
-        self.logger.info("Saving all configurations to database...")
+        self.logger.info("=== Starting database save for all configurations ===")
         save_all_configs()
-        self.logger.info("All configurations saved successfully")
+        self.logger.info("=== Database save completed for all configurations ===")
     
     def ensure_directories(self):
         """
-        필요한 디렉토리들 생성 (동적 카테고리 지원)
+        필요한 디렉토리들 생성 (고정된 디렉토리 목록)
         """
-        # app 카테고리에서 DATA_DIRECTORIES 찾기
-        if "app" in self.config_categories:
-            app_config = self.config_categories["app"]
-            if hasattr(app_config, "DATA_DIRECTORIES"):
-                directories = app_config.DATA_DIRECTORIES.value
-                
-                for directory in directories:
-                    if not os.path.exists(directory):
-                        os.makedirs(directory, exist_ok=True)
-                        self.logger.info("Created directory: %s", directory)
-                    else:
-                        self.logger.info("Directory already exists: %s", directory)
+        # 고정된 디렉토리 목록
+        required_directories = ["constants", "downloads", "logs"]
+        
+        for directory in required_directories:
+            if not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+                self.logger.info("Created directory: %s", directory)
             else:
-                self.logger.warning("No DATA_DIRECTORIES found in app config")
-        else:
-            self.logger.warning("No app config category found")
+                self.logger.info("Directory already exists: %s", directory)
     
     def validate_critical_configs(self) -> Dict[str, Any]:
         """
