@@ -178,13 +178,13 @@ async def update_persistent_config(config_name: str, new_value: dict):
 async def refresh_persistent_configs():
     """모든 PersistentConfig를 데이터베이스에서 다시 로드"""
     config_composer.refresh_all()
-    return {"message": "All persistent configs refreshed successfully"}
+    return {"message": "All persistent configs refreshed successfully from database"}
 
 @app.post("/app/config/persistent/save")
 async def save_persistent_configs():
     """모든 PersistentConfig를 데이터베이스에 저장"""
     config_composer.save_all()
-    return {"message": "All persistent configs saved successfully"}
+    return {"message": "All persistent configs saved successfully to database"}
 
 @app.put("/app/config")
 async def update_app_config(new_config: dict):

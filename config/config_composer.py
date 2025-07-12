@@ -229,17 +229,17 @@ class ConfigComposer:
         """
         모든 설정을 데이터베이스에서 다시 로드
         """
-        self.logger.info("Refreshing all configurations from database...")
+        self.logger.info("=== Starting database refresh for all configurations ===")
         refresh_all_configs()
-        self.logger.info("All configurations refreshed successfully")
+        self.logger.info("=== Database refresh completed for all configurations ===")
     
     def save_all(self):
         """
         모든 설정을 데이터베이스에 저장
         """
-        self.logger.info("Saving all configurations to database...")
+        self.logger.info("=== Starting database save for all configurations ===")
         save_all_configs()
-        self.logger.info("All configurations saved successfully")
+        self.logger.info("=== Database save completed for all configurations ===")
     
     def ensure_directories(self):
         """
