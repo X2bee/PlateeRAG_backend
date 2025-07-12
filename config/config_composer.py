@@ -243,24 +243,17 @@ class ConfigComposer:
     
     def ensure_directories(self):
         """
-        필요한 디렉토리들 생성 (동적 카테고리 지원)
+        필요한 디렉토리들 생성 (고정된 디렉토리 목록)
         """
-        # app 카테고리에서 DATA_DIRECTORIES 찾기
-        if "app" in self.config_categories:
-            app_config = self.config_categories["app"]
-            if hasattr(app_config, "DATA_DIRECTORIES"):
-                directories = app_config.DATA_DIRECTORIES.value
-                
-                for directory in directories:
-                    if not os.path.exists(directory):
-                        os.makedirs(directory, exist_ok=True)
-                        self.logger.info("Created directory: %s", directory)
-                    else:
-                        self.logger.info("Directory already exists: %s", directory)
+        # 고정된 디렉토리 목록
+        required_directories = ["constants", "downloads", "logs"]
+        
+        for directory in required_directories:
+            if not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+                self.logger.info("Created directory: %s", directory)
             else:
-                self.logger.warning("No DATA_DIRECTORIES found in app config")
-        else:
-            self.logger.warning("No app config category found")
+                self.logger.info("Directory already exists: %s", directory)
     
     def validate_critical_configs(self) -> Dict[str, Any]:
         """
