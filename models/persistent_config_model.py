@@ -4,7 +4,6 @@ Persistent Config 모델 - 설정 저장을 위한 데이터베이스 모델
 from typing import Dict, Any
 from models.base_model import BaseModel
 
-
 class PersistentConfigModel(BaseModel):
     """설정 데이터를 저장하기 위한 모델"""
     
