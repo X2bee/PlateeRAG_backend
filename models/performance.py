@@ -108,6 +108,7 @@ class NodePerformance(BaseModel):
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.user_id: Optional[int] = kwargs.get('user_id')
         self.workflow_name: str = kwargs.get('workflow_name', '')
         self.workflow_id: str = kwargs.get('workflow_id', '')
         self.node_id: str = kwargs.get('node_id', '')
@@ -126,6 +127,7 @@ class NodePerformance(BaseModel):
     
     def get_schema(self) -> Dict[str, str]:
         return {
+            'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
             'workflow_name': 'VARCHAR(200) NOT NULL',
             'workflow_id': 'VARCHAR(100) NOT NULL',
             'node_id': 'VARCHAR(100) NOT NULL',

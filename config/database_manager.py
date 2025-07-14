@@ -275,20 +275,26 @@ class DatabaseManager:
         
         return bool(result)
     
-    def run_migrations(self) -> bool:
+    def run_migrations(self, models_registry=None) -> bool:
         """데이터베이스 마이그레이션 실행"""
         try:
             self.logger.info("Running migrations for %s", self.db_type)
             
-            # 마이그레이션 (향후 확장 가능)
-            migrations = [
+            # 기존 고정 마이그레이션들
+            fixed_migrations = [
                 self._migration_001_add_indexes,
-                # 향후 마이그레이션 함수들 추가
+                # 향후 고정 마이그레이션 함수들 추가
             ]
             
-            for migration in migrations:
+            for migration in fixed_migrations:
                 if not migration():
-                    self.logger.error("Migration failed: %s", migration.__name__)
+                    self.logger.error("Fixed migration failed: %s", migration.__name__)
+                    return False
+            
+            # 동적 스키마 마이그레이션
+            if models_registry:
+                if not self._run_schema_migrations(models_registry):
+                    self.logger.error("Schema migrations failed")
                     return False
             
             self.logger.info("All migrations completed successfully")
@@ -296,6 +302,107 @@ class DatabaseManager:
             
         except (sqlite3.Error, ImportError, AttributeError) as e:
             self.logger.error("Migration failed: %s", e)
+            return False
+    
+    def _run_schema_migrations(self, models_registry) -> bool:
+        """스키마 변경 감지 및 마이그레이션 실행"""
+        try:
+            self.logger.info("Running schema migrations...")
+            self.logger.info(f"Registered models: {[model.__name__ for model in models_registry]}")
+            
+            for model_class in models_registry:
+                table_name = model_class().get_table_name()
+                expected_schema = model_class().get_schema()
+                
+                self.logger.info(f"Checking schema for table: {table_name}")
+                self.logger.info(f"Expected schema: {expected_schema}")
+                
+                # Get current table structure
+                current_columns = self._get_table_columns(table_name)
+                self.logger.info(f"Current columns: {current_columns}")
+                
+                if not current_columns:
+                    self.logger.warning(f"Table {table_name} does not exist or has no columns")
+                    continue
+                
+                # Compare schemas and detect changes
+                missing_columns = []
+                for column_name, column_def in expected_schema.items():
+                    if column_name not in current_columns:
+                        missing_columns.append((column_name, column_def))
+                        self.logger.info(f"Found missing column: {column_name} ({column_def})")
+                
+                self.logger.info(f"Missing columns for {table_name}: {missing_columns}")
+                
+                # Add missing columns
+                for column_name, column_def in missing_columns:
+                    if not self._add_column_to_table(table_name, column_name, column_def):
+                        return False
+                
+                if not missing_columns:
+                    self.logger.info(f"Table {table_name} schema is up to date")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Schema migration failed: {e}")
+            import traceback
+            self.logger.error(f"Schema migration traceback: {traceback.format_exc()}")
+            return False
+    
+    def _get_table_columns(self, table_name: str) -> dict:
+        """테이블의 현재 컬럼 구조 조회"""
+        try:
+            if self.db_type == "postgresql":
+                query = """
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns 
+                WHERE table_name = %s
+                ORDER BY ordinal_position
+                """
+                result = self.execute_query(query, (table_name,))
+                
+                if result:
+                    return {row['column_name']: row['data_type'] for row in result}
+                else:
+                    return {}
+                
+            else:  # SQLite
+                query = f"PRAGMA table_info({table_name})"
+                result = self.execute_query(query)
+                
+                if result:
+                    # SQLite PRAGMA returns: cid, name, type, notnull, dflt_value, pk
+                    return {row['name']: row['type'] for row in result}
+                else:
+                    return {}
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get table columns for {table_name}: {e}")
+            return {}
+    
+    def _add_column_to_table(self, table_name: str, column_name: str, column_def: str) -> bool:
+        """테이블에 컬럼 추가"""
+        try:
+            self.logger.info(f"Adding missing column {column_name} to table {table_name}")
+            
+            if self.db_type == "postgresql":
+                alter_query = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {column_def}"
+            else:  # SQLite
+                alter_query = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}"
+            
+            self.logger.info(f"Executing query: {alter_query}")
+            result = self.execute_query(alter_query)
+            
+            if result is not None:  # None means error, empty list means success
+                self.logger.info(f"Successfully added column {column_name} to {table_name}")
+                return True
+            else:
+                self.logger.error(f"Failed to add column {column_name} to {table_name}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Failed to add column {column_name} to {table_name}: {e}")
             return False
     
     def _migration_001_add_indexes(self) -> bool:

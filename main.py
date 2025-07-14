@@ -4,6 +4,7 @@ import uvicorn
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Dict
 from controller.nodeController import router as nodeRouter
 from controller.configController import router as configRouter
 from controller.workflowController import router as workflowRouter
@@ -46,6 +47,12 @@ async def lifespan(app: FastAPI):
         if app_db.initialize_database():
             app.state.app_db = app_db
             logger.info("Application database initialized successfully")
+            
+            # Run database migrations
+            if app_db.run_migrations():
+                logger.info("Database migrations completed successfully")
+            else:
+                logger.warning("Database migrations failed, but continuing startup")
         else:
             logger.error("Failed to initialize application database")
             app.state.app_db = None

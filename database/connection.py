@@ -204,3 +204,11 @@ class AppDatabaseManager:
         if self.config_db_manager.connection:
             self.config_db_manager.connection.close()
             self.logger.info("Application database connection closed")
+    
+    def run_migrations(self) -> bool:
+        """데이터베이스 스키마 마이그레이션 실행"""
+        try:
+            return self.config_db_manager.run_migrations(self._models_registry)
+        except Exception as e:
+            self.logger.error("Failed to run migrations: %s", e)
+            return False
