@@ -7,12 +7,14 @@ import json
 import logging
 from datetime import datetime
 from src.node_composer import get_node_registry, get_node_class_registry
+from src.workflow_executor import WorkflowExecutor
 
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/workflow", tags=["workflow"])
 
 class WorkflowData(BaseModel):
-    id: str
+    workflow_name: str
+    workflow_id: str
     view: Dict[str, Any]
     nodes: List[Dict[str, Any]]
     edges: List[Dict[str, Any]]
@@ -208,3 +210,25 @@ async def list_workflows_detail():
     except Exception as e:
         logger.error(f"Error listing workflow details: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
+
+@router.post("/execute", response_model=Dict[str, Any])
+async def execute_workflow(workflow: WorkflowData):
+    """
+    주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
+    """
+    
+    # print("DEBUG: 워크플로우 실행 요청\n", workflow)
+    
+    try:
+        workflow_data = workflow.dict()
+        executor = WorkflowExecutor(workflow_data)
+        final_outputs = executor.execute_workflow()
+        
+        return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
+
+    except ValueError as e:
+        logging.error(f"Workflow execution error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")

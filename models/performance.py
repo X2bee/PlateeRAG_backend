@@ -102,3 +102,40 @@ class SystemMetrics(BaseModel):
             'component': 'VARCHAR(50)',
             'details': 'TEXT'  # JSON string
         }
+
+class NodePerformance(BaseModel):
+    """개별 노드 성능 측정 데이터 모델"""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.workflow_name: str = kwargs.get('workflow_name', '')
+        self.workflow_id: str = kwargs.get('workflow_id', '')
+        self.node_id: str = kwargs.get('node_id', '')
+        self.node_name: str = kwargs.get('node_name', '')
+        self.timestamp: str = kwargs.get('timestamp', '')
+        self.processing_time_ms: float = kwargs.get('processing_time_ms', 0.0)
+        self.cpu_usage_percent: float = kwargs.get('cpu_usage_percent', 0.0)
+        self.ram_usage_mb: float = kwargs.get('ram_usage_mb', 0.0)
+        self.gpu_usage_percent: Optional[float] = kwargs.get('gpu_usage_percent')
+        self.gpu_memory_mb: Optional[float] = kwargs.get('gpu_memory_mb')
+        self.input_data: Optional[str] = kwargs.get('input_data')  # JSON string
+        self.output_data: Optional[str] = kwargs.get('output_data')  # JSON string
+    
+    def get_table_name(self) -> str:
+        return "node_performance"
+    
+    def get_schema(self) -> Dict[str, str]:
+        return {
+            'workflow_name': 'VARCHAR(200) NOT NULL',
+            'workflow_id': 'VARCHAR(100) NOT NULL',
+            'node_id': 'VARCHAR(100) NOT NULL',
+            'node_name': 'VARCHAR(200) NOT NULL',
+            'timestamp': 'TIMESTAMP NOT NULL',
+            'processing_time_ms': 'DECIMAL(10,2) NOT NULL',
+            'cpu_usage_percent': 'DECIMAL(8,2) DEFAULT 0.0',
+            'ram_usage_mb': 'DECIMAL(10,2) DEFAULT 0.0',
+            'gpu_usage_percent': 'DECIMAL(8,2)',
+            'gpu_memory_mb': 'DECIMAL(10,2)',
+            'input_data': 'TEXT',
+            'output_data': 'TEXT'
+        }

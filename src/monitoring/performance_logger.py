@@ -6,6 +6,8 @@ import threading
 from logging import getLogger, FileHandler, Formatter, INFO
 
 import psutil
+from models.performance import NodePerformance
+from database.connection import AppDatabaseManager
 
 try:
     import pynvml
@@ -37,10 +39,12 @@ class PerformanceLogger:
     MAX_LOG_ITEMS = 10      # 컬렉션(dict, list 등)의 최대 기록 항목 수
     MAX_LOG_STR_LEN = 150
 
-    def __init__(self, workflow_id: str, node_id: str, node_name: str):
+    def __init__(self, workflow_name: str, workflow_id: str, node_id: str, node_name: str, db_manager: AppDatabaseManager = None):
+        self.workflow_name = workflow_name
         self.workflow_id = workflow_id
         self.node_id = node_id
         self.node_name = node_name
+        self.db_manager = db_manager
         self._process = psutil.Process(os.getpid())
         self._start_time = None
         self._start_cpu_times = None
@@ -115,14 +119,15 @@ class PerformanceLogger:
     
     def log(self, input_data: dict, output_data: any):
         """
-        성능 정보를 최종적으로 계산하고 로그 파일에 기록합니다.
+        성능 정보를 최종적으로 계산하고 로그 파일과 데이터베이스에 기록합니다.
         """
         processing_time_ms = round((time.perf_counter() - self._start_time) * 1000, 2)
         
         system_usage = self._get_system_usage()
+        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
         log_entry = {
-            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "timestamp": timestamp,
             "workflow_id": self.workflow_id,
             "node_id": self.node_id,
             "node_name": self.node_name,
@@ -131,9 +136,58 @@ class PerformanceLogger:
             "processing_time_ms": processing_time_ms,
             **system_usage
         }
+        
+        # 파일 로그에 기록
         logger.info(json.dumps(log_entry, ensure_ascii=False))
         
-    def _summarize_data(self, data: any, max_len=100):
+        # 데이터베이스에 저장
+        if self.db_manager:
+            self._save_to_database(timestamp, processing_time_ms, system_usage, input_data, output_data)
+    
+    def _save_to_database(self, timestamp: str, processing_time_ms: float, system_usage: dict, input_data: dict, output_data: any):
+        """성능 데이터를 데이터베이스에 저장"""
+        try:
+            # 직접 SQL 삽입으로 시도
+            db_type = self.db_manager.config_db_manager.db_type
+            
+            if db_type == "postgresql":
+                query = """
+                INSERT INTO node_performance (
+                    workflow_name, workflow_id, node_id, node_name, timestamp,
+                    processing_time_ms, cpu_usage_percent, ram_usage_mb,
+                    gpu_usage_percent, gpu_memory_mb, input_data, output_data
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+            else:
+                query = """
+                INSERT INTO node_performance (
+                    workflow_name, workflow_id, node_id, node_name, timestamp,
+                    processing_time_ms, cpu_usage_percent, ram_usage_mb,
+                    gpu_usage_percent, gpu_memory_mb, input_data, output_data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+            
+            params = (
+                self.workflow_name,
+                self.workflow_id,
+                self.node_id,
+                self.node_name,
+                timestamp,
+                processing_time_ms,
+                system_usage.get('cpu_usage_percent', 0.0),
+                system_usage.get('ram_usage_mb', 0.0),
+                system_usage.get('gpu_usage_percent') if system_usage.get('gpu_usage_percent') != 'N/A' else None,
+                system_usage.get('gpu_memory_mb') if system_usage.get('gpu_memory_mb') != 'N/A' else None,
+                json.dumps(self._summarize_data(input_data), ensure_ascii=False),
+                json.dumps(self._summarize_data(output_data), ensure_ascii=False)
+            )
+            
+            self.db_manager.config_db_manager.execute_query(query, params)
+            
+        except Exception as e:
+            logger.error(f"Failed to save performance data to database: {e}")
+        
+    def _summarize_data(self, data: any):
         """데이터를 로깅에 적합하게 요약합니다."""
         if isinstance(data, (int, float, bool)) or data is None:
             return data

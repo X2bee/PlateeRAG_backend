@@ -9,7 +9,8 @@ logger = logging.getLogger('Workflow-Executor')
 
 class WorkflowExecutor:
     def __init__(self, workflow_data: Dict[str, Any]):
-        self.workflow_id = workflow_data['id']
+        self.workflow_id = workflow_data['workflow_id']
+        self.workflow_name = workflow_data['workflow_name']
         self.nodes = {node['id']: node for node in workflow_data['nodes']}
         self.edges = workflow_data['edges']
         self.graph: Dict[str, List[str]] = {node_id: [] for node_id in self.nodes}
@@ -96,7 +97,8 @@ class WorkflowExecutor:
             try:
                 # PerformanceLogger 컨텍스트 시작
                 with PerformanceLogger(
-                    workflow_id=self.workflow_id, 
+                    workflow_name=self.workflow_name,
+                    workflow_id=self.workflow_id,
                     node_id=node_id,
                     node_name=node_name_for_logging
                 ) as perf_logger:

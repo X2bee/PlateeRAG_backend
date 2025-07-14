@@ -8,6 +8,7 @@ from controller.nodeController import router as nodeRouter
 from controller.configController import router as configRouter
 from controller.workflowController import router as workflowRouter
 from controller.nodeStateController import router as nodeStateRouter
+from controller.performanceRouter import router as performanceRouter
 from src.node_composer import run_discovery, generate_json_spec, get_node_registry
 from config.config_composer import config_composer
 from database import AppDatabaseManager
@@ -113,6 +114,7 @@ app.include_router(nodeRouter)
 app.include_router(configRouter)
 app.include_router(workflowRouter)
 app.include_router(nodeStateRouter)
+app.include_router(performanceRouter)
 
 @app.get("/app/status")
 async def get_app_status():
