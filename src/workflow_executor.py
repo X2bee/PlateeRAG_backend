@@ -8,9 +8,10 @@ from src.monitoring.performance_logger import PerformanceLogger
 logger = logging.getLogger('Workflow-Executor')
 
 class WorkflowExecutor:
-    def __init__(self, workflow_data: Dict[str, Any]):
+    def __init__(self, workflow_data: Dict[str, Any], db_manager=None):
         self.workflow_id = workflow_data['workflow_id']
         self.workflow_name = workflow_data['workflow_name']
+        self.db_manager = db_manager
         self.nodes = {node['id']: node for node in workflow_data['nodes']}
         self.edges = workflow_data['edges']
         self.graph: Dict[str, List[str]] = {node_id: [] for node_id in self.nodes}
@@ -100,7 +101,8 @@ class WorkflowExecutor:
                     workflow_name=self.workflow_name,
                     workflow_id=self.workflow_id,
                     node_id=node_id,
-                    node_name=node_name_for_logging
+                    node_name=node_name_for_logging,
+                    db_manager=self.db_manager
                 ) as perf_logger:
                     
                     result = instance.execute(**kwargs)

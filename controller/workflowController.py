@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -212,7 +212,7 @@ async def list_workflows_detail():
         raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
 
 @router.post("/execute", response_model=Dict[str, Any])
-async def execute_workflow(workflow: WorkflowData):
+async def execute_workflow(request: Request, workflow: WorkflowData):
     """
     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
     """
@@ -221,7 +221,13 @@ async def execute_workflow(workflow: WorkflowData):
     
     try:
         workflow_data = workflow.dict()
-        executor = WorkflowExecutor(workflow_data)
+        
+        # 데이터베이스 매니저 가져오기
+        db_manager = None
+        if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
+            db_manager = request.app.state.app_db
+        
+        executor = WorkflowExecutor(workflow_data, db_manager)
         final_outputs = executor.execute_workflow()
         
         return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}

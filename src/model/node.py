@@ -66,6 +66,7 @@ FUNCTION_LABEL_MAP = {
     'tools': 'Tool',
     'arithmetic':'Arithmetic',
     'endnode': 'End Node',
+    'startnode': 'Start Node',
 }
 
 def validate_parameter(param: Parameter) -> tuple[bool, str]:
