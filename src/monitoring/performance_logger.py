@@ -39,11 +39,12 @@ class PerformanceLogger:
     MAX_LOG_ITEMS = 10      # 컬렉션(dict, list 등)의 최대 기록 항목 수
     MAX_LOG_STR_LEN = 150
 
-    def __init__(self, workflow_name: str, workflow_id: str, node_id: str, node_name: str, db_manager: AppDatabaseManager = None):
+    def __init__(self, workflow_name: str, workflow_id: str, node_id: str, node_name: str, user_id: str = None, db_manager: AppDatabaseManager = None):
         self.workflow_name = workflow_name
         self.workflow_id = workflow_id
         self.node_id = node_id
         self.node_name = node_name
+        self.user_id = user_id
         self.db_manager = db_manager
         self._process = psutil.Process(os.getpid())
         self._start_time = None
@@ -131,6 +132,7 @@ class PerformanceLogger:
             "workflow_id": self.workflow_id,
             "node_id": self.node_id,
             "node_name": self.node_name,
+            "user_id": self.user_id,
             "input": self._summarize_data(input_data),
             "output": self._summarize_data(output_data),
             "processing_time_ms": processing_time_ms,
@@ -153,18 +155,18 @@ class PerformanceLogger:
             if db_type == "postgresql":
                 query = """
                 INSERT INTO node_performance (
-                    workflow_name, workflow_id, node_id, node_name, timestamp,
+                    workflow_name, workflow_id, node_id, node_name, user_id, timestamp,
                     processing_time_ms, cpu_usage_percent, ram_usage_mb,
                     gpu_usage_percent, gpu_memory_mb, input_data, output_data
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
             else:
                 query = """
                 INSERT INTO node_performance (
-                    workflow_name, workflow_id, node_id, node_name, timestamp,
+                    workflow_name, workflow_id, node_id, node_name, user_id, timestamp,
                     processing_time_ms, cpu_usage_percent, ram_usage_mb,
                     gpu_usage_percent, gpu_memory_mb, input_data, output_data
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
             
             params = (
@@ -172,6 +174,7 @@ class PerformanceLogger:
                 self.workflow_id,
                 self.node_id,
                 self.node_name,
+                self.user_id,
                 timestamp,
                 processing_time_ms,
                 system_usage.get('cpu_usage_percent', 0.0),
