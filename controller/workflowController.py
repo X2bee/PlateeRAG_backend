@@ -12,6 +12,11 @@ from src.workflow_executor import WorkflowExecutor
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/workflow", tags=["workflow"])
 
+class WorkflowRequest(BaseModel):
+    workflow_name: str
+    workflow_id: str
+    input_data: str = ""
+
 class WorkflowData(BaseModel):
     workflow_name: str
     workflow_id: str
@@ -57,13 +62,13 @@ async def save_workflow(request: SaveWorkflowRequest):
     """
     try:
         downloads_path = os.path.join(os.getcwd(), "downloads")
-        
-        # downloads 폴더가 존재하지 않으면 생성
         if not os.path.exists(downloads_path):
             os.makedirs(downloads_path)
         
-        # 파일명 생성 (workflow_id + .json)
-        filename = f"{request.workflow_id}.json"
+        if not request.workflow_id.endswith('.json'):
+            filename = f"{request.workflow_id}.json"
+        else:
+            filename = request.workflow_id
         file_path = os.path.join(downloads_path, filename)
         
         # workflow content를 JSON 파일로 저장
@@ -238,6 +243,61 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    
+@router.post("/execute/based_id", response_model=Dict[str, Any])
+async def execute_workflow_with_id(request: Request, request_body: WorkflowRequest):
+    """
+    주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
+    """
+
+    try:
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        if not request_body.workflow_name.endswith('.json'):
+            filename = f"{request_body.workflow_name}.json"
+        else:
+            filename = request_body.workflow_name
+        file_path = os.path.join(downloads_path, filename)
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            workflow_data = json.load(f)
+            
+        if workflow_data.get('workflow_id') != request_body.workflow_id:
+            raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {request_body.workflow_id}")
+
+        if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
+            raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
+        
+        print("--- 워크플로우 실행 시작 ---")
+        print(f"실행 워크플로우: {request_body.workflow_name} ({request_body.workflow_id})")
+        print(f"입력 데이터: {request_body.input_data}")
+        
+        print(f"워크플로우 데이터: {workflow_data}")
+
+        if request_body.input_data is not None:
+            for node in workflow_data.get('nodes', []):
+                if node.get('data', {}).get('functionId') == 'startnode':
+                    parameters = node.get('data', {}).get('parameters', [])
+                    if parameters and isinstance(parameters, list):
+                        parameters[0]['value'] = request_body.input_data
+                        break
+        
+        print(f"워크플로우 데이터: {workflow_data}")
+        # 데이터베이스 매니저 가져오기
+        db_manager = None
+        if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
+            db_manager = request.app.state.app_db
+
+        executor = WorkflowExecutor(workflow_data, db_manager)
+        final_outputs = executor.execute_workflow()
+
+        return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
+
+    except ValueError as e:
+        logging.error(f"Workflow execution error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/performance")
 async def get_workflow_performance(request: Request, workflow_name: str, workflow_id: str):
@@ -390,7 +450,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
             updated_at
         FROM execution_io 
         WHERE workflow_name = %s AND workflow_id = %s
-        ORDER BY updated_at DESC
+        ORDER BY updated_at
         """
         
         # SQLite인 경우 파라미터 플레이스홀더 변경
