@@ -11,7 +11,6 @@ from datetime import datetime
 import glob
 from pathlib import Path
 
-# from src.workflow_executor import WorkflowExecutor
 from src.node_composer import (
     run_discovery,
     generate_json_spec,
@@ -24,12 +23,6 @@ router = APIRouter(
     tags=["node"],
     responses={404: {"description": "Not found"}},
 )
-
-# class Workflow(BaseModel):
-#     id: str
-#     nodes: List[Dict[str, Any]]
-#     edges: List[Dict[str, Any]]
-#     view: Dict[str, Any]
 
 def get_node_list():
     try:
@@ -77,28 +70,6 @@ async def export_nodes():
     except Exception as e:
         logging.error(f"Error listing nodes: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
-# @router.post("/execute", response_model=Dict[str, Any])
-# async def execute_workflow(workflow: Workflow):
-#     """
-#     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
-#     """
-    
-#     # print("DEBUG: 워크플로우 실행 요청\n", workflow)
-    
-#     try:
-#         workflow_data = workflow.dict()
-#         executor = WorkflowExecutor(workflow_data)
-#         final_outputs = executor.execute_workflow()
-        
-#         return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
-
-#     except ValueError as e:
-#         logging.error(f"Workflow execution error: {e}")
-#         raise HTTPException(status_code=400, detail=str(e))
-#     except Exception as e:
-#         logging.error(f"An unexpected error occurred: {e}")
-#         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/registry", response_model=Dict[str, Any])
 async def get_node_registry_info():

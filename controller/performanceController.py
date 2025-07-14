@@ -1,8 +1,9 @@
 """
-성능 데이터 관련 컨트롤러
+성능 데이터 관련 컨트롤러 및 라우터
 """
 import json
 from typing import List, Dict, Optional, Any
+from fastapi import APIRouter, HTTPException, Request
 from database.connection import AppDatabaseManager
 from models.performance import NodePerformance
 
@@ -215,3 +216,87 @@ class PerformanceController:
         except Exception as e:
             print(f"Error deleting old performance data: {e}")
             return False
+
+# FastAPI Router 설정
+router = APIRouter(prefix="/api/performance", tags=["performance"])
+
+def get_performance_controller(request: Request):
+    """성능 컨트롤러 의존성 주입"""
+    if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
+        return PerformanceController(request.app.state.app_db)
+    else:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+@router.get("/data")
+async def get_performance_data(
+    request: Request,
+    workflow_name: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+    node_id: Optional[str] = None,
+    limit: int = 100
+) -> Dict[str, Any]:
+    """성능 데이터를 조회합니다."""
+    try:
+        controller = get_performance_controller(request)
+        data = controller.get_performance_data(workflow_name, workflow_id, node_id, limit)
+        
+        return {
+            "success": True,
+            "data": data,
+            "count": len(data)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch performance data: {str(e)}") from e
+
+@router.get("/average/{workflow_name}/{workflow_id}")
+async def get_performance_average(
+    request: Request,
+    workflow_name: str,
+    workflow_id: str
+) -> Dict[str, Any]:
+    """동일한 workflow_name과 workflow_id를 가진 성능 데이터들의 평균을 계산합니다."""
+    try:
+        controller = get_performance_controller(request)
+        average_data = controller.get_performance_average(workflow_name, workflow_id)
+        
+        return {
+            "success": True,
+            "data": average_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to calculate performance average: {str(e)}") from e
+
+@router.get("/summary/{workflow_name}/{workflow_id}")
+async def get_node_performance_summary(
+    request: Request,
+    workflow_name: str,
+    workflow_id: str
+) -> Dict[str, Any]:
+    """워크플로우 내 각 노드별 성능 요약을 제공합니다."""
+    try:
+        controller = get_performance_controller(request)
+        summary_data = controller.get_node_performance_summary(workflow_name, workflow_id)
+        
+        return {
+            "success": True,
+            "data": summary_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get node performance summary: {str(e)}") from e
+
+@router.delete("/cleanup")
+async def cleanup_old_performance_data(
+    request: Request,
+    days_to_keep: int = 30
+) -> Dict[str, Any]:
+    """지정된 일수보다 오래된 성능 데이터를 삭제합니다."""
+    try:
+        controller = get_performance_controller(request)
+        success = controller.delete_old_performance_data(days_to_keep)
+        
+        return {
+            "success": success,
+            "message": f"Old performance data cleanup {'completed' if success else 'failed'}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cleanup old performance data: {str(e)}") from e

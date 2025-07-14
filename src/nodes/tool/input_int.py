@@ -2,7 +2,7 @@ from src.node_composer import Node
 
 class InputIntegersNode(Node):
     categoryId = "utilities"
-    functionId = "tools"
+    functionId = "startnode"
     nodeId = "math/input_int"
     nodeName = "Input Integer"
     description = "사용자가 설정한 정수 값을 출력하는 입력 노드입니다. 워크플로우에서 숫자 데이터의 시작점으로 사용됩니다."
