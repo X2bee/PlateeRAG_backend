@@ -359,3 +359,78 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
     except Exception as e:
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
+    
+
+@router.get("/io_logs")
+async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str):
+    """
+    특정 워크플로우의 ExecutionIO 로그를 반환합니다.
+    
+    Args:
+        workflow_name: 워크플로우 이름
+        workflow_id: 워크플로우 ID
+        
+    Returns:
+        ExecutionIO 로그 리스트
+    """
+    try:
+        # 데이터베이스 매니저 가져오기
+        if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
+            raise HTTPException(status_code=500, detail="Database connection not available")
+        
+        db_manager = request.app.state.app_db
+        
+        # SQL 쿼리 작성
+        query = """
+        SELECT
+            workflow_name,
+            workflow_id,
+            input_data,
+            output_data,
+            updated_at
+        FROM execution_io 
+        WHERE workflow_name = %s AND workflow_id = %s
+        ORDER BY updated_at DESC
+        """
+        
+        # SQLite인 경우 파라미터 플레이스홀더 변경
+        if db_manager.config_db_manager.db_type == "sqlite":
+            query = query.replace("%s", "?")
+        
+        # 쿼리 실행
+        result = db_manager.config_db_manager.execute_query(query, (workflow_name, workflow_id))
+        
+        if not result:
+            logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "in_out_logs": [],
+                "message": "No in_out_logs data found for this workflow"
+            })
+        
+        performance_stats = []
+        for idx, row in enumerate(result):
+            log_entry = {
+                "log_id": idx + 1,
+                "workflow_name": row['workflow_name'],
+                "workflow_id": row['workflow_id'],
+                "input_data": json.loads(row['input_data']).get('result', None) if row['input_data'] else None,
+                "output_data": json.loads(row['output_data']).get('result', None) if row['output_data'] else None,
+                "updated_at": row['updated_at'].isoformat() if isinstance(row['updated_at'], datetime) else row['updated_at']
+            }
+            performance_stats.append(log_entry)
+        
+        response_data = {
+            "workflow_name": workflow_name,
+            "workflow_id": workflow_id,
+            "in_out_logs": performance_stats,
+            "message": "In/Out logs retrieved successfully"
+        }
+        
+        logger.info(f"Performance stats retrieved for workflow: {workflow_name} ({workflow_id})")
+        return JSONResponse(content=response_data)
+        
+    except Exception as e:
+        logger.error(f"Error retrieving workflow performance: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
