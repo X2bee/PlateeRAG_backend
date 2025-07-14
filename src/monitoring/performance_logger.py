@@ -1,12 +1,9 @@
-import os 
+import os
 import json
 import time
 import datetime
-import threading
-from logging import getLogger, FileHandler, Formatter, INFO
 
 import psutil
-from models.performance import NodePerformance
 from database.connection import AppDatabaseManager
 
 try:
@@ -14,19 +11,6 @@ try:
     PYNVML_AVAILABLE = True
 except ImportError:
     PYNVML_AVAILABLE = False
-
-logger = getLogger('performance')
-logger.setLevel(INFO)
-
-log_dir = os.path.join(os.getcwd(), "logs")
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-
-if not logger.handlers:
-    handler = FileHandler(os.path.join(log_dir, 'performance.log'), encoding='utf-8')
-    formatter = Formatter('%(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
 
 class PerformanceLogger:
     """
@@ -70,7 +54,6 @@ class PerformanceLogger:
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """컨텍스트 종료: 로깅은 log 메소드를 통해 명시적으로 호출"""
         """컨텍스트 종료: GPU 리소스 정리"""
         if PYNVML_AVAILABLE and self._gpu_handles:
             try:
@@ -120,28 +103,13 @@ class PerformanceLogger:
     
     def log(self, input_data: dict, output_data: any):
         """
-        성능 정보를 최종적으로 계산하고 로그 파일과 데이터베이스에 기록합니다.
+        성능 정보를 최종적으로 계산하고 데이터베이스에 기록합니다.
         """
         processing_time_ms = round((time.perf_counter() - self._start_time) * 1000, 2)
         
         system_usage = self._get_system_usage()
         timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
-        log_entry = {
-            "timestamp": timestamp,
-            "workflow_id": self.workflow_id,
-            "node_id": self.node_id,
-            "node_name": self.node_name,
-            "user_id": self.user_id,
-            "input": self._summarize_data(input_data),
-            "output": self._summarize_data(output_data),
-            "processing_time_ms": processing_time_ms,
-            **system_usage
-        }
-        
-        # 파일 로그에 기록
-        logger.info(json.dumps(log_entry, ensure_ascii=False))
-        
         # 데이터베이스에 저장
         if self.db_manager:
             self._save_to_database(timestamp, processing_time_ms, system_usage, input_data, output_data)
@@ -188,7 +156,8 @@ class PerformanceLogger:
             self.db_manager.config_db_manager.execute_query(query, params)
             
         except Exception as e:
-            logger.error(f"Failed to save performance data to database: {e}")
+            # 데이터베이스 저장 실패는 조용히 처리 (성능 로깅 실패로 애플리케이션을 중단시키지 않음)
+            pass
         
     def _summarize_data(self, data: any):
         """데이터를 로깅에 적합하게 요약합니다."""
