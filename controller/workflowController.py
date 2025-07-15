@@ -177,12 +177,21 @@ async def list_workflows_detail():
                 nodes = workflow_data.get('nodes', [])
                 node_count = len(nodes) if isinstance(nodes, list) else 0
                 
+                has_startnode = any(
+                    node.get('data', {}).get('functionId') == 'startnode' for node in nodes
+                )
+                has_endnode = any(
+                    node.get('data', {}).get('functionId') == 'endnode' for node in nodes
+                )
+                
                 # 상세 정보 추가
                 workflow_detail = {
                     "filename": file,
                     "workflow_id": workflow_id,
                     "node_count": node_count,
-                    "last_modified": last_modified
+                    "last_modified": last_modified,
+                    "has_startnode": has_startnode,
+                    "has_endnode": has_endnode,
                 }
                 
                 workflow_details.append(workflow_detail)
