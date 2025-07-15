@@ -1,0 +1,8 @@
+services:
+  backend:
+    build: .
+    ports:
+      - "${SERVER_PORT}:${SERVER_PORT}"
+    env_file:
+      - .env
+    command: "./.venv/bin/uvicorn main:app --host ${SERVER_HOST} --port ${SERVER_PORT} --reload"
