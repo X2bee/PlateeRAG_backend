@@ -131,6 +131,8 @@ packaging @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_
 pandas==2.2.3
 pandocfilters==1.5.1
 parso==0.8.4
+pdfminer.six==20250506
+pdfplumber==0.11.7
 pexpect==4.9.0
 pillow==11.1.0
 platformdirs @ file:///Users/builder/cbouss/perseverance-python-buildout/croot/platformdirs_1701803010714/work
@@ -154,6 +156,7 @@ pydantic_core==2.33.2
 Pygments @ file:///Users/builder/cbouss/perseverance-python-buildout/croot/pygments_1699238063295/work
 pyparsing==3.2.1
 PyPDF2==3.0.1
+pypdfium2==4.30.1
 PySocks @ file:///Users/builder/cbouss/perseverance-python-buildout/croot/pysocks_1699237568675/work
 python-dateutil==2.9.0.post0
 python-docx==1.2.0
