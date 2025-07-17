@@ -65,6 +65,7 @@ class ChatOpenAINode(Node):
         }
     ]
 
+
     def execute(self, text: str, model: str, temperature: float = 0.7, max_tokens: int = 1000) -> str:
         llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens)
         result = llm.invoke(text)

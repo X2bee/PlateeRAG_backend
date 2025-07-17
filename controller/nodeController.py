@@ -19,7 +19,7 @@ from src.node_composer import (
 )
 
 router = APIRouter(
-    prefix="/node",
+    prefix="/api/node",
     tags=["node"],
     responses={404: {"description": "Not found"}},
 )

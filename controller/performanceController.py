@@ -2,11 +2,15 @@
 성능 데이터 관련 컨트롤러 및 라우터
 """
 import json
+import logging
 from typing import List, Dict, Optional, Any
 from fastapi import APIRouter, HTTPException, Request, Query
 from database.connection import AppDatabaseManager
 from models.performance import NodePerformance
 from collections import defaultdict
+
+logger = logging.getLogger("workflow-controller")
+router = APIRouter(prefix="/api/performance", tags=["performance"])
 
 def safe_float(value: Any) -> float:
     """Decimal, None 등을 안전하게 float으로 변환합니다."""
@@ -378,8 +382,7 @@ class PerformanceController:
             print(f"Error deleting old performance data: {e}")
             return False
 
-# FastAPI Router 설정
-router = APIRouter(prefix="/api/performance", tags=["performance"])
+
 
 def get_performance_controller(request: Request):
     """성능 컨트롤러 의존성 주입"""

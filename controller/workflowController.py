@@ -6,16 +6,17 @@ import os
 import json
 import logging
 from datetime import datetime
-from src.node_composer import get_node_registry, get_node_class_registry
 from src.workflow_executor import WorkflowExecutor
+from models.executor import ExecutionMeta
 
 logger = logging.getLogger("workflow-controller")
-router = APIRouter(prefix="/workflow", tags=["workflow"])
+router = APIRouter(prefix="/api/workflow", tags=["workflow"])
 
 class WorkflowRequest(BaseModel):
     workflow_name: str
     workflow_id: str
     input_data: str = ""
+    interaction_id: str = "default"
 
 class WorkflowData(BaseModel):
     workflow_name: str
@@ -23,6 +24,7 @@ class WorkflowData(BaseModel):
     view: Dict[str, Any]
     nodes: List[Dict[str, Any]]
     edges: List[Dict[str, Any]]
+    interaction_id: str = "default"
 
 class SaveWorkflowRequest(BaseModel):
     workflow_id: str
@@ -241,7 +243,7 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
         if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
             db_manager = request.app.state.app_db
         
-        executor = WorkflowExecutor(workflow_data, db_manager)
+        executor = WorkflowExecutor(workflow_data, db_manager, workflow.interaction_id)
         final_outputs = executor.execute_workflow()
         
         return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
@@ -296,10 +298,35 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
             db_manager = request.app.state.app_db
 
-        executor = WorkflowExecutor(workflow_data, db_manager)
+        # interaction_id가 default가 아닌 경우 ExecutionMeta 관리
+        execution_meta = None
+        if request_body.interaction_id != "default" and db_manager:
+            execution_meta = await _get_or_create_execution_meta(
+                db_manager, 
+                request_body.interaction_id, 
+                request_body.workflow_id, 
+                request_body.workflow_name
+            )
+
+        executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)
         final_outputs = executor.execute_workflow()
 
-        return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
+        # interaction_id가 default가 아닌 경우 interaction_count 증가
+        if execution_meta:
+            await _update_execution_meta_count(db_manager, execution_meta)
+
+        response_data = {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
+        
+        # ExecutionMeta 정보가 있으면 응답에 포함
+        if execution_meta:
+            response_data["execution_meta"] = {
+                "interaction_id": execution_meta.interaction_id,
+                "interaction_count": execution_meta.interaction_count + 1,
+                "workflow_id": execution_meta.workflow_id,
+                "workflow_name": execution_meta.workflow_name
+            }
+
+        return response_data
 
     except ValueError as e:
         logging.error(f"Workflow execution error: {e}")
@@ -428,16 +455,93 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
     except Exception as e:
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
+
+@router.delete("/performance")
+async def delete_workflow_performance(request: Request, workflow_name: str, workflow_id: str):
+    """
+    특정 워크플로우의 성능 데이터를 삭제합니다.
     
+    Args:
+        workflow_name: 워크플로우 이름
+        workflow_id: 워크플로우 ID
+        
+    Returns:
+        삭제된 성능 데이터 개수와 성공 메시지
+    """
+    try:
+        # 데이터베이스 매니저 가져오기
+        if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
+            raise HTTPException(status_code=500, detail="Database connection not available")
+        
+        db_manager = request.app.state.app_db
+        
+        # 먼저 삭제할 performance 데이터 개수 확인
+        count_query = """
+        SELECT COUNT(*) as count
+        FROM node_performance 
+        WHERE workflow_name = %s AND workflow_id = %s
+        """
+        
+        # SQLite인 경우 파라미터 플레이스홀더 변경
+        if db_manager.config_db_manager.db_type == "sqlite":
+            count_query = count_query.replace("%s", "?")
+        
+        # 삭제할 성능 데이터 개수 조회
+        count_result = db_manager.config_db_manager.execute_query(
+            count_query, 
+            (workflow_name, workflow_id)
+        )
+        
+        delete_count = count_result[0]['count'] if count_result else 0
+        
+        if delete_count == 0:
+            logger.info(f"No performance data found to delete for workflow: {workflow_name} ({workflow_id})")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "deleted_count": 0,
+                "message": "No performance data found to delete"
+            })
+        
+        # 삭제 쿼리 실행
+        delete_query = """
+        DELETE FROM node_performance 
+        WHERE workflow_name = %s AND workflow_id = %s
+        """
+        
+        # SQLite인 경우 파라미터 플레이스홀더 변경
+        if db_manager.config_db_manager.db_type == "sqlite":
+            delete_query = delete_query.replace("%s", "?")
+        
+        # 삭제 실행
+        db_manager.config_db_manager.execute_query(
+            delete_query, 
+            (workflow_name, workflow_id)
+        )
+        
+        response_data = {
+            "workflow_name": workflow_name,
+            "workflow_id": workflow_id,
+            "deleted_count": delete_count,
+            "message": f"Successfully deleted {delete_count} performance records"
+        }
+        
+        logger.info(f"Deleted {delete_count} performance records for workflow: {workflow_name} ({workflow_id})")
+        return JSONResponse(content=response_data)
+        
+    except Exception as e:
+        logger.error(f"Error deleting performance data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete performance data: {str(e)}")
 
 @router.get("/io_logs")
-async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str):
+async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = 'default'):
     """
     특정 워크플로우의 ExecutionIO 로그를 반환합니다.
     
     Args:
         workflow_name: 워크플로우 이름
         workflow_id: 워크플로우 ID
+        interaction_id: 상호작용 ID (선택적, 제공되지 않으면 default만 반환)
         
     Returns:
         ExecutionIO 로그 리스트
@@ -449,25 +553,42 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
         
         db_manager = request.app.state.app_db
         
-        # SQL 쿼리 작성
-        query = """
-        SELECT
-            workflow_name,
-            workflow_id,
-            input_data,
-            output_data,
-            updated_at
-        FROM execution_io 
-        WHERE workflow_name = %s AND workflow_id = %s
-        ORDER BY updated_at
-        """
+        # SQL 쿼리 작성 - interaction_id 조건 추가
+        if interaction_id:
+            query = """
+            SELECT
+                interaction_id,
+                workflow_name,
+                workflow_id,
+                input_data,
+                output_data,
+                updated_at
+            FROM execution_io 
+            WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
+            ORDER BY updated_at
+            """
+            query_params = (workflow_name, workflow_id, interaction_id)
+        else:
+            query = """
+            SELECT
+                interaction_id,
+                workflow_name,
+                workflow_id,
+                input_data,
+                output_data,
+                updated_at
+            FROM execution_io 
+            WHERE workflow_name = %s AND workflow_id = %s
+            ORDER BY updated_at
+            """
+            query_params = (workflow_name, workflow_id)
         
         # SQLite인 경우 파라미터 플레이스홀더 변경
         if db_manager.config_db_manager.db_type == "sqlite":
             query = query.replace("%s", "?")
         
         # 쿼리 실행
-        result = db_manager.config_db_manager.execute_query(query, (workflow_name, workflow_id))
+        result = db_manager.config_db_manager.execute_query(query, query_params)
         
         if not result:
             logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
@@ -482,6 +603,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
         for idx, row in enumerate(result):
             log_entry = {
                 "log_id": idx + 1,
+                "interaction_id": row['interaction_id'],
                 "workflow_name": row['workflow_name'],
                 "workflow_id": row['workflow_id'],
                 "input_data": json.loads(row['input_data']).get('result', None) if row['input_data'] else None,
@@ -503,3 +625,176 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
     except Exception as e:
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
+    
+
+@router.delete("/io_logs")
+async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = "default"):
+    """
+    특정 워크플로우의 ExecutionIO 로그를 삭제합니다.
+    
+    Args:
+        workflow_name: 워크플로우 이름
+        workflow_id: 워크플로우 ID
+        interaction_id: 상호작용 ID (기본값: "default")
+        
+    Returns:
+        삭제된 로그 개수와 성공 메시지
+    """
+    try:
+        # 데이터베이스 매니저 가져오기
+        if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
+            raise HTTPException(status_code=500, detail="Database connection not available")
+        
+        db_manager = request.app.state.app_db
+        
+        # 먼저 삭제할 로그 개수 확인
+        count_query = """
+        SELECT COUNT(*) as count
+        FROM execution_io 
+        WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
+        """
+        
+        # SQLite인 경우 파라미터 플레이스홀더 변경
+        if db_manager.config_db_manager.db_type == "sqlite":
+            count_query = count_query.replace("%s", "?")
+        
+        # 삭제할 로그 개수 조회
+        count_result = db_manager.config_db_manager.execute_query(
+            count_query, 
+            (workflow_name, workflow_id, interaction_id)
+        )
+        
+        delete_count = count_result[0]['count'] if count_result else 0
+        
+        if delete_count == 0:
+            logger.info(f"No logs found to delete for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "interaction_id": interaction_id,
+                "deleted_count": 0,
+                "message": "No logs found to delete"
+            })
+        
+        # 삭제 쿼리 실행
+        delete_query = """
+        DELETE FROM execution_io 
+        WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
+        """
+        
+        # SQLite인 경우 파라미터 플레이스홀더 변경
+        if db_manager.config_db_manager.db_type == "sqlite":
+            delete_query = delete_query.replace("%s", "?")
+        
+        # 삭제 실행
+        db_manager.config_db_manager.execute_query(
+            delete_query, 
+            (workflow_name, workflow_id, interaction_id)
+        )
+        
+        response_data = {
+            "workflow_name": workflow_name,
+            "workflow_id": workflow_id,
+            "interaction_id": interaction_id,
+            "deleted_count": delete_count,
+            "message": f"Successfully deleted {delete_count} execution logs"
+        }
+        
+        logger.info(f"Deleted {delete_count} execution logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
+        return JSONResponse(content=response_data)
+        
+    except Exception as e:
+        logger.error(f"Error deleting execution logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete execution logs: {str(e)}")
+
+async def _get_or_create_execution_meta(db_manager, interaction_id: str, workflow_id: str, workflow_name: str) -> ExecutionMeta:
+    """ExecutionMeta를 조회하거나 새로 생성합니다."""
+    try:
+        # 기존 ExecutionMeta 조회
+        query = """
+        SELECT * FROM execution_meta 
+        WHERE interaction_id = %s AND workflow_id = %s
+        """
+        
+        # SQLite인 경우 파라미터 플레이스홀더 변경
+        if db_manager.config_db_manager.db_type == "sqlite":
+            query = query.replace("%s", "?")
+        
+        result = db_manager.config_db_manager.execute_query(query, (interaction_id, workflow_id))
+        
+        if result and len(result) > 0:
+            # 기존 데이터가 있으면 반환
+            row = result[0]
+            execution_meta = ExecutionMeta(
+                id=row.get('id'),
+                interaction_id=row['interaction_id'],
+                workflow_id=row['workflow_id'],
+                workflow_name=row['workflow_name'],
+                interaction_count=row['interaction_count'],
+                metadata=json.loads(row['metadata']) if row.get('metadata') else {}
+            )
+            logger.info(f"Found existing ExecutionMeta for interaction_id: {interaction_id}, workflow_id: {workflow_id}")
+            return execution_meta
+        else:
+            # 새로 생성
+            execution_meta = ExecutionMeta(
+                interaction_id=interaction_id,
+                workflow_id=workflow_id,
+                workflow_name=workflow_name,
+                interaction_count=0,
+                metadata={}
+            )
+            
+            # DB에 저장
+            insert_query = """
+            INSERT INTO execution_meta (interaction_id, workflow_id, workflow_name, interaction_count, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            """
+            
+            if db_manager.config_db_manager.db_type == "sqlite":
+                insert_query = insert_query.replace("%s", "?")
+            
+            metadata_json = json.dumps(execution_meta.metadata, ensure_ascii=False)
+            db_manager.config_db_manager.execute_query(
+                insert_query, 
+                (interaction_id, workflow_id, workflow_name, 0, metadata_json)
+            )
+            
+            logger.info(f"Created new ExecutionMeta for interaction_id: {interaction_id}, workflow_id: {workflow_id}")
+            return execution_meta
+            
+    except Exception as e:
+        logger.error(f"Error handling ExecutionMeta: {str(e)}")
+        # 실패해도 기본값으로 계속 진행
+        return ExecutionMeta(
+            interaction_id=interaction_id,
+            workflow_id=workflow_id,
+            workflow_name=workflow_name,
+            interaction_count=0,
+            metadata={}
+        )
+
+
+async def _update_execution_meta_count(db_manager, execution_meta: ExecutionMeta):
+    """ExecutionMeta의 interaction_count를 1 증가시킵니다."""
+    try:
+        update_query = """
+        UPDATE execution_meta 
+        SET interaction_count = interaction_count + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE interaction_id = %s AND workflow_id = %s
+        """
+        
+        if db_manager.config_db_manager.db_type == "sqlite":
+            update_query = update_query.replace("%s", "?")
+        
+        db_manager.config_db_manager.execute_query(
+            update_query, 
+            (execution_meta.interaction_id, execution_meta.workflow_id)
+        )
+        
+        logger.info(f"Updated interaction_count for interaction_id: {execution_meta.interaction_id}, workflow_id: {execution_meta.workflow_id}")
+        
+    except Exception as e:
+        logger.error(f"Error updating ExecutionMeta count: {str(e)}")
+        # 카운트 업데이트 실패해도 전체 실행은 계속 진행
+

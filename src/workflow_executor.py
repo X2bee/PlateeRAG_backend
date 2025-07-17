@@ -8,9 +8,10 @@ from src.monitoring.performance_logger import PerformanceLogger
 logger = logging.getLogger('Workflow-Executor')
 
 class WorkflowExecutor:
-    def __init__(self, workflow_data: Dict[str, Any], db_manager=None):
+    def __init__(self, workflow_data: Dict[str, Any], db_manager=None, interaction_id: Optional[str] = None):
         self.workflow_id: str = workflow_data['workflow_id']
         self.workflow_name: str = workflow_data['workflow_name']
+        self.interaction_id: str = interaction_id or 'default'
         self.db_manager = db_manager
         self.nodes: Dict[str, Dict[str, Any]] = {node['id']: node for node in workflow_data['nodes']}
         self.edges: List[Dict[str, Any]] = workflow_data['edges']
@@ -190,18 +191,18 @@ class WorkflowExecutor:
             db_type = self.db_manager.config_db_manager.db_type
             if db_type == "postgresql":
                 query = """
-                    INSERT INTO execution_io (workflow_id, workflow_name, input_data, output_data, created_at)
-                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
+                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                 """
             else:  # SQLite
                 query = """
-                    INSERT INTO execution_io (workflow_id, workflow_name, input_data, output_data, created_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """
             
             self.db_manager.config_db_manager.execute_query(
                 query, 
-                (self.workflow_id, self.workflow_name, input_json, output_json)
+                (self.interaction_id, self.workflow_id, self.workflow_name, input_json, output_json)
             )
             
             logger.info("ExecutionIO 데이터가 성공적으로 저장되었습니다. workflow_id: %s", self.workflow_id)
