@@ -128,7 +128,18 @@ class ConfigComposer:
                     except AttributeError as e:
                         self.logger.error("Failed to initialize %s config: %s", category_name, e)
             
-            # 4. 모든 config 값들을 DB에 초기값으로 저장 (첫 실행 시)
+            # 4. VectorDB와 OpenAI 설정 간 연결 설정
+            if "vectordb" in self.config_categories and "openai" in self.config_categories:
+                self.config_categories["vectordb"].set_openai_config(self.config_categories["openai"])
+                self.logger.info("Connected VectorDB config with OpenAI config")
+                
+                # 5. OpenAI API 키가 있으면 자동으로 최적의 제공자로 전환 시도
+                if self.config_categories["openai"].API_KEY.value:
+                    switched = self.config_categories["vectordb"].check_and_switch_to_best_provider()
+                    if switched:
+                        self.logger.info("Auto-switched to optimal embedding provider")
+            
+            # 6. 모든 config 값들을 DB에 초기값으로 저장 (첫 실행 시)
             self._ensure_initial_config_values_in_db()
             
             self.logger.info("Successfully initialized %d configurations", len(self.all_configs))
