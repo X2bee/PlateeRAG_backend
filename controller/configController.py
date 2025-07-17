@@ -110,6 +110,19 @@ async def update_persistent_config(env_name: str, request: ConfigUpdateRequest):
                 if request.save_to_db:
                     config.save()
                 
+                # OpenAI API 키가 업데이트된 경우 자동으로 임베딩 제공자 전환 시도
+                if env_name == "OPENAI_API_KEY" and request.value and str(request.value).strip():
+                    try:
+                        from fastapi import Request
+                        import asyncio
+                        
+                        # app.state에서 config 가져오기 (비동기 처리를 위해 별도 함수로 분리)
+                        asyncio.create_task(_auto_switch_embedding_provider_after_delay())
+                        
+                        logging.info("Scheduled auto-switch for embedding provider after OpenAI API key update")
+                    except Exception as e:
+                        logging.warning(f"Failed to schedule auto-switch for embedding provider: {e}")
+                
                 return {
                     "message": f"Config '{env_name}' updated successfully",
                     "old_value": old_value,
@@ -149,3 +162,43 @@ async def save_all_persistent_configs():
     except Exception as e:
         logging.error("Error saving configs: %s", e)
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+async def _auto_switch_embedding_provider_after_delay():
+    """OpenAI API 키 업데이트 후 잠시 대기 후 임베딩 제공자 자동 전환"""
+    try:
+        # 1초 대기 (설정이 완전히 저장될 때까지)
+        await asyncio.sleep(1)
+        
+        # app.state에서 config 가져오기
+        from fastapi import applications
+        import uvicorn
+        
+        # 현재 실행 중인 app 인스턴스 찾기 (간접적 방법)
+        # 직접적인 방법이 없으므로 전역 설정에서 가져오기
+        try:
+            configs = get_all_persistent_configs()
+            
+            # vectordb config 찾기
+            vectordb_configs = [c for c in configs if c.config_path.startswith("vectordb.")]
+            if vectordb_configs:
+                # 새로 고침해서 최신 설정 가져오기
+                refresh_all_configs()
+                
+                # VectorDB 설정 재구성
+                from config.config_composer import ConfigComposer
+                composer = ConfigComposer()
+                
+                if "vectordb" in composer.config_categories and "openai" in composer.config_categories:
+                    composer.config_categories["vectordb"].set_openai_config(composer.config_categories["openai"])
+                    switched = composer.config_categories["vectordb"].check_and_switch_to_best_provider()
+                    
+                    if switched:
+                        logging.info("Successfully auto-switched embedding provider after OpenAI API key update")
+                    else:
+                        logging.info("No embedding provider switch needed after OpenAI API key update")
+                        
+        except Exception as e:
+            logging.warning(f"Error during auto-switch process: {e}")
+            
+    except Exception as e:
+        logging.error(f"Failed to auto-switch embedding provider: {e}")

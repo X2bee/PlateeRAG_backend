@@ -10,6 +10,7 @@ from controller.configController import router as configRouter
 from controller.workflowController import router as workflowRouter
 from controller.nodeStateController import router as nodeStateRouter
 from controller.performanceController import router as performanceRouter
+from controller.ragController import router as ragRouter
 from controller.interactionController import router as interactionRouter
 from controller.chatController import router as chatRouter
 from src.node_composer import run_discovery, generate_json_spec, get_node_registry
@@ -125,6 +126,7 @@ app.include_router(configRouter)
 app.include_router(workflowRouter)
 app.include_router(nodeStateRouter)
 app.include_router(performanceRouter)
+app.include_router(ragRouter)
 app.include_router(interactionRouter)
 app.include_router(chatRouter)
 
