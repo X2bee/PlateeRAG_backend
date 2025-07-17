@@ -192,6 +192,6 @@ if __name__ == "__main__":
         ]
         }
     print("워크플로우 실행기를 생성합니다.")
-    executor = WorkflowExecutor(mock_workflow_data)
+    executor = WorkflowExecutor(mock_workflow_data, None, "test-interaction")
     
     final_outputs = executor.execute_workflow()

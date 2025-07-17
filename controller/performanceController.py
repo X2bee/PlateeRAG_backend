@@ -2,14 +2,67 @@
 성능 데이터 관련 컨트롤러 및 라우터
 """
 import json
+import logging
 from typing import List, Dict, Optional, Any
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from database.connection import AppDatabaseManager
 from models.performance import NodePerformance
+from collections import defaultdict
+
+logger = logging.getLogger("workflow-controller")
+router = APIRouter(prefix="/api/performance", tags=["performance"])
+
+def safe_float(value: Any) -> float:
+    """Decimal, None 등을 안전하게 float으로 변환합니다."""
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
 
 class PerformanceController:
     def __init__(self, db_manager: AppDatabaseManager):
         self.db_manager = db_manager
+
+    def _get_recent_performance_logs(self, workflow_name: str, workflow_id: str, limit: int) -> List[Dict[str, Any]]:
+        """
+        특정 워크플로우의 최근 성능 로그를 시간순(오름차순)으로 정렬하여 가져옵니다.
+        LIMIT을 먼저 적용하여 성능을 최적화합니다.
+        """
+        try:
+            db_type = self.db_manager.config_db_manager.db_type
+            
+            if db_type == "postgresql":
+                # PostgreSQL은 서브쿼리에 별칭(alias)이 필요합니다. (e.g., AS recent_logs)
+                query = """
+                    SELECT * FROM (
+                        SELECT * FROM node_performance
+                        WHERE workflow_name = %s AND workflow_id = %s
+                        ORDER BY timestamp DESC
+                        LIMIT %s
+                    ) AS recent_logs
+                    ORDER BY timestamp ASC
+                """
+                params = (workflow_name, workflow_id, limit)
+            else: # sqlite
+                query = """
+                    SELECT * FROM (
+                        SELECT * FROM node_performance
+                        WHERE workflow_name = ? AND workflow_id = ?
+                        ORDER BY timestamp DESC
+                        LIMIT ?
+                    )
+                    ORDER BY timestamp ASC
+                """
+                params = (workflow_name, workflow_id, limit)
+            
+            results = self.db_manager.config_db_manager.execute_query(query, params)
+            return [dict(row) for row in results] if results else []
+
+        except Exception as e:
+            print(f"Error fetching recent performance logs: {e}")
+            return []
     
     def get_performance_data(self, workflow_name: str = None, workflow_id: str = None, 
                            node_id: str = None, limit: int = 100) -> List[Dict[str, Any]]:
@@ -201,6 +254,118 @@ class PerformanceController:
             return {
                 "error": f"Failed to get node performance summary: {str(e)}"
             }
+        
+    def get_node_log_counts(self, workflow_name: str, workflow_id: str) -> Dict[str, Any]:
+        """워크플로우의 각 노드별 로그 개수를 조회합니다."""
+        try:
+            db_type = self.db_manager.config_db_manager.db_type
+            param_char = "%s" if db_type == "postgresql" else "?"
+
+            query = f"""
+                SELECT
+                    node_name,
+                    COUNT(*) as log_count
+                FROM node_performance
+                WHERE workflow_name = {param_char} AND workflow_id = {param_char}
+                GROUP BY node_name
+                ORDER BY log_count DESC
+            """
+            params = (workflow_name, workflow_id)
+            results = self.db_manager.config_db_manager.execute_query(query, params)
+
+            if not results:
+                return {"workflow_name": workflow_name, "workflow_id": workflow_id, "counts": [], "message": "No logs found for this workflow."}
+
+            counts = [{"node_name": row['node_name'], "count": row['log_count']} for row in results]
+
+            return {
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "node_counts": counts
+            }
+
+        except Exception as e:
+            print(f"Error getting node log counts: {e}")
+            return {"error": f"Failed to get node log counts: {str(e)}"}
+
+    def get_pie_chart_data(self, workflow_name: str, workflow_id: str, limit: int) -> Dict[str, Any]:
+        """파이 차트 데이터를 생성합니다."""
+        logs = self._get_recent_performance_logs(workflow_name, workflow_id, limit)
+        if not logs:
+            return {"labels": [], "datasets": []}
+
+        node_times = defaultdict(lambda: {'total_time': 0.0, 'count': 0})
+        for log in logs:
+            node_name = log.get('node_name')
+            if node_name:
+                node_times[node_name]['total_time'] += safe_float(log.get('processing_time_ms'))
+                node_times[node_name]['count'] += 1
+        
+        labels = list(node_times.keys())
+        avg_times = [node_times[name]['total_time'] / node_times[name]['count'] for name in labels]
+
+        return {
+            'title': f'Node Average Processing Time (Last {limit} logs)',
+            'labels': labels,
+            'datasets': [{'label': 'Average Processing Time (ms)', 'data': avg_times}]
+        }
+    
+    def get_bar_chart_data(self, workflow_name: str, workflow_id: str, limit: int) -> Dict[str, Any]:
+        """바 차트 데이터를 생성합니다."""
+        logs = self._get_recent_performance_logs(workflow_name, workflow_id, limit)
+        if not logs:
+            return {"processingTime": {}, "cpuUsage": {}}
+
+        node_metrics = defaultdict(lambda: {'time': [], 'cpu': []})
+        for log in logs:
+            node_name = log.get('node_name')
+            if node_name:
+                node_metrics[node_name]['time'].append(safe_float(log.get('processing_time_ms')))
+                node_metrics[node_name]['cpu'].append(safe_float(log.get('cpu_usage_percent')))
+
+        labels = list(node_metrics.keys())
+        avg_time = [sum(m['time']) / len(m['time']) if m['time'] else 0 for m in node_metrics.values()]
+        avg_cpu = [sum(m['cpu']) / len(m['cpu']) if m['cpu'] else 0 for m in node_metrics.values()]
+        
+        return {
+            'processingTime': {
+                'title': f'Average Processing Time (Last {limit} logs)',
+                'labels': labels,
+                'datasets': [{'label': 'Avg. Time (ms)', 'data': avg_time}]
+            },
+            'cpuUsage': {
+                'title': f'Average CPU Usage (Last {limit} logs)',
+                'labels': labels,
+                'datasets': [{'label': 'Avg. CPU (%)', 'data': avg_cpu}]
+            }
+        }
+    
+    def get_line_chart_data(self, workflow_name: str, workflow_id: str, limit: int) -> Dict[str, Any]:
+        """라인 차트 데이터를 생성합니다."""
+        logs = self._get_recent_performance_logs(workflow_name, workflow_id, limit)
+        if not logs:
+            return {"cpuOverTime": {}, "processingTimeOverTime": {}}
+
+        datasets_cpu = defaultdict(list)
+        datasets_time = defaultdict(list)
+
+        for log in logs:
+            node_name = log.get('node_name')
+            if node_name:
+                timestamp = log.get('timestamp').isoformat() if hasattr(log.get('timestamp'), 'isoformat') else str(log.get('timestamp')) # type: ignore
+                datasets_cpu[node_name].append({'x': timestamp, 'y': safe_float(log.get('cpu_usage_percent'))})
+                datasets_time[node_name].append({'x': timestamp, 'y': safe_float(log.get('processing_time_ms'))})
+
+        return {
+            'cpuOverTime': {
+                'title': f'CPU Usage Over Time (Last {limit} logs)',
+                'datasets': [{'label': name, 'data': data} for name, data in datasets_cpu.items()]
+            },
+            'processingTimeOverTime': {
+                'title': f'Processing Time Over Time (Last {limit} logs)',
+                'datasets': [{'label': name, 'data': data} for name, data in datasets_time.items()]
+            }
+        }
     
     def delete_old_performance_data(self, days_to_keep: int = 30) -> bool:
         """지정된 일수보다 오래된 성능 데이터를 삭제합니다."""
@@ -217,8 +382,7 @@ class PerformanceController:
             print(f"Error deleting old performance data: {e}")
             return False
 
-# FastAPI Router 설정
-router = APIRouter(prefix="/api/performance", tags=["performance"])
+
 
 def get_performance_controller(request: Request):
     """성능 컨트롤러 의존성 주입"""
@@ -283,6 +447,53 @@ async def get_node_performance_summary(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get node performance summary: {str(e)}") from e
+
+@router.get("/counts/{workflow_name}/{workflow_id}")
+async def get_node_log_counts_route(
+    request: Request,
+    workflow_name: str,
+    workflow_id: str
+):
+    """워크플로우 내 각 노드별 로그 개수를 조회합니다."""
+    controller = get_performance_controller(request)
+    count_data = controller.get_node_log_counts(workflow_name, workflow_id)
+    return {"success": True, "data": count_data}
+
+@router.get("/charts/pie/{workflow_name}/{workflow_id}")
+async def get_pie_chart_data_route(
+    request: Request,
+    workflow_name: str,
+    workflow_id: str,
+    limit: int = Query(10, description="분석할 최근 로그 개수")
+):
+    """노드별 평균 처리 시간 분포를 파이 차트용 데이터로 반환합니다."""
+    controller = get_performance_controller(request)
+    chart_data = controller.get_pie_chart_data(workflow_name, workflow_id, limit)
+    return {"success": True, "data": chart_data}
+
+@router.get("/charts/bar/{workflow_name}/{workflow_id}")
+async def get_bar_chart_data_route(
+    request: Request,
+    workflow_name: str,
+    workflow_id: str,
+    limit: int = Query(10, description="분석할 최근 로그 개수")
+):
+    """노드별 평균 성능 지표를 바 차트용 데이터로 반환합니다."""
+    controller = get_performance_controller(request)
+    chart_data = controller.get_bar_chart_data(workflow_name, workflow_id, limit)
+    return {"success": True, "data": chart_data}
+
+@router.get("/charts/line/{workflow_name}/{workflow_id}")
+async def get_line_chart_data_route(
+    request: Request,
+    workflow_name: str,
+    workflow_id: str,
+    limit: int = Query(10, description="가져올 최근 로그 개수")
+):
+    """시간 흐름에 따른 성능 지표를 라인 차트용 데이터로 반환합니다."""
+    controller = get_performance_controller(request)
+    chart_data = controller.get_line_chart_data(workflow_name, workflow_id, limit)
+    return {"success": True, "data": chart_data}
 
 @router.delete("/cleanup")
 async def cleanup_old_performance_data(

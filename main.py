@@ -11,6 +11,8 @@ from controller.workflowController import router as workflowRouter
 from controller.nodeStateController import router as nodeStateRouter
 from controller.performanceController import router as performanceRouter
 from controller.ragController import router as ragRouter
+from controller.interactionController import router as interactionRouter
+from controller.chatController import router as chatRouter
 from src.node_composer import run_discovery, generate_json_spec, get_node_registry
 from config.config_composer import config_composer
 from database import AppDatabaseManager
@@ -62,6 +64,7 @@ async def lifespan(app: FastAPI):
         # 3. 나머지 설정들 초기화 (이제 DB 테이블이 존재함)
         configs = config_composer.initialize_remaining_configs()
         app.state.config = configs
+        app.state.config_composer = config_composer
         
         config_composer.ensure_directories()
         validation_result = config_composer.validate_critical_configs()
@@ -124,6 +127,8 @@ app.include_router(workflowRouter)
 app.include_router(nodeStateRouter)
 app.include_router(performanceRouter)
 app.include_router(ragRouter)
+app.include_router(interactionRouter)
+app.include_router(chatRouter)
 
 @app.get("/app/status")
 async def get_app_status():
@@ -235,49 +240,6 @@ async def create_demo_user(user_data: dict):
     else:
         raise HTTPException(status_code=500, detail="Failed to create user")
 
-# @app.get("/demo/chat/sessions")
-# async def get_demo_chat_sessions():
-#     """데모용: 채팅 세션 목록 조회"""
-#     if not hasattr(app.state, 'app_db') or not app.state.app_db:
-#         raise HTTPException(status_code=500, detail="Application database not available")
-    
-#     sessions = app.state.app_db.find_all(ChatSession, limit=10)
-#     return {
-#         "sessions": [session.to_dict() for session in sessions],
-#         "total": len(sessions)
-#     }
-
-# @app.post("/demo/chat/sessions")
-# async def create_demo_chat_session(session_data: dict):
-#     """데모용: 새 채팅 세션 생성"""
-#     if not hasattr(app.state, 'app_db') or not app.state.app_db:
-#         raise HTTPException(status_code=500, detail="Application database not available")
-    
-#     session = ChatSession(
-#         session_name=session_data.get("session_name", "Demo Session"),
-#         model_used=session_data.get("model_used", "gpt-4"),
-#         user_id=session_data.get("user_id")
-#     )
-    
-#     session_id = app.state.app_db.insert(session)
-    
-#     if session_id:
-#         session.id = session_id
-#         return {"message": "Chat session created successfully", "session": session.to_dict()}
-#     else:
-#         raise HTTPException(status_code=500, detail="Failed to create chat session")
-
-# @app.get("/demo/workflow/executions")
-# async def get_demo_workflow_executions():
-#     """데모용: 워크플로우 실행 기록 조회"""
-#     if not hasattr(app.state, 'app_db') or not app.state.app_db:
-#         raise HTTPException(status_code=500, detail="Application database not available")
-    
-#     executions = app.state.app_db.find_all(WorkflowExecution, limit=10)
-#     return {
-#         "executions": [execution.to_dict() for execution in executions],
-#         "total": len(executions)
-#     }
 
 if __name__ == "__main__":
     try:

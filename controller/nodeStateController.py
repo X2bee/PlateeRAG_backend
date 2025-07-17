@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 import logging
 
 logger = logging.getLogger("node-controller-state")
-router = APIRouter(prefix="/node-state", tags=["node-state"])
+router = APIRouter(prefix="/api/node-state", tags=["node-state"])
 
 @router.get("/registry", response_model=Dict[str, Any])
 async def get_node_registry_from_state(request: Request):

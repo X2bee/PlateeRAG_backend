@@ -19,7 +19,7 @@ from config.persistent_config import (
 )
 
 router = APIRouter(
-    prefix="/config",
+    prefix="/api/config",
     tags=["config"],
     responses={404: {"description": "Not found"}},
 )

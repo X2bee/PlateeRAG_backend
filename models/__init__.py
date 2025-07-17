@@ -6,7 +6,7 @@ from models.user import User, UserSession
 # from models.chat import ChatSession, ChatMessage
 from models.performance import WorkflowExecution, NodeExecution, SystemMetrics, NodePerformance
 from models.persistent_config_model import PersistentConfigModel
-from models.executor import ExecutionIO
+from models.executor import ExecutionIO, ExecutionMeta
 
 # 사용 가능한 모델들
 __all__ = [
@@ -14,7 +14,7 @@ __all__ = [
     'User', 'UserSession',
     'WorkflowExecution', 'NodeExecution', 'SystemMetrics', 'NodePerformance',
     'PersistentConfigModel',
-    'ExecutionIO'
+    'ExecutionIO', 'ExecutionMeta'
 ]
 
 # 애플리케이션에서 사용할 모델 목록
@@ -26,5 +26,5 @@ APPLICATION_MODELS = [
     NodeExecution,
     SystemMetrics,
     NodePerformance,
-    ExecutionIO
+    ExecutionIO, ExecutionMeta
 ]
