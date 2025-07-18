@@ -31,7 +31,6 @@ class SearchQuery(BaseModel):
 
 class CollectionCreateRequest(BaseModel):
     collection_name: str
-    vector_size: int
     distance: str = "Cosine"
     description: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -60,8 +59,8 @@ class DocumentSearchRequest(BaseModel):
 
 def get_vector_manager(request: Request):
     """벡터 매니저 의존성 주입"""
-    if hasattr(request.app.state, 'vector_manager') and request.app.state.vector_manager:
-        return request.app.state.vector_manager
+    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
+        return request.app.state.rag_service.vector_manager
     else:
         raise HTTPException(status_code=500, detail="Vector manager not available")
 
@@ -92,11 +91,13 @@ async def list_collections(request: Request):
 @router.post("/collections")
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):
     """새 컬렉션 생성"""
+    rag_service = get_rag_service(request)
+    vector_size = rag_service.config.VECTOR_DIMENSION.value
     try:
-        vector_manager = get_vector_manager(request)
+        vector_manager = rag_service.vector_manager
         return vector_manager.create_collection(
             collection_request.collection_name,
-            collection_request.vector_size,
+            vector_size,
             collection_request.distance,
             collection_request.description,
             collection_request.metadata

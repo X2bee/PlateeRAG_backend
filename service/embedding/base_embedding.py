@@ -77,4 +77,11 @@ class BaseEmbedding(ABC):
             "model": self.config.get("model", "unknown"),
             "dimension": self.get_embedding_dimension(),
             "available": False  # 서브클래스에서 오버라이드
-        } 
+        }
+    
+    async def cleanup(self):
+        """
+        임베딩 클라이언트 리소스 정리
+        서브클래스에서 필요시 오버라이드
+        """
+        logger.info("Cleaning up %s embedding client", self.provider_name) 
