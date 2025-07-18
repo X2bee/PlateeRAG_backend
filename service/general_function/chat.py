@@ -8,6 +8,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+# from main import app
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class DatabaseChatHistory(BaseChatMessageHistory):
         """히스토리 초기화"""
         self._messages.clear()
 
-def create_conversation_function(config_composer, db_manager=None):
+def create_conversation_function(config_composer, db_manager=None, rag_service=None):
     """
     LangChain을 이용한 대화 함수 생성
     
@@ -104,11 +105,12 @@ def create_conversation_function(config_composer, db_manager=None):
         대화 함수
     """
     
-    def conversation(
+    async def conversation(
         user_input: str,
         workflow_id: Optional[str] = None,
         workflow_name: Optional[str] = None,
-        interaction_id: str = "default"
+        interaction_id: str = "default",
+        selected_collection: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         사용자 입력에 대한 AI 응답 생성
@@ -127,6 +129,31 @@ def create_conversation_function(config_composer, db_manager=None):
             openai_config = config_composer.get_config_by_name("OPENAI_API_KEY")
             api_key = openai_config.value
             
+            if selected_collection and rag_service:
+                try:
+                    retrieval_result = await rag_service.search_documents(
+                        selected_collection,
+                        user_input,
+                        4,
+                        0,
+                    )
+                    
+                    print(f"Retrieval result: {retrieval_result}")
+                    
+                    if retrieval_result and retrieval_result.get("results"):
+                        items = retrieval_result.get("results", [])
+                        context_parts = []
+                        for item in items:
+                            if "chunk_text" in item and item["chunk_text"]:
+                                context_parts.append(item["chunk_text"])
+                        
+                        if context_parts:
+                            context_text = "\n\n".join(context_parts)
+                            user_input += f"\n\n[참고 문서]\n{context_text}"
+                except Exception as rag_error:
+                    logger.warning(f"RAG search failed: {rag_error}")
+                    # RAG 검색 실패 시에도 대화는 계속 진행
+                            
             if not api_key:
                 raise ValueError("OpenAI API key not found")
             
