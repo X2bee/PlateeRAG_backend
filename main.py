@@ -13,13 +13,13 @@ from controller.performanceController import router as performanceRouter
 from controller.ragController import router as ragRouter
 from controller.interactionController import router as interactionRouter
 from controller.chatController import router as chatRouter
-from src.node_composer import run_discovery, generate_json_spec, get_node_registry
+from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from config.config_composer import config_composer
-from database import AppDatabaseManager
-from models import APPLICATION_MODELS
-from models.user import User
-from models.chat import ChatSession
-from models.performance import WorkflowExecution
+from service.database import AppDatabaseManager
+from service.database.models import APPLICATION_MODELS
+from service.database.models.user import User
+from service.database.models.chat import ChatSession
+from service.database.models.performance import WorkflowExecution
 
 logging.basicConfig(
     level=logging.INFO,

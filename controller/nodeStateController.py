@@ -171,7 +171,7 @@ async def refresh_node_registry(request: Request):
     노드 레지스트리를 다시 로드하여 app.state에 업데이트합니다.
     """
     try:
-        from src.node_composer import run_discovery, generate_json_spec, get_node_registry
+        from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
         
         # 노드 재발견
         logger.info("Refreshing node registry...")

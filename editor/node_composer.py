@@ -5,7 +5,7 @@ import importlib
 from pathlib import Path
 from typing import List, Dict, Any, Type
 from abc import ABC, abstractmethod
-from src.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP, validate_parameters
+from editor.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP, validate_parameters
 
 NODE_REGISTRY = []
 NODE_CLASS_REGISTRY: Dict[str, Type['Node']] = {}
@@ -102,7 +102,7 @@ class Node(ABC):
 def run_discovery() -> None:
     """Desc"""
     nodes_root_dir = Path(__file__).parent / "nodes"
-    for module_info in pkgutil.walk_packages(path=[str(nodes_root_dir)], prefix='src.nodes.'):
+    for module_info in pkgutil.walk_packages(path=[str(nodes_root_dir)], prefix='editor.nodes.'):
         try:
             importlib.import_module(module_info.name)
         except Exception as e:

@@ -14,7 +14,7 @@ import os
 import json
 from pathlib import Path
 
-from src.rag import RAGService, EmbeddingFactory
+from service.rag import RAGService, EmbeddingFactory
 
 logger = logging.getLogger("rag-controller")
 router = APIRouter(prefix="/rag", tags=["rag"])

@@ -257,7 +257,7 @@ class ConfigComposer:
         필요한 디렉토리들 생성 (고정된 디렉토리 목록)
         """
         # 고정된 디렉토리 목록
-        required_directories = ["constants", "downloads", "logs"]
+        required_directories = ["constants", "downloads"]
         
         for directory in required_directories:
             if not os.path.exists(directory):

@@ -5,8 +5,8 @@ import json
 import logging
 from typing import List, Dict, Optional, Any
 from fastapi import APIRouter, HTTPException, Request, Query
-from database.connection import AppDatabaseManager
-from models.performance import NodePerformance
+from service.database.connection import AppDatabaseManager
+from service.database.models.performance import NodePerformance
 from collections import defaultdict
 
 logger = logging.getLogger("workflow-controller")

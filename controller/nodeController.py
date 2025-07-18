@@ -11,7 +11,7 @@ from datetime import datetime
 import glob
 from pathlib import Path
 
-from src.node_composer import (
+from editor.node_composer import (
     run_discovery,
     generate_json_spec,
     get_node_registry,
@@ -57,7 +57,7 @@ async def export_nodes():
     Refesh and export the list of nodes to a JSON file.
     """
     try:
-        from src.node_composer import NODE_REGISTRY
+        from editor.node_composer import NODE_REGISTRY
         run_discovery()
         output_filename = "./constants/exported_nodes.json"
         generate_json_spec(output_path=output_filename)
@@ -261,7 +261,7 @@ async def validate_all_parameters():
     등록된 모든 노드의 파라미터 유효성을 검사합니다.
     """
     try:
-        from src.model.node import validate_parameters
+        from editor.model.node import validate_parameters
         
         node_registry = get_node_registry()
         validation_results = []

@@ -1,5 +1,5 @@
 import os
-from src.node_composer import Node
+from editor.node_composer import Node
 from langchain_openai import ChatOpenAI
 
 class ChatOpenAINode(Node):

@@ -1,6 +1,3 @@
-"""
-LangChain을 이용한 OpenAI 채팅 기능
-"""
 import logging
 import json
 from typing import Dict, List, Any, Optional

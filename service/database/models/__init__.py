@@ -1,12 +1,12 @@
 """
 모델 모듈 초기화
 """
-from models.base_model import BaseModel
-from models.user import User, UserSession
-# from models.chat import ChatSession, ChatMessage
-from models.performance import WorkflowExecution, NodeExecution, SystemMetrics, NodePerformance
-from models.persistent_config_model import PersistentConfigModel
-from models.executor import ExecutionIO, ExecutionMeta
+from service.database.models.base_model import BaseModel
+from service.database.models.user import User, UserSession
+# from service.database.models.chat import ChatSession, ChatMessage
+from service.database.models.performance import WorkflowExecution, NodeExecution, SystemMetrics, NodePerformance
+from service.database.models.persistent_config_model import PersistentConfigModel
+from service.database.models.executor import ExecutionIO, ExecutionMeta
 
 # 사용 가능한 모델들
 __all__ = [

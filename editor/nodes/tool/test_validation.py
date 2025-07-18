@@ -1,4 +1,4 @@
-from src.node_composer import Node
+from editor.node_composer import Node
 
 class TestInvalidNode(Node):
     """

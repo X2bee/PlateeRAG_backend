@@ -2,7 +2,7 @@
 사용자 관련 데이터 모델
 """
 from typing import Dict, Optional
-from models.base_model import BaseModel
+from service.database.models.base_model import BaseModel
 
 class User(BaseModel):
     """사용자 모델"""

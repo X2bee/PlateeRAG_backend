@@ -4,7 +4,7 @@ import time
 import datetime
 
 import psutil
-from database.connection import AppDatabaseManager
+from service.database.connection import AppDatabaseManager
 
 try:
     import pynvml

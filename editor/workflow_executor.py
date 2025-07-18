@@ -2,8 +2,8 @@ from collections import deque
 import logging
 import json
 from typing import Dict, Any, List, Optional
-from src.node_composer import NODE_CLASS_REGISTRY, run_discovery
-from src.monitoring.performance_logger import PerformanceLogger
+from editor.node_composer import NODE_CLASS_REGISTRY, run_discovery
+from service.monitoring.performance_logger import PerformanceLogger
 
 logger = logging.getLogger('Workflow-Executor')
 
