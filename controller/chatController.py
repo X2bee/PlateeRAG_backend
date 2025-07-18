@@ -5,8 +5,9 @@ from typing import Dict, Any, Optional
 import json
 import logging
 from datetime import datetime
-from src.general_function import create_conversation_function
-from models.executor import ExecutionMeta
+from service.general_function import create_conversation_function
+from service.database.models.executor import ExecutionMeta
+from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 
 logger = logging.getLogger("chat-controller")
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -58,7 +59,7 @@ async def chat_new(request: Request, request_body: ChatNewRequest):
         config_composer = request.app.state.config_composer
         
         # ExecutionMeta 조회 또는 생성
-        execution_meta = await _get_or_create_execution_meta(
+        execution_meta = await get_or_create_execution_meta(
             db_manager,
             request_body.interaction_id,
             request_body.workflow_id,
@@ -82,8 +83,18 @@ async def chat_new(request: Request, request_body: ChatNewRequest):
             if chat_result["status"] == "success":
                 chat_response = chat_result["ai_response"]
                 
+                # ExecutionIO에 채팅 로그 저장
+                await _save_chat_execution_io(
+                    db_manager,
+                    request_body.interaction_id,
+                    request_body.workflow_id,
+                    request_body.workflow_name,
+                    request_body.input_data,
+                    chat_response
+                )
+                
                 # ExecutionMeta 업데이트 (interaction_count 증가)
-                await _update_execution_meta_count(db_manager, execution_meta)
+                await update_execution_meta_count(db_manager, execution_meta)
             else:
                 raise HTTPException(status_code=500, detail=f"Chat execution failed: {chat_result.get('error_message')}")
         
@@ -153,8 +164,18 @@ async def chat_execution(request: Request, request_body: ChatExecutionRequest):
         )
         
         if chat_result["status"] == "success":
+            # ExecutionIO에 채팅 로그 저장
+            await _save_chat_execution_io(
+                db_manager,
+                request_body.interaction_id,
+                request_body.workflow_id or execution_meta.workflow_id,
+                request_body.workflow_name or execution_meta.workflow_name,
+                request_body.user_input,
+                chat_result["ai_response"]
+            )
+            
             # ExecutionMeta 업데이트 (interaction_count 증가)
-            await _update_execution_meta_count(db_manager, execution_meta)
+            await update_execution_meta_count(db_manager, execution_meta)
             
             return JSONResponse(content={
                 "status": "success",
@@ -182,77 +203,6 @@ async def chat_execution(request: Request, request_body: ChatExecutionRequest):
     except Exception as e:
         logger.error(f"Error in chat_execution: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-async def _get_or_create_execution_meta(db_manager, interaction_id: str, workflow_id: str, workflow_name: str, first_msg: str = None) -> ExecutionMeta:
-    """ExecutionMeta를 조회하거나 새로 생성합니다."""
-    try:
-        # 기존 ExecutionMeta 조회
-        query = """
-        SELECT * FROM execution_meta 
-        WHERE interaction_id = %s AND workflow_id = %s
-        """
-        
-        # SQLite인 경우 파라미터 플레이스홀더 변경
-        if db_manager.config_db_manager.db_type == "sqlite":
-            query = query.replace("%s", "?")
-        
-        result = db_manager.config_db_manager.execute_query(query, (interaction_id, workflow_id))
-        
-        if result and len(result) > 0:
-            # 기존 데이터가 있으면 반환
-            row = result[0]
-            execution_meta = ExecutionMeta(
-                id=row.get('id'),
-                interaction_id=row['interaction_id'],
-                workflow_id=row['workflow_id'],
-                workflow_name=row['workflow_name'],
-                interaction_count=row['interaction_count'],
-                metadata=json.loads(row['metadata']) if row.get('metadata') else {}
-            )
-            logger.info(f"Found existing ExecutionMeta for interaction_id: {interaction_id}, workflow_id: {workflow_id}")
-            return execution_meta
-        else:
-            # 새로 생성
-            execution_meta = ExecutionMeta(
-                interaction_id=interaction_id,
-                workflow_id=workflow_id,
-                workflow_name=workflow_name,
-                interaction_count=0,
-                metadata={
-                    "chat_mode": "default_mode",
-                    "first_message": first_msg if first_msg else "Chat session started"
-                }
-            )
-            
-            # DB에 저장
-            insert_query = """
-            INSERT INTO execution_meta (interaction_id, workflow_id, workflow_name, interaction_count, metadata, created_at)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            """
-            
-            if db_manager.config_db_manager.db_type == "sqlite":
-                insert_query = insert_query.replace("%s", "?")
-            
-            metadata_json = json.dumps(execution_meta.metadata, ensure_ascii=False)
-            db_manager.config_db_manager.execute_query(
-                insert_query, 
-                (interaction_id, workflow_id, workflow_name, 0, metadata_json)
-            )
-            
-            logger.info(f"Created new ExecutionMeta for interaction_id: {interaction_id}, workflow_id: {workflow_id}")
-            return execution_meta
-            
-    except Exception as e:
-        logger.error(f"Error handling ExecutionMeta: {str(e)}")
-        # 실패해도 기본값으로 계속 진행
-        return ExecutionMeta(
-            interaction_id=interaction_id,
-            workflow_id=workflow_id,
-            workflow_name=workflow_name,
-            interaction_count=0,
-            metadata={"chat_mode": "default_mode"}
-        )
 
 
 async def _get_execution_meta(db_manager, interaction_id: str, workflow_id: str) -> ExecutionMeta:
@@ -288,25 +238,54 @@ async def _get_execution_meta(db_manager, interaction_id: str, workflow_id: str)
         return None
 
 
-async def _update_execution_meta_count(db_manager, execution_meta: ExecutionMeta):
-    """ExecutionMeta의 interaction_count를 1 증가시킵니다."""
+async def _save_chat_execution_io(db_manager, interaction_id: str, workflow_id: str, workflow_name: str, 
+                                 user_input: str, ai_response: str):
+    """채팅 실행 결과를 ExecutionIO 테이블에 저장합니다."""
     try:
-        update_query = """
-        UPDATE execution_meta 
-        SET interaction_count = interaction_count + 1, updated_at = CURRENT_TIMESTAMP
-        WHERE interaction_id = %s AND workflow_id = %s
-        """
+        # 입력 데이터 (사용자 메시지)
+        input_data = {
+            "node_id": "chat_input",
+            "node_name": "Chat Input",
+            "inputs": {
+                "user_input": user_input
+            },
+            "result": user_input
+        }
         
-        if db_manager.config_db_manager.db_type == "sqlite":
-            update_query = update_query.replace("%s", "?")
+        # 출력 데이터 (AI 응답)
+        output_data = {
+            "node_id": "chat_output", 
+            "node_name": "Chat Output",
+            "inputs": {
+                "ai_response": ai_response
+            },
+            "result": ai_response
+        }
+        
+        # JSON 형태로 변환하여 저장
+        input_json = json.dumps(input_data, ensure_ascii=False)
+        output_json = json.dumps(output_data, ensure_ascii=False)
+        
+        # DB 타입에 따른 쿼리 준비
+        db_type = db_manager.config_db_manager.db_type
+        if db_type == "postgresql":
+            query = """
+                INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
+                VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            """
+        else:  # SQLite
+            query = """
+                INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """
         
         db_manager.config_db_manager.execute_query(
-            update_query, 
-            (execution_meta.interaction_id, execution_meta.workflow_id)
+            query, 
+            (interaction_id, workflow_id, workflow_name, input_json, output_json)
         )
         
-        logger.info(f"Updated interaction_count for interaction_id: {execution_meta.interaction_id}, workflow_id: {execution_meta.workflow_id}")
+        logger.info(f"Chat ExecutionIO 데이터 저장 완료: interaction_id={interaction_id}, workflow_id={workflow_id}")
         
     except Exception as e:
-        logger.error(f"Error updating ExecutionMeta count: {str(e)}")
-        # 카운트 업데이트 실패해도 전체 실행은 계속 진행
+        logger.error(f"Chat ExecutionIO 저장 중 오류 발생: {str(e)}")
+        # 로그 저장 실패해도 전체 실행은 계속 진행

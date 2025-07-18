@@ -14,7 +14,8 @@ import os
 import json
 from pathlib import Path
 
-from src.rag import RAGService, EmbeddingFactory
+from service.retrieval import RAGService
+from service.embedding import EmbeddingFactory
 
 logger = logging.getLogger("rag-controller")
 router = APIRouter(prefix="/rag", tags=["rag"])
@@ -68,8 +69,11 @@ class EmbeddingTestRequest(BaseModel):
 
 def get_rag_service(request: Request) -> RAGService:
     """RAG 서비스 의존성 주입"""
-    if hasattr(request.app.state, 'config') and request.app.state.config:
-        return RAGService(request.app.state.config["vectordb"], request.app.state.config.get("openai"))
+    config_composer = request.app.state.config_composer
+    if config_composer:
+        vectordb_config = config_composer.get_config_by_category_name("vectordb")
+        openai_config = config_composer.get_config_by_category_name("openai")
+        return RAGService(vectordb_config, openai_config)
     else:
         raise HTTPException(status_code=500, detail="Configuration not available")
 

@@ -1,6 +1,6 @@
 from controller.nodeController import export_nodes, list_nodes
 import asyncio
-from src.workflow_executor import WorkflowExecutor
+from editor.workflow_executor import WorkflowExecutor
 
 # # 비동기 함수들을 실행하고 조율하는 메인 비동기 함수
 # async def main():

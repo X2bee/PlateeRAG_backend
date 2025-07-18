@@ -6,8 +6,9 @@ import os
 import json
 import logging
 from datetime import datetime
-from src.workflow_executor import WorkflowExecutor
-from models.executor import ExecutionMeta
+from editor.workflow_executor import WorkflowExecutor
+from service.database.models.executor import ExecutionMeta
+from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 
 logger = logging.getLogger("interaction-controller")
 router = APIRouter(prefix="/api/interaction", tags=["interaction"])
@@ -170,7 +171,7 @@ async def execute_workflow_new(request: Request, request_body: WorkflowRequest):
             raise HTTPException(status_code=500, detail="Database connection not available")
 
         # ExecutionMeta 조회 또는 생성
-        execution_meta = await _get_or_create_execution_meta(
+        execution_meta = await get_or_create_execution_meta(
             db_manager,
             request_body.interaction_id,
             request_body.workflow_id,
@@ -183,7 +184,7 @@ async def execute_workflow_new(request: Request, request_body: WorkflowRequest):
         final_outputs = executor.execute_workflow()
 
         # ExecutionMeta 업데이트 (interaction_count 증가)
-        await _update_execution_meta_count(db_manager, execution_meta)
+        await update_execution_meta_count(db_manager, execution_meta)
 
         return {
             "status": "success", 
@@ -539,97 +540,4 @@ async def delete_execution_meta(request: Request, interaction_id: str = "default
     except Exception as e:
         logger.error(f"Error deleting execution meta: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete execution meta: {str(e)}")
-
-async def _get_or_create_execution_meta(db_manager, interaction_id: str, workflow_id: str, workflow_name: str, first_msg: str = None) -> ExecutionMeta:
-    """ExecutionMeta를 조회하거나 새로 생성합니다."""
-    try:
-        # 기존 ExecutionMeta 조회
-        query = """
-        SELECT * FROM execution_meta 
-        WHERE interaction_id = %s AND workflow_id = %s
-        """
-        
-        # SQLite인 경우 파라미터 플레이스홀더 변경
-        if db_manager.config_db_manager.db_type == "sqlite":
-            query = query.replace("%s", "?")
-        
-        result = db_manager.config_db_manager.execute_query(query, (interaction_id, workflow_id))
-        
-        if result and len(result) > 0:
-            # 기존 데이터가 있으면 반환
-            row = result[0]
-            execution_meta = ExecutionMeta(
-                id=row.get('id'),
-                interaction_id=row['interaction_id'],
-                workflow_id=row['workflow_id'],
-                workflow_name=row['workflow_name'],
-                interaction_count=row['interaction_count'],
-                metadata=json.loads(row['metadata']) if row.get('metadata') else {}
-            )
-            logger.info(f"Found existing ExecutionMeta for interaction_id: {interaction_id}, workflow_id: {workflow_id}")
-            return execution_meta
-        else:
-            # 새로 생성
-            execution_meta = ExecutionMeta(
-                interaction_id=interaction_id,
-                workflow_id=workflow_id,
-                workflow_name=workflow_name,
-                interaction_count=0,
-                metadata={
-                    "placeholder": first_msg if first_msg else "No initial message provided"
-                }
-            )
-            
-            # DB에 저장
-            insert_query = """
-            INSERT INTO execution_meta (interaction_id, workflow_id, workflow_name, interaction_count, metadata, created_at)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            """
-            
-            if db_manager.config_db_manager.db_type == "sqlite":
-                insert_query = insert_query.replace("%s", "?")
-            
-            metadata_json = json.dumps(execution_meta.metadata, ensure_ascii=False)
-            db_manager.config_db_manager.execute_query(
-                insert_query, 
-                (interaction_id, workflow_id, workflow_name, 0, metadata_json)
-            )
-            
-            logger.info(f"Created new ExecutionMeta for interaction_id: {interaction_id}, workflow_id: {workflow_id}")
-            return execution_meta
-            
-    except Exception as e:
-        logger.error(f"Error handling ExecutionMeta: {str(e)}")
-        # 실패해도 기본값으로 계속 진행
-        return ExecutionMeta(
-            interaction_id=interaction_id,
-            workflow_id=workflow_id,
-            workflow_name=workflow_name,
-            interaction_count=0,
-            metadata={}
-        )
-
-
-async def _update_execution_meta_count(db_manager, execution_meta: ExecutionMeta):
-    """ExecutionMeta의 interaction_count를 1 증가시킵니다."""
-    try:
-        update_query = """
-        UPDATE execution_meta 
-        SET interaction_count = interaction_count + 1, updated_at = CURRENT_TIMESTAMP
-        WHERE interaction_id = %s AND workflow_id = %s
-        """
-        
-        if db_manager.config_db_manager.db_type == "sqlite":
-            update_query = update_query.replace("%s", "?")
-        
-        db_manager.config_db_manager.execute_query(
-            update_query, 
-            (execution_meta.interaction_id, execution_meta.workflow_id)
-        )
-        
-        logger.info(f"Updated interaction_count for interaction_id: {execution_meta.interaction_id}, workflow_id: {execution_meta.workflow_id}")
-        
-    except Exception as e:
-        logger.error(f"Error updating ExecutionMeta count: {str(e)}")
-        # 카운트 업데이트 실패해도 전체 실행은 계속 진행
 
