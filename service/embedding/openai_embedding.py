@@ -6,7 +6,7 @@ import asyncio
 from typing import List, Dict, Any
 import logging
 from openai import AsyncOpenAI
-from .base_embedding import BaseEmbedding
+from service.embedding.base_embedding import BaseEmbedding
 
 logger = logging.getLogger("embeddings.openai")
 

@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 import logging
 import aiohttp
 import json
-from .base_embedding import BaseEmbedding
+from service.embedding.base_embedding import BaseEmbedding
 
 logger = logging.getLogger("embeddings.custom_http")
 

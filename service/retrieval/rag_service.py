@@ -13,9 +13,9 @@ from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 
-from . import EmbeddingFactory
-from .document_processor import DocumentProcessor
-from .vector_manager import VectorManager
+from service.embedding import EmbeddingFactory
+from service.retrieval.document_processor import DocumentProcessor
+from service.vector_db.vector_manager import VectorManager
 
 logger = logging.getLogger("rag-service")
 

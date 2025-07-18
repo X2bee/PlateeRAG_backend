@@ -14,7 +14,6 @@ import PyPDF2
 from docx import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# PDF 기본 텍스트 추출을 위한 import
 try:
     from pdfminer.high_level import extract_text
     PDFMINER_AVAILABLE = True

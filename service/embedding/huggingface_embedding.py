@@ -6,7 +6,7 @@ import asyncio
 from typing import List, Dict, Any
 import logging
 import numpy as np
-from .base_embedding import BaseEmbedding
+from service.embedding.base_embedding import BaseEmbedding
 
 logger = logging.getLogger("embeddings.huggingface")
 

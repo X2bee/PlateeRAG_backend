@@ -5,10 +5,10 @@
 
 from typing import Dict, Any
 import logging
-from .base_embedding import BaseEmbedding
-from .openai_embedding import OpenAIEmbedding
-from .huggingface_embedding import HuggingFaceEmbedding
-from .custom_http_embedding import CustomHTTPEmbedding
+from service.embedding.base_embedding import BaseEmbedding
+from service.embedding.openai_embedding import OpenAIEmbedding
+from service.embedding.huggingface_embedding import HuggingFaceEmbedding
+from service.embedding.custom_http_embedding import CustomHTTPEmbedding
 
 logger = logging.getLogger("embeddings.factory")
 
