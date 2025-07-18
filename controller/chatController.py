@@ -23,6 +23,14 @@ class ChatExecutionRequest(BaseModel):
     interaction_id: str
     workflow_id: Optional[str] = None
     workflow_name: Optional[str] = None
+    selected_collection: Optional[str] = None
+
+def get_rag_service(request: Request):
+    """RAG 서비스 의존성 주입"""
+    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
+        return request.app.state.rag_service
+    else:
+        raise HTTPException(status_code=500, detail="RAG service not available")
 
 @router.post("/new", response_model=Dict[str, Any])
 async def chat_new(request: Request, request_body: ChatNewRequest):
@@ -73,7 +81,7 @@ async def chat_new(request: Request, request_body: ChatNewRequest):
         # 첫 번째 대화 실행 (input_data가 있는 경우)
         chat_response = None
         if request_body.input_data:
-            chat_result = conversation(
+            chat_result = await conversation(
                 user_input=request_body.input_data,
                 workflow_id=request_body.workflow_id,
                 workflow_name=request_body.workflow_name,
@@ -134,6 +142,7 @@ async def chat_execution(request: Request, request_body: ChatExecutionRequest):
         
         db_manager = request.app.state.app_db
         
+        
         if not hasattr(request.app.state, 'config_composer'):
             raise HTTPException(status_code=500, detail="Config composer not available")
         
@@ -152,15 +161,22 @@ async def chat_execution(request: Request, request_body: ChatExecutionRequest):
                 detail=f"Chat session not found for interaction_id: {request_body.interaction_id}"
             )
         
-        # 대화 함수 생성
-        conversation = create_conversation_function(config_composer, db_manager)
+        if request_body.selected_collection:
+            selected_collection = request_body.selected_collection
+            rag_service = get_rag_service(request)
+        else:
+            selected_collection = None
+            rag_service = None
+        
+        conversation = create_conversation_function(config_composer, db_manager, rag_service)
         
         # 대화 실행
-        chat_result = conversation(
+        chat_result = await conversation(
             user_input=request_body.user_input,
             workflow_id=request_body.workflow_id or execution_meta.workflow_id,
             workflow_name=request_body.workflow_name or execution_meta.workflow_name,
-            interaction_id=request_body.interaction_id
+            interaction_id=request_body.interaction_id,
+            selected_collection=selected_collection
         )
         
         if chat_result["status"] == "success":
