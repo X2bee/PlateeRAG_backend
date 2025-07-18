@@ -16,10 +16,8 @@ from qdrant_client.models import (
 )
 
 logger = logging.getLogger("vector-manager")
-
 class VectorManager:
     """벡터 DB 관리를 담당하는 클래스"""
-    
     def __init__(self, vectordb_config):
         """VectorManager 초기화
         
@@ -62,6 +60,24 @@ class VectorManager:
     def is_connected(self) -> bool:
         """Qdrant 클라이언트 연결 상태 확인"""
         return self.client is not None
+    
+    def cleanup(self):
+        """VectorManager 리소스 정리"""
+        try:
+            if self.client:
+                if hasattr(self.client, 'close'):
+                    self.client.close()
+                    logger.info("Qdrant client closed")
+                elif hasattr(self.client, '_client') and hasattr(self.client._client, 'close'):
+                    self.client._client.close()
+                    logger.info("Qdrant underlying client closed")
+                
+                self.client = None
+                logger.info("VectorManager cleanup completed")
+        except Exception as e:
+            logger.warning(f"Error during VectorManager cleanup: {e}")
+        finally:
+            self.client = None
     
     def ensure_connected(self):
         """연결 상태 확인 및 필요시 재연결"""
@@ -544,4 +560,4 @@ class VectorManager:
                     )
                 )
         
-        return Filter(must=conditions) if conditions else None 
+        return Filter(must=conditions) if conditions else None

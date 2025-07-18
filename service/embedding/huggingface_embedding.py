@@ -176,4 +176,38 @@ class HuggingFaceEmbedding(BaseEmbedding):
             "dimension": self.get_embedding_dimension(),
             "api_key_configured": bool(self.api_key),
             "available": bool(self.model)
-        } 
+        }
+    
+    async def cleanup(self):
+        """HuggingFace 모델 리소스 정리"""
+        logger.info("Cleaning up HuggingFace embedding client: %s", self.model_name)
+        
+        if self.model:
+            try:
+                # 모델을 CPU로 이동 (GPU 메모리 해제)
+                if hasattr(self.model, 'to'):
+                    self.model.to('cpu')
+                
+                # PyTorch 캐시 정리
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    logger.info("PyTorch GPU cache cleared")
+                except ImportError:
+                    logger.info("PyTorch not available, skipping GPU cleanup")
+                    
+                # 모델 객체 정리
+                del self.model
+                self.model = None
+                
+                # 차원 정보 리셋
+                self._dimension = None
+                
+                logger.info("HuggingFace model cleanup completed")
+                
+            except Exception as e:
+                logger.warning("Error during HuggingFace model cleanup: %s", e)
+        
+        # 부모 클래스 cleanup 호출
+        await super().cleanup() 

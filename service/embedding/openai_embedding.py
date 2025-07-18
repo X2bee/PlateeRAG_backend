@@ -170,4 +170,28 @@ class OpenAIEmbedding(BaseEmbedding):
             "dimension": self.get_embedding_dimension(),
             "api_key_configured": bool(self.api_key),
             "available": bool(self.client)
-        } 
+        }
+    
+    async def cleanup(self):
+        """OpenAI 클라이언트 리소스 정리"""
+        logger.info("Cleaning up OpenAI embedding client: %s", self.model)
+        
+        if self.client:
+            try:
+                # OpenAI 클라이언트 연결 종료
+                await self.client.close()
+                logger.info("OpenAI client connection closed")
+                
+                # 클라이언트 객체 정리
+                self.client = None
+                
+                # 차원 정보 리셋
+                self._dimension = None
+                
+                logger.info("OpenAI client cleanup completed")
+                
+            except Exception as e:
+                logger.warning("Error during OpenAI client cleanup: %s", e)
+        
+        # 부모 클래스 cleanup 호출
+        await super().cleanup() 

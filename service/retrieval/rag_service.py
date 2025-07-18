@@ -37,6 +37,83 @@ class RAGService:
         
         self._initialize_embeddings()
     
+    def _config_refresh(self):
+        """설정 갱신 메서드 (필요시 호출)"""
+        logger.info("Refreshing RAGService configuration")
+        try:
+            from main import app
+            config_composer = app.state.config_composer
+        except ImportError:
+            logger.error("Cannot import app from main module")
+            raise Exception("Application state not available")
+        
+        # 새로운 설정 가져오기
+        new_vectordb_config = config_composer.get_config_by_category_name("vectordb")
+        new_openai_config = config_composer.get_config_by_category_name("openai")
+
+        self.config = new_vectordb_config
+        self.openai_config = new_openai_config
+    
+    def _cleanup_vector_manager(self):
+        """벡터 매니저 정리"""
+        if not self.vector_manager:
+            return
+        try:
+            if hasattr(self, 'vector_manager') and self.vector_manager:
+                self.vector_manager.cleanup()
+                logger.info("Vector manager cleaned up")
+        except Exception as e:
+            logger.warning(f"Error cleaning up vector manager: {e}")
+        finally:
+            self.vector_manager = None
+            import gc
+            gc.collect()
+            logger.info("Embedding client cleanup completed with garbage collection")
+
+    async def _cleanup_embeddings_client(self):
+        """임베딩 클라이언트 완전 정리 (메모리 해제)"""
+        if not self.embeddings_client:
+            return
+        try:
+            if hasattr(self.embeddings_client, 'cleanup'):
+                await self.embeddings_client.cleanup()
+                logger.info("Called embedding client cleanup method")
+            else:
+                logger.warning("Embedding client does not have cleanup method")
+                
+        except Exception as e:
+            logger.warning("Error during embedding client cleanup: %s", e)
+        finally:
+            self.embeddings_client = None
+            import gc
+            gc.collect()
+            logger.info("Embedding client cleanup completed with garbage collection")
+    
+    def _reinitialize_vector_manager(self):
+        """Vector Manager 재초기화 (설정 변경 시 호출)"""
+        logger.info("Reinitializing vector manager due to config change")
+        
+        # 벡터 DB 설정 로그 출력
+        print(f"[DEBUG] Vector DB Config:")
+        print(f"  - Host: {self.config.QDRANT_HOST.value}")
+        print(f"  - Port: {self.config.QDRANT_PORT.value}")
+        print(f"  - Use GRPC: {self.config.QDRANT_USE_GRPC.value}")
+        print(f"  - GRPC Port: {self.config.QDRANT_GRPC_PORT.value}")
+        print(f"  - Vector Dimension: {self.config.VECTOR_DIMENSION.value}")
+        print(f"  - Embedding Provider: {self.config.EMBEDDING_PROVIDER.value}")
+        
+        # 기존 vector_manager 정리
+        self._config_refresh()
+        self._cleanup_vector_manager()
+        
+        # 새로운 vector_manager 생성
+        try:
+            self.vector_manager = VectorManager(self.config)
+            logger.info("Vector manager reinitialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to reinitialize vector manager: {e}")
+            self.vector_manager = VectorManager(self.config)
+    
     def _initialize_embeddings(self):
         """임베딩 클라이언트 초기화 (팩토리 패턴 사용)"""
         max_retries = 1
@@ -64,6 +141,7 @@ class RAGService:
                             if old_dimension != dimension:
                                 logger.info(f"Updating vector dimension from {old_dimension} to {dimension}")
                                 self.config.VECTOR_DIMENSION.value = dimension
+                                self._reinitialize_vector_manager()
                         
                         return
                     except Exception as dim_error:
@@ -87,11 +165,16 @@ class RAGService:
                         if fallback != current_provider:
                             logger.info(f"Trying fallback provider: {fallback}")
                             if self.config.switch_embedding_provider(fallback):
+                                self._reinitialize_vector_manager()
                                 break
                     else:
                         # 모든 대체재 시도했지만 실패한 경우 HuggingFace로 강제 설정
                         logger.warning("All fallback providers failed. Forcing HuggingFace provider")
+                        old_provider = self.config.EMBEDDING_PROVIDER.value
                         self.config.EMBEDDING_PROVIDER.value = "huggingface"
+                        if old_provider != "huggingface":
+                            # provider가 변경되었으므로 vector_manager 재초기화
+                            self._reinitialize_vector_manager()
         
         # 모든 시도가 실패한 경우
         if not self.embeddings_client:
@@ -128,6 +211,7 @@ class RAGService:
             basic_check = self._check_client_basic_availability(self.embeddings_client)
             if not basic_check:
                 logger.warning("Embedding client basic check failed. Re-initializing...")
+                await self._cleanup_embeddings_client()
                 self._initialize_embeddings()
             else:
                 try:
@@ -135,11 +219,13 @@ class RAGService:
                     is_available = await self.embeddings_client.is_available()
                     if not is_available:
                         logger.warning("Embedding client availability check failed. Re-initializing...")
+                        await self._cleanup_embeddings_client()
                         self._initialize_embeddings()
                 except Exception as e:
                     logger.warning(f"Error checking embedding client availability: {e}")
                     # 네트워크 오류 등은 무시하고 기본 체크가 통과했으면 계속 진행
                     if not self._check_client_basic_availability(self.embeddings_client):
+                        await self._cleanup_embeddings_client()
                         self._initialize_embeddings()
         
         if not self.embeddings_client:
@@ -178,10 +264,13 @@ class RAGService:
     
     async def reload_embeddings_client(self):
         """임베딩 클라이언트 강제 재로드"""
-        logger.info("Reloading embedding client...")
-        self.embeddings_client = None
-        self._initialize_embeddings()
         
+        logger.info("Reloading embedding client...")
+        self._reinitialize_vector_manager()
+        await self._cleanup_embeddings_client()
+        
+        self._initialize_embeddings()
+                
         if self.embeddings_client:
             is_available = await self.embeddings_client.is_available()
             if is_available:

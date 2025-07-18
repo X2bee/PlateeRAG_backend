@@ -9,7 +9,6 @@ from controller.configController import router as configRouter
 from controller.workflowController import router as workflowController
 from controller.nodeStateController import router as nodeStateRouter
 from controller.performanceController import router as performanceRouter
-from controller.ragController import router as ragRouter
 from controller.embeddingController import router as embeddingRouter
 from controller.retrievalController import router as retrievalRouter
 from controller.interactionController import router as interactionRouter
@@ -147,7 +146,6 @@ app.include_router(configRouter)
 app.include_router(workflowController)
 app.include_router(nodeStateRouter)
 app.include_router(performanceRouter)
-app.include_router(ragRouter)
 app.include_router(embeddingRouter)
 app.include_router(retrievalRouter)
 app.include_router(interactionRouter)

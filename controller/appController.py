@@ -11,10 +11,21 @@ from typing import Dict, Any
 import logging
 
 from service.database.models.user import User
+from service.retrieval import RAGService
 
 logger = logging.getLogger("app-controller")
 router = APIRouter(prefix="/app", tags=["app"])
 
+def get_rag_service(request: Request) -> RAGService:
+    """RAG 서비스 의존성 주입"""
+    config_composer = request.app.state.config_composer
+    if config_composer:
+        vectordb_config = config_composer.get_config_by_category_name("vectordb")
+        openai_config = config_composer.get_config_by_category_name("openai")
+        return RAGService(vectordb_config, openai_config)
+    else:
+        raise HTTPException(status_code=500, detail="Configuration not available")
+    
 def get_config_composer(request: Request):
     """request.app.state에서 config_composer 가져오기"""
     if hasattr(request.app.state, 'config_composer') and request.app.state.config_composer:
@@ -146,3 +157,101 @@ async def create_demo_user(request: Request, user_data: UserCreateRequest):
         return {"message": "User created successfully", "user": user.to_dict()}
     else:
         raise HTTPException(status_code=500, detail="Failed to create user")
+
+# Health & Status Endpoints
+@router.get("/docs/health")
+async def health_check(request: Request):
+    """RAG 시스템 연결 상태 확인"""
+    try:
+        rag_service = get_rag_service(request)
+        
+        health_status = {
+            "qdrant_client": rag_service.vector_manager.is_connected(),
+            "embeddings_client": bool(rag_service.embeddings_client),
+            "embedding_provider": rag_service.config.EMBEDDING_PROVIDER.value
+        }
+        
+        if rag_service.vector_manager.is_connected():
+            collections = rag_service.vector_manager.list_collections()
+            health_status.update({
+                "collections_count": len(collections["collections"]),
+                "qdrant_status": "connected"
+            })
+        else:
+            health_status["qdrant_status"] = "disconnected"
+        
+        # 임베딩 클라이언트 상태 상세 확인
+        if rag_service.embeddings_client:
+            try:
+                is_available = await rag_service.embeddings_client.is_available()
+                health_status["embeddings_status"] = "available" if is_available else "unavailable"
+                health_status["embeddings_available"] = is_available
+            except Exception as e:
+                health_status["embeddings_status"] = "error"
+                health_status["embeddings_error"] = str(e)
+                health_status["embeddings_available"] = False
+        else:
+            health_status["embeddings_status"] = "not_initialized"
+            health_status["embeddings_available"] = False
+        
+        overall_status = "healthy" if all([
+            rag_service.vector_manager.is_connected(), 
+            rag_service.embeddings_client,
+            health_status.get("embeddings_available", False)
+        ]) else "partial"
+        
+        return {
+            "status": overall_status,
+            "message": "RAG system status check",
+            "components": health_status
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "message": f"Health check failed: {e}"
+        }
+        
+# Configuration Endpoints
+@router.get("/docs/config")
+async def get_rag_config(request: Request):
+    """현재 RAG 시스템 설정 조회"""
+    config_composer = get_config_composer(request)
+    
+    try:
+        if config_composer:
+            vectordb_config = config_composer.get_config_by_category_name("vectordb")
+            
+            return {
+                "vectordb": {
+                    "host": vectordb_config.QDRANT_HOST.value,
+                    "port": vectordb_config.QDRANT_PORT.value,
+                    "use_grpc": vectordb_config.QDRANT_USE_GRPC.value,
+                    "grpc_port": vectordb_config.QDRANT_GRPC_PORT.value,
+                    "collection_name": vectordb_config.COLLECTION_NAME.value,
+                    "vector_dimension": vectordb_config.VECTOR_DIMENSION.value,
+                    "replicas": vectordb_config.REPLICAS.value,
+                    "shards": vectordb_config.SHARDS.value
+                },
+                "embedding": {
+                    "provider": vectordb_config.EMBEDDING_PROVIDER.value,
+                    "auto_detect_dimension": vectordb_config.AUTO_DETECT_EMBEDDING_DIM.value,
+                    "openai": {
+                        "api_key_configured": bool(vectordb_config.get_openai_api_key()),
+                        "model": vectordb_config.OPENAI_EMBEDDING_MODEL.value
+                    },
+                    "huggingface": {
+                        "model_name": vectordb_config.HUGGINGFACE_MODEL_NAME.value,
+                        "api_key_configured": bool(vectordb_config.HUGGINGFACE_API_KEY.value)
+                    },
+                    "custom_http": {
+                        "url": vectordb_config.CUSTOM_EMBEDDING_URL.value,
+                        "model": vectordb_config.CUSTOM_EMBEDDING_MODEL.value,
+                        "api_key_configured": bool(vectordb_config.CUSTOM_EMBEDDING_API_KEY.value)
+                    }
+                }
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Configuration not available")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get config: {str(e)}")

@@ -166,4 +166,24 @@ class CustomHTTPEmbedding(BaseEmbedding):
             "dimension": self.get_embedding_dimension(),
             "api_key_configured": bool(self.api_key),
             "available": True  # is_available()로 실제 확인 필요
-        } 
+        }
+    
+    async def cleanup(self):
+        """Custom HTTP 클라이언트 리소스 정리"""
+        logger.info("Cleaning up Custom HTTP embedding client: %s", self.base_url)
+        
+        try:
+            # 설정 초기화
+            self._dimension = None
+            
+            # 헤더 정리 (민감한 정보 제거)
+            if "Authorization" in self.headers:
+                del self.headers["Authorization"]
+                
+            logger.info("Custom HTTP client cleanup completed")
+            
+        except Exception as e:
+            logger.warning("Error during Custom HTTP client cleanup: %s", e)
+        
+        # 부모 클래스 cleanup 호출
+        await super().cleanup() 
