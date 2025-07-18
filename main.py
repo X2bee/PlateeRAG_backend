@@ -1,25 +1,25 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Dict
 from controller.nodeController import router as nodeRouter
 from controller.configController import router as configRouter
-from controller.workflowController import router as workflowRouter
+from controller.workflowController import router as workflowController
 from controller.nodeStateController import router as nodeStateRouter
 from controller.performanceController import router as performanceRouter
 from controller.ragController import router as ragRouter
+from controller.embeddingController import router as embeddingRouter
+from controller.retrievalController import router as retrievalRouter
 from controller.interactionController import router as interactionRouter
 from controller.chatController import router as chatRouter
+from controller.appController import router as appRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from config.config_composer import config_composer
 from service.database import AppDatabaseManager
 from service.database.models import APPLICATION_MODELS
-from service.database.models.user import User
-from service.database.models.chat import ChatSession
-from service.database.models.performance import WorkflowExecution
+from service.retrieval import RAGService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,6 +65,37 @@ async def lifespan(app: FastAPI):
         configs = config_composer.initialize_remaining_configs()
         app.state.config = configs
         app.state.config_composer = config_composer
+        
+        # 4. RAG 서비스 초기화 (벡터 DB와 임베딩 제공자)
+        try:
+            logger.info("Initializing RAG services...")
+            rag_service = RAGService(configs["vectordb"], configs.get("openai"))
+            
+            # 앱 상태 업데이트 콜백 설정
+            def update_app_state_callback(service):
+                """RAG 서비스 변경 시 앱 상태 업데이트"""
+                app.state.rag_service = service
+                app.state.vector_manager = service.vector_manager
+                app.state.embedding_client = service.embeddings_client
+                app.state.document_processor = service.document_processor
+            
+            rag_service.set_app_state_callback(update_app_state_callback)
+            
+            # 개별 서비스들을 app.state에 등록
+            app.state.rag_service = rag_service
+            app.state.vector_manager = rag_service.vector_manager
+            app.state.embedding_client = rag_service.embeddings_client
+            app.state.document_processor = rag_service.document_processor
+            
+            logger.info("RAG services initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize RAG services: {e}")
+            # RAG 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
+            app.state.rag_service = None
+            app.state.vector_manager = None
+            app.state.embedding_client = None
+            app.state.document_processor = None
         
         config_composer.ensure_directories()
         validation_result = config_composer.validate_critical_configs()
@@ -123,123 +154,17 @@ app.add_middleware(
 
 app.include_router(nodeRouter)
 app.include_router(configRouter)
-app.include_router(workflowRouter)
+app.include_router(workflowController)
 app.include_router(nodeStateRouter)
 app.include_router(performanceRouter)
 app.include_router(ragRouter)
+app.include_router(embeddingRouter)
+app.include_router(retrievalRouter)
 app.include_router(interactionRouter)
 app.include_router(chatRouter)
+app.include_router(appRouter)
 
-@app.get("/app/status")
-async def get_app_status():
-    """애플리케이션 상태 정보 반환"""
-    return {
-        "config": {
-            "app_name": "PlateeRAG Backend",
-            "version": "1.0.0",
-            "environment": app.state.config["app"].ENVIRONMENT.value,
-            "debug_mode": app.state.config["app"].DEBUG_MODE.value
-        },
-        "node_count": getattr(app.state, 'node_count', 0),
-        "available_nodes": [node["id"] for node in getattr(app.state, 'node_registry', [])],
-        "status": "running"
-    }
-
-@app.get("/app/config")
-async def get_app_config():
-    """애플리케이션 설정 반환"""
-    try:
-        config_summary = config_composer.get_config_summary()
-        return config_summary
-    except Exception as e:
-        logger.error(f"Error getting app config: {e}")
-        return {"error": "Failed to get configuration"}
-
-@app.get("/app/config/persistent")
-async def get_persistent_configs():
-    """모든 PersistentConfig 설정 정보 반환"""
-    return config_composer.get_config_summary()
-
-@app.put("/app/config/persistent/{config_name}")
-async def update_persistent_config(config_name: str, new_value: dict):
-    """특정 PersistentConfig 값 업데이트"""
-    try:
-        config_obj = config_composer.get_config_by_name(config_name)
-        old_value = config_obj.value
-        
-        # 값 타입에 따라 적절히 변환
-        value = new_value.get("value")
-        if isinstance(config_obj.env_value, bool):
-            config_obj.value = bool(value)
-        elif isinstance(config_obj.env_value, int):
-            config_obj.value = int(value)
-        elif isinstance(config_obj.env_value, float):
-            config_obj.value = float(value)
-        else:
-            config_obj.value = str(value)
-        
-        config_obj.save()
-        
-        return {
-            "message": f"Config '{config_name}' updated successfully",
-            "old_value": old_value,
-            "new_value": config_obj.value
-        }
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Config '{config_name}' not found")
-    except (ValueError, TypeError) as e:
-        raise HTTPException(status_code=400, detail=f"Invalid value type: {e}")
-
-@app.post("/app/config/persistent/refresh")
-async def refresh_persistent_configs():
-    """모든 PersistentConfig를 데이터베이스에서 다시 로드"""
-    config_composer.refresh_all()
-    return {"message": "All persistent configs refreshed successfully from database"}
-
-@app.post("/app/config/persistent/save")
-async def save_persistent_configs():
-    """모든 PersistentConfig를 데이터베이스에 저장"""
-    config_composer.save_all()
-    return {"message": "All persistent configs saved successfully to database"}
-
-@app.put("/app/config")
-async def update_app_config(new_config: dict):
-    """애플리케이션 설정 업데이트"""
-    return {"message": "Config update not implemented yet", "received": new_config}
-
-@app.get("/demo/users")
-async def get_demo_users():
-    """데모용: 사용자 목록 조회"""
-    if not hasattr(app.state, 'app_db') or not app.state.app_db:
-        raise HTTPException(status_code=500, detail="Application database not available")
-    
-    users = app.state.app_db.find_all(User, limit=10)
-    return {
-        "users": [user.to_dict() for user in users],
-        "total": len(users)
-    }
-
-@app.post("/demo/users")
-async def create_demo_user(user_data: dict):
-    """데모용: 새 사용자 생성"""
-    if not hasattr(app.state, 'app_db') or not app.state.app_db:
-        raise HTTPException(status_code=500, detail="Application database not available")
-    
-    user = User(
-        username=user_data.get("username", ""),
-        email=user_data.get("email", ""),
-        full_name=user_data.get("full_name"),
-        password_hash="demo_hash_" + user_data.get("username", "")
-    )
-    
-    user_id = app.state.app_db.insert(user)
-    
-    if user_id:
-        user.id = user_id
-        return {"message": "User created successfully", "user": user.to_dict()}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to create user")
-
+# 기존 /app 엔드포인트들은 appController로 이동했으므로 여기서 제거
 
 if __name__ == "__main__":
     try:

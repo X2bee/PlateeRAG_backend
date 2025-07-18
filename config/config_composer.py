@@ -209,6 +209,11 @@ class ConfigComposer:
             self.logger.error("Failed to initialize remaining configurations: %s", e)
             raise
     
+    def get_all_config(self, **kwargs):
+        result = self.config_categories.copy()
+        result["all_configs"] = self.all_configs
+        return result
+    
     def get_config_by_name(self, config_name: str) -> PersistentConfig:
         """
         이름으로 특정 설정 가져오기
@@ -216,6 +221,14 @@ class ConfigComposer:
         if config_name in self.all_configs:
             return self.all_configs[config_name]
         raise KeyError(f"Configuration '{config_name}' not found")
+    
+    def get_config_by_category_name(self, category_name: str):
+        """
+        이름으로 특정 설정 가져오기
+        """
+        if category_name in self.config_categories:
+            return self.config_categories[category_name]
+        raise KeyError(f"Configuration '{category_name}' not found")
     
     def get_config_summary(self) -> Dict[str, Any]:
         """

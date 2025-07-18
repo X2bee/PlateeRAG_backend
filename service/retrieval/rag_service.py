@@ -30,7 +30,7 @@ class RAGService:
             openai_config: OpenAI 설정 객체 (하위 호환성)
         """
         self.config = vectordb_config
-        self.openai_config = openai_config  # 하위 호환성을 위해 유지
+        self.openai_config = openai_config
         
         # 컴포넌트 초기화
         self.document_processor = DocumentProcessor()
@@ -73,11 +73,11 @@ class RAGService:
                         logger.info(f"Embedding client initialized successfully: {provider}")
                         return
                 else:
-                    logger.warning(f"Embedding client created but not available: {provider}")
+                    logger.warning("Embedding client created but not available: %s", provider)
                     self.embeddings_client = None
                     
             except Exception as e:
-                logger.warning(f"Failed to initialize embeddings client '{provider}': {e}")
+                logger.warning("Failed to initialize embeddings client '%s': %s", provider, e)
                 self.embeddings_client = None
                 
                 # 다음 대체 제공자로 시도
@@ -188,6 +188,8 @@ class RAGService:
             is_available = await self.embeddings_client.is_available()
             if is_available:
                 logger.info("Embedding client reloaded successfully")
+                # 앱 상태 업데이트 콜백 호출
+                self._update_app_state()
                 return True
         
         logger.error("Failed to reload embedding client")
@@ -246,14 +248,15 @@ class RAGService:
                     detail=f"Failed to generate embeddings: {str(e)}. Provider: {self.config.EMBEDDING_PROVIDER.value}"
                 )
     
-    async def generate_query_embedding(self, query_text: str) -> List[float]:
+    async def generate_query_embedding(self, query_text: str, debug: bool = False) -> List[float]:
         """쿼리 텍스트를 임베딩으로 변환
         
         Args:
             query_text: 쿼리 텍스트
+            debug: 디버그 모드 (True시 디버그 로그 출력)
             
         Returns:
-            쿼리 임베딩 벡터
+            쿼리 임베딩 벡터 (List[float])
             
         Raises:
             HTTPException: 임베딩 생성 실패
@@ -272,24 +275,56 @@ class RAGService:
         
         try:
             embedding = await self.embeddings_client.embed_query(query_text)
-            logger.info(f"Generated query embedding for: {query_text[:50]}... using {self.config.EMBEDDING_PROVIDER.value}")
+            
+            if debug:
+                vector_stats = {
+                    "min": float(min(embedding)),
+                    "max": float(max(embedding)),
+                    "mean": float(sum(embedding) / len(embedding)),
+                    "norm": float(sum(x**2 for x in embedding)**0.5)
+                }
+                
+                logger.info("[DEBUG] Generated query embedding for: '%s...' using %s", query_text[:100], self.config.EMBEDDING_PROVIDER.value)
+                logger.info("[DEBUG] Embedding dimension: %s", len(embedding))
+                logger.info("[DEBUG] Vector stats: %s", vector_stats)
+                logger.info("[DEBUG] Full embedding vector: %s", embedding)
+            else:
+                logger.info("Generated query embedding for: %s... using %s", query_text[:50], self.config.EMBEDDING_PROVIDER.value)
+                
             return embedding
+                
         except Exception as e:
-            logger.error(f"Error generating query embedding: {e}")
+            logger.error("Error generating query embedding: %s", e)
             # 한 번 더 재시도 (클라이언트 재초기화 후)
             try:
                 logger.info("Retrying query embedding generation after client reload...")
                 await self.reload_embeddings_client()
                 await self.ensure_embeddings_client()
                 embedding = await self.embeddings_client.embed_query(query_text)
-                logger.info(f"Query embedding generation succeeded on retry")
+                
+                if debug:
+                    vector_stats = {
+                        "min": float(min(embedding)),
+                        "max": float(max(embedding)),
+                        "mean": float(sum(embedding) / len(embedding)),
+                        "norm": float(sum(x**2 for x in embedding)**0.5)
+                    }
+                    
+                    logger.info("[DEBUG] Query embedding generation succeeded on retry")
+                    logger.info("[DEBUG] Embedding dimension: %s", len(embedding))
+                    logger.info("[DEBUG] Vector stats: %s", vector_stats)
+                    logger.info("[DEBUG] Full embedding vector: %s", embedding)
+                else:
+                    logger.info("Query embedding generation succeeded on retry")
+                    
                 return embedding
+                    
             except Exception as retry_error:
-                logger.error(f"Query embedding generation failed on retry: {retry_error}")
+                logger.error("Query embedding generation failed on retry: %s", retry_error)
                 raise HTTPException(
                     status_code=500, 
                     detail=f"Failed to generate query embedding: {str(e)}. Provider: {self.config.EMBEDDING_PROVIDER.value}"
-                )
+                ) from retry_error
     
     async def process_document(self, file_path: str, collection_name: str, 
                              chunk_size: int = 1000, chunk_overlap: int = 200, 
@@ -793,4 +828,99 @@ class RAGService:
                 "provider": self.config.EMBEDDING_PROVIDER.value,
                 "error": str(e),
                 "available": False
-            } 
+            }
+    
+    def set_app_state_callback(self, callback):
+        """앱 상태 업데이트 콜백 설정"""
+        self.app_state_callback = callback
+    
+    def _update_app_state(self):
+        """앱 상태 업데이트 (콜백이 설정된 경우)"""
+        if hasattr(self, 'app_state_callback') and self.app_state_callback:
+            try:
+                self.app_state_callback(self)
+            except Exception as e:
+                logger.warning(f"Failed to update app state: {e}")
+    
+    def get_config(self) -> Dict[str, Any]:
+        """현재 RAG 서비스의 모든 설정 반환
+        
+        Returns:
+            RAG 서비스 설정 정보
+        """
+        try:
+            config_info = {
+                "vector_db": {
+                    "host": self.config.QDRANT_HOST.value,
+                    "port": self.config.QDRANT_PORT.value,
+                    "use_grpc": self.config.QDRANT_USE_GRPC.value,
+                    "grpc_port": self.config.QDRANT_GRPC_PORT.value,
+                    "collection_name": self.config.COLLECTION_NAME.value,
+                    "vector_dimension": self.config.VECTOR_DIMENSION.value,
+                    "replicas": self.config.REPLICAS.value,
+                    "shards": self.config.SHARDS.value,
+                    "connected": self.vector_manager.is_connected() if self.vector_manager else False
+                },
+                "embedding": {
+                    "provider": self.config.EMBEDDING_PROVIDER.value,
+                    "auto_detect_dimension": self.config.AUTO_DETECT_EMBEDDING_DIM.value,
+                    "client_initialized": bool(self.embeddings_client),
+                    "openai": {
+                        "api_key_configured": bool(self.config.get_openai_api_key()),
+                        "model": self.config.OPENAI_EMBEDDING_MODEL.value,
+                        "api_key_length": len(self.config.get_openai_api_key()) if self.config.get_openai_api_key() else 0
+                    },
+                    "huggingface": {
+                        "model_name": self.config.HUGGINGFACE_MODEL_NAME.value,
+                        "api_key_configured": bool(self.config.HUGGINGFACE_API_KEY.value),
+                        "api_key_length": len(self.config.HUGGINGFACE_API_KEY.value) if self.config.HUGGINGFACE_API_KEY.value else 0
+                    },
+                    "custom_http": {
+                        "url": self.config.CUSTOM_EMBEDDING_URL.value,
+                        "model": self.config.CUSTOM_EMBEDDING_MODEL.value,
+                        "api_key_configured": bool(self.config.CUSTOM_EMBEDDING_API_KEY.value),
+                        "api_key_length": len(self.config.CUSTOM_EMBEDDING_API_KEY.value) if self.config.CUSTOM_EMBEDDING_API_KEY.value else 0
+                    }
+                },
+                "document_processor": {
+                    "initialized": bool(self.document_processor),
+                    "supported_types": self.document_processor.get_supported_types() if self.document_processor else []
+                },
+                "service_status": {
+                    "initialized": True,
+                    "components": {
+                        "vector_manager": bool(self.vector_manager),
+                        "embeddings_client": bool(self.embeddings_client),
+                        "document_processor": bool(self.document_processor)
+                    }
+                }
+            }
+            
+            # 임베딩 클라이언트 상세 정보 추가
+            if self.embeddings_client:
+                try:
+                    provider_info = self.embeddings_client.get_provider_info()
+                    config_info["embedding"]["provider_info"] = provider_info
+                    
+                    # 차원 정보 추가
+                    try:
+                        dimension = self.embeddings_client.get_embedding_dimension()
+                        config_info["embedding"]["actual_dimension"] = dimension
+                    except Exception:
+                        config_info["embedding"]["actual_dimension"] = "unknown"
+                        
+                except Exception as e:
+                    config_info["embedding"]["provider_info_error"] = str(e)
+            
+            return config_info
+            
+        except Exception as e:
+            logger.error(f"Failed to get RAG service config: {e}")
+            return {
+                "error": str(e),
+                "basic_info": {
+                    "provider": self.config.EMBEDDING_PROVIDER.value if self.config else "unknown",
+                    "vector_db_connected": self.vector_manager.is_connected() if self.vector_manager else False,
+                    "embedding_client_initialized": bool(self.embeddings_client)
+                }
+            }
