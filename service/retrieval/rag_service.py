@@ -31,8 +31,6 @@ class RAGService:
         """
         self.config = vectordb_config
         self.openai_config = openai_config
-        
-        # 컴포넌트 초기화
         self.document_processor = DocumentProcessor()
         self.vector_manager = VectorManager(vectordb_config)
         self.embeddings_client = None
@@ -41,7 +39,7 @@ class RAGService:
     
     def _initialize_embeddings(self):
         """임베딩 클라이언트 초기화 (팩토리 패턴 사용)"""
-        max_retries = 3
+        max_retries = 1
         fallback_providers = ["huggingface", "openai", "custom_http"]
         
         for retry in range(max_retries):
@@ -188,8 +186,6 @@ class RAGService:
             is_available = await self.embeddings_client.is_available()
             if is_available:
                 logger.info("Embedding client reloaded successfully")
-                # 앱 상태 업데이트 콜백 호출
-                self._update_app_state()
                 return True
         
         logger.error("Failed to reload embedding client")
@@ -829,18 +825,6 @@ class RAGService:
                 "error": str(e),
                 "available": False
             }
-    
-    def set_app_state_callback(self, callback):
-        """앱 상태 업데이트 콜백 설정"""
-        self.app_state_callback = callback
-    
-    def _update_app_state(self):
-        """앱 상태 업데이트 (콜백이 설정된 경우)"""
-        if hasattr(self, 'app_state_callback') and self.app_state_callback:
-            try:
-                self.app_state_callback(self)
-            except Exception as e:
-                logger.warning(f"Failed to update app state: {e}")
     
     def get_config(self) -> Dict[str, Any]:
         """현재 RAG 서비스의 모든 설정 반환

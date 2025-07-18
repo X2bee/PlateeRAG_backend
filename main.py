@@ -71,16 +71,6 @@ async def lifespan(app: FastAPI):
             logger.info("Initializing RAG services...")
             rag_service = RAGService(configs["vectordb"], configs.get("openai"))
             
-            # 앱 상태 업데이트 콜백 설정
-            def update_app_state_callback(service):
-                """RAG 서비스 변경 시 앱 상태 업데이트"""
-                app.state.rag_service = service
-                app.state.vector_manager = service.vector_manager
-                app.state.embedding_client = service.embeddings_client
-                app.state.document_processor = service.document_processor
-            
-            rag_service.set_app_state_callback(update_app_state_callback)
-            
             # 개별 서비스들을 app.state에 등록
             app.state.rag_service = rag_service
             app.state.vector_manager = rag_service.vector_manager

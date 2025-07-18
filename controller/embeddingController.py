@@ -24,8 +24,8 @@ class EmbeddingTestRequest(BaseModel):
 
 def get_embedding_client(request: Request):
     """임베딩 클라이언트 의존성 주입"""
-    if hasattr(request.app.state, 'embedding_client') and request.app.state.embedding_client:
-        return request.app.state.embedding_client
+    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
+        return request.app.state.rag_service.embeddings_client
     else:
         raise HTTPException(status_code=500, detail="Embedding client not available")
 
