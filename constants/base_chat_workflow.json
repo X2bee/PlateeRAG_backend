@@ -1,0 +1,284 @@
+{
+  "workflow_name": "default_mode",
+  "workflow_id": "default_mode",
+  "view": {
+    "x": -62631,
+    "y": -31451.5,
+    "scale": 1
+  },
+  "nodes": [
+    {
+      "id": "agents/openai-1752919249808",
+      "data": {
+        "functionId": "agents",
+        "id": "agents/openai",
+        "nodeName": "Agent OpenAI",
+        "description": "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드",
+        "tags": [
+          "agent",
+          "chat",
+          "rag",
+          "openai"
+        ],
+        "inputs": [
+          {
+            "id": "text",
+            "name": "Text",
+            "type": "STR",
+            "multi": false,
+            "required": true
+          },
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DICT",
+            "multi": false,
+            "required": false
+          }
+        ],
+        "outputs": [
+          {
+            "id": "result",
+            "name": "Result",
+            "type": "STR"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "model",
+            "name": "Model",
+            "type": "STR",
+            "value": "gpt-4o",
+            "required": true,
+            "optional": false,
+            "options": [
+              {
+                "value": "gpt-3.5-turbo",
+                "label": "GPT-3.5 Turbo"
+              },
+              {
+                "value": "gpt-4",
+                "label": "GPT-4"
+              },
+              {
+                "value": "gpt-4o",
+                "label": "GPT-4o"
+              }
+            ]
+          },
+          {
+            "id": "temperature",
+            "name": "Temperature",
+            "type": "FLOAT",
+            "value": 0.7,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 2,
+            "step": 0.1
+          },
+          {
+            "id": "max_tokens",
+            "name": "Max Tokens",
+            "type": "INTEGER",
+            "value": 1000,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 4000,
+            "step": 1
+          }
+        ]
+      },
+      "position": {
+        "x": 63816,
+        "y": 31717.5
+      }
+    },
+    {
+      "id": "document_loaders/Qdrant-1752919252986",
+      "data": {
+        "functionId": "document_loaders",
+        "id": "document_loaders/Qdrant",
+        "nodeName": "Qdrant Search",
+        "description": "RAG 서비스와 검색 파라미터를 설정하여 다음 노드로 전달하는 노드",
+        "tags": [
+          "document_loader",
+          "qdrant",
+          "vector_db",
+          "rag",
+          "setup"
+        ],
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DICT"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "collection_name",
+            "name": "Collection Name",
+            "type": "STR",
+            "value": "zzz",
+            "required": true,
+            "options": [
+              {
+                "value": "zz2",
+                "label": "zz2"
+              },
+              {
+                "value": "zzz",
+                "label": "zzz"
+              }
+            ]
+          },
+          {
+            "id": "top_k",
+            "name": "Top K Results",
+            "type": "INT",
+            "value": 4,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 10,
+            "step": 1
+          },
+          {
+            "id": "score_threshold",
+            "name": "Score Threshold",
+            "type": "FLOAT",
+            "value": 0.5,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 1,
+            "step": 0.1
+          }
+        ]
+      },
+      "position": {
+        "x": 62883,
+        "y": 31691.5
+      }
+    },
+    {
+      "id": "tools/print_any-1752919256024",
+      "data": {
+        "functionId": "endnode",
+        "id": "tools/print_any",
+        "nodeName": "Print Any",
+        "description": "임의의 타입의 데이터를 입력받아 그대로 반환하는 출력 노드입니다. 워크플로우의 최종 결과를 확인하는데 사용됩니다.",
+        "tags": [
+          "output",
+          "print",
+          "display",
+          "debug",
+          "end_node",
+          "utility",
+          "any_type"
+        ],
+        "inputs": [
+          {
+            "id": "input_print",
+            "name": "Print",
+            "type": "ANY",
+            "multi": false,
+            "required": true
+          }
+        ],
+        "outputs": [],
+        "parameters": []
+      },
+      "position": {
+        "x": 64404,
+        "y": 31769.5
+      }
+    },
+    {
+      "id": "input_string-1752919257946",
+      "data": {
+        "functionId": "startnode",
+        "id": "input_string",
+        "nodeName": "Input String",
+        "description": "사용자가 설정한 문자열 값을 출력하는 입력 노드입니다. 워크플로우에서 텍스트 데이터의 시작점으로 사용됩니다.",
+        "tags": [
+          "input",
+          "string",
+          "text",
+          "parameter",
+          "source",
+          "start_node",
+          "user_input"
+        ],
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "result",
+            "name": "Result",
+            "type": "STR"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "input_str",
+            "name": "String",
+            "type": "STR",
+            "value": ""
+          }
+        ]
+      },
+      "position": {
+        "x": 63249,
+        "y": 32121.5
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-document_loaders/Qdrant-1752919252986:rag_context-agents/openai-1752919249808:rag_context-1752919261700",
+      "source": {
+        "nodeId": "document_loaders/Qdrant-1752919252986",
+        "portId": "rag_context",
+        "portType": "output",
+        "type": "DICT"
+      },
+      "target": {
+        "nodeId": "agents/openai-1752919249808",
+        "portId": "rag_context",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-input_string-1752919257946:result-agents/openai-1752919249808:text-1752919263549",
+      "source": {
+        "nodeId": "input_string-1752919257946",
+        "portId": "result",
+        "portType": "output",
+        "type": "STR"
+      },
+      "target": {
+        "nodeId": "agents/openai-1752919249808",
+        "portId": "text",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-agents/openai-1752919249808:result-tools/print_any-1752919256024:input_print-1752919264508",
+      "source": {
+        "nodeId": "agents/openai-1752919249808",
+        "portId": "result",
+        "portType": "output",
+        "type": "STR"
+      },
+      "target": {
+        "nodeId": "tools/print_any-1752919256024",
+        "portId": "input_print",
+        "portType": "input"
+      }
+    }
+  ],
+  "interaction_id": "default"
+}

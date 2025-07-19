@@ -19,6 +19,7 @@ class WorkflowRequest(BaseModel):
     workflow_id: str
     input_data: str = ""
     interaction_id: str = "default"
+    selected_collection: Optional[str] = None
 
 class WorkflowData(BaseModel):
     workflow_name: str
@@ -656,6 +657,9 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
             print("DEBUG: 기본 모드 워크플로우 실행")
             default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
             file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
+            with open(file_path, 'r', encoding='utf-8') as f:
+                workflow_data = json.load(f)
+            workflow_data = await _default_workflow_parameter_helper(request_body, workflow_data)
 
         else:
             print("DEBUG: 워크플로우 실행 요청", request_body)
@@ -708,7 +712,6 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)
         final_outputs = executor.execute_workflow()
 
-        # interaction_id가 default가 아닌 경우 interaction_count 증가
         if execution_meta:
             await update_execution_meta_count(db_manager, execution_meta)
 
@@ -730,3 +733,18 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+# Helper Functions
+async def _default_workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    """
+    if request_body.selected_collection:
+        for node in workflow_data.get('nodes', []):
+            if node.get('data', {}).get('functionId') == 'document_loaders':
+                parameters = node.get('data', {}).get('parameters', [])
+                for parameter in parameters:
+                    if parameter.get('id') == 'collection_name':
+                        parameter['value'] = request_body.selected_collection
+
+    return workflow_data
