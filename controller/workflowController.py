@@ -651,14 +651,20 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     """
     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
     """
-
     try:
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        if not request_body.workflow_name.endswith('.json'):
-            filename = f"{request_body.workflow_name}.json"
+        if request_body.workflow_name == 'default_mode':
+            print("DEBUG: 기본 모드 워크플로우 실행")
+            default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
+            file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
+
         else:
-            filename = request_body.workflow_name
-        file_path = os.path.join(downloads_path, filename)
+            print("DEBUG: 워크플로우 실행 요청", request_body)
+            downloads_path = os.path.join(os.getcwd(), "downloads")
+            if not request_body.workflow_name.endswith('.json'):
+                filename = f"{request_body.workflow_name}.json"
+            else:
+                filename = request_body.workflow_name
+            file_path = os.path.join(downloads_path, filename)
 
         with open(file_path, 'r', encoding='utf-8') as f:
             workflow_data = json.load(f)
@@ -689,14 +695,14 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
             db_manager = request.app.state.app_db
 
-        # interaction_id가 default가 아닌 경우 ExecutionMeta 관리
         execution_meta = None
         if request_body.interaction_id != "default" and db_manager:
             execution_meta = await get_or_create_execution_meta(
                 db_manager,
                 request_body.interaction_id,
                 request_body.workflow_id,
-                request_body.workflow_name
+                request_body.workflow_name,
+                request_body.input_data
             )
 
         executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)
@@ -708,7 +714,6 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
 
         response_data = {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
 
-        # ExecutionMeta 정보가 있으면 응답에 포함
         if execution_meta:
             response_data["execution_meta"] = {
                 "interaction_id": execution_meta.interaction_id,
@@ -725,294 +730,3 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
-@router.post("/conversation", response_model=Dict[str, Any])
-async def unified_conversation(request: Request, request_body: ConversationRequest):
-    """
-    통합 대화/워크플로우 실행 API
-    execution_type에 따라 채팅 또는 워크플로우 실행을 수행합니다.
-
-    Args:
-        execution_type: "default_mode" 또는 "workflow"
-        user_input: 사용자 입력
-        interaction_id: 상호작용 ID
-
-        # Chat 실행 시 사용:
-        workflow_id: 워크플로우 ID (선택적, 기본값: "default_mode")
-        workflow_name: 워크플로우 이름 (선택적, 기본값: "default_mode")
-        selected_collection: RAG 컬렉션 이름 (선택적)
-
-        # Workflow 실행 시 사용:
-        workflow_file_name: 실행할 워크플로우 파일명 (필수)
-    """
-    try:
-        logger.info(f"Unified conversation: type={request_body.execution_type}, interaction_id={request_body.interaction_id}")
-
-        # 공통 의존성 확인
-        if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
-        if not hasattr(request.app.state, 'config_composer'):
-            raise HTTPException(status_code=500, detail="Config composer not available")
-
-        db_manager = request.app.state.app_db
-        config_composer = request.app.state.config_composer
-
-        # ExecutionMeta 조회 또는 생성
-        execution_meta = await get_or_create_execution_meta(
-            db_manager,
-            request_body.interaction_id,
-            request_body.workflow_id,
-            request_body.workflow_name,
-            first_msg=request_body.user_input
-        )
-
-        if request_body.execution_type == "default_mode":
-            return await _execute_default_mode_conversation(
-                request, request_body, db_manager, config_composer
-            )
-        elif request_body.execution_type == "workflow":
-            return await _execute_workflow_conversation(
-                request, request_body, db_manager
-            )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid execution_type: {request_body.execution_type}. Must be 'cdefault_modehat' or 'workflow'"
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in unified_conversation: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-async def _execute_default_mode_conversation(
-    request: Request,
-    request_body: ConversationRequest,
-    db_manager,
-    config_composer,
-    execution_meta
-) -> Dict[str, Any]:
-    """채팅 대화 실행"""
-    try:
-        workflow_id = request_body.workflow_id
-        workflow_name = request_body.workflow_name
-
-        if workflow_id != "default_mode" or workflow_name != "default_mode":
-            if not request_body.workflow_id or not request_body.workflow_name:
-                raise HTTPException(
-                    status_code=400,
-                    detail="workflow_id and workflow_name are required for default mode execution"
-                )
-
-        # RAG 서비스 준비
-        rag_service = None
-        if request_body.selected_collection:
-            rag_service = get_rag_service(request)
-
-        # 대화 함수 생성
-        conversation = create_conversation_function(config_composer, db_manager, rag_service)
-
-        # 대화 실행
-        chat_result = await conversation(
-            user_input=request_body.user_input,
-            workflow_id=workflow_id,
-            workflow_name=workflow_name,
-            interaction_id=request_body.interaction_id,
-            selected_collection=request_body.selected_collection
-        )
-
-        if chat_result["status"] == "success":
-            # ExecutionIO에 채팅 로그 저장
-            await _save_chat_execution_io(
-                db_manager,
-                request_body.interaction_id,
-                workflow_id,
-                workflow_name,
-                request_body.user_input,
-                chat_result["ai_response"]
-            )
-
-            # ExecutionMeta 업데이트
-            await update_execution_meta_count(db_manager, execution_meta)
-
-            return JSONResponse(content={
-                "status": "success",
-                "execution_type": "chat",
-                "message": "Chat conversation completed successfully",
-                "user_input": request_body.user_input,
-                "ai_response": chat_result["ai_response"],
-                "interaction_id": request_body.interaction_id,
-                "session_id": chat_result["session_id"],
-                "execution_meta": {
-                    "interaction_id": execution_meta.interaction_id,
-                    "interaction_count": execution_meta.interaction_count + 1,
-                    "workflow_id": execution_meta.workflow_id,
-                    "workflow_name": execution_meta.workflow_name
-                },
-                "timestamp": chat_result["timestamp"]
-            })
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Chat execution failed: {chat_result.get('error_message')}"
-            )
-
-    except Exception as e:
-        logger.error(f"Error in chat conversation: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Chat conversation error: {str(e)}")
-
-async def _execute_workflow_conversation(
-    request: Request,
-    request_body: ConversationRequest,
-    db_manager,
-    execution_meta
-) -> Dict[str, Any]:
-    """워크플로우 실행"""
-    try:
-        if not request_body.workflow_file_name:
-            raise HTTPException(
-                status_code=400,
-                detail="workflow_file_name is required for workflow execution"
-            )
-
-        # 워크플로우 파일 로드
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        filename = request_body.workflow_file_name
-        if not filename.endswith('.json'):
-            filename = f"{filename}.json"
-        file_path = os.path.join(downloads_path, filename)
-
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail=f"Workflow file not found: {filename}")
-
-        with open(file_path, 'r', encoding='utf-8') as f:
-            workflow_data = json.load(f)
-
-        if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
-            raise ValueError(f"Invalid workflow data in file: {filename}")
-
-        # 워크플로우 ID 및 이름 추출
-        workflow_id = workflow_data.get('workflow_id', request_body.workflow_file_name)
-        workflow_name = workflow_data.get('workflow_name', request_body.workflow_file_name)
-
-        logger.info(f"Executing workflow: {workflow_name} ({workflow_id})")
-        logger.info(f"Input data: {request_body.user_input}")
-
-        # 입력 데이터를 startnode에 설정
-        if request_body.user_input:
-            for node in workflow_data.get('nodes', []):
-                if node.get('data', {}).get('functionId') == 'startnode':
-                    parameters = node.get('data', {}).get('parameters', [])
-                    if parameters and isinstance(parameters, list):
-                        parameters[0]['value'] = request_body.user_input
-                        break
-
-        # 워크플로우 실행
-        executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)
-        final_outputs = executor.execute_workflow()
-
-        # ExecutionMeta 업데이트
-        if execution_meta:
-            await update_execution_meta_count(db_manager, execution_meta)
-
-        response_data = {
-            "status": "success",
-            "execution_type": "workflow",
-            "message": "Workflow execution completed successfully",
-            "user_input": request_body.user_input,
-            "workflow_outputs": final_outputs,
-            "interaction_id": request_body.interaction_id,
-            "workflow_id": workflow_id,
-            "workflow_name": workflow_name,
-            "timestamp": datetime.now().isoformat()
-        }
-
-        # ExecutionMeta 정보가 있으면 응답에 포함
-        if execution_meta:
-            response_data["execution_meta"] = {
-                "interaction_id": execution_meta.interaction_id,
-                "interaction_count": execution_meta.interaction_count + 1,
-                "workflow_id": execution_meta.workflow_id,
-                "workflow_name": execution_meta.workflow_name
-            }
-
-        return JSONResponse(content=response_data)
-
-    except Exception as e:
-        logger.error(f"Error in workflow conversation: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Workflow conversation error: {str(e)}")
-
-async def _save_chat_execution_io(
-    db_manager,
-    interaction_id: str,
-    workflow_id: str,
-    workflow_name: str,
-    user_input: str,
-    ai_response: str
-):
-    """채팅 실행 결과를 ExecutionIO 테이블에 저장합니다."""
-    try:
-        # 입력 데이터 (사용자 메시지)
-        input_data = {
-            "node_id": "chat_input",
-            "node_name": "Chat Input",
-            "inputs": {
-                "user_input": user_input
-            },
-            "result": user_input
-        }
-
-        # 출력 데이터 (AI 응답)
-        output_data = {
-            "node_id": "chat_output",
-            "node_name": "Chat Output",
-            "inputs": {
-                "ai_response": ai_response
-            },
-            "result": ai_response
-        }
-
-        # JSON 형태로 변환하여 저장
-        input_json = json.dumps(input_data, ensure_ascii=False)
-        output_json = json.dumps(output_data, ensure_ascii=False)
-
-        # DB 타입에 따른 쿼리 준비
-        db_type = db_manager.config_db_manager.db_type
-        if db_type == "postgresql":
-            query = """
-                INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
-                VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            """
-        else:  # SQLite
-            query = """
-                INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """
-
-        db_manager.config_db_manager.execute_query(
-            query,
-            (interaction_id, workflow_id, workflow_name, input_json, output_json)
-        )
-
-        logger.info(f"Chat ExecutionIO 데이터 저장 완료: interaction_id={interaction_id}, workflow_id={workflow_id}")
-
-    except Exception as e:
-        logger.error(f"Chat ExecutionIO 저장 중 오류 발생: {str(e)}")
-        # 로그 저장 실패해도 전체 실행은 계속 진행
-
-        response_data = {
-            "workflow_name": workflow_name,
-            "workflow_id": workflow_id,
-            "interaction_id": interaction_id,
-            "deleted_count": delete_count,
-            "message": f"Successfully deleted {delete_count} execution logs"
-        }
-
-        logger.info(f"Deleted {delete_count} execution logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
-        return JSONResponse(content=response_data)
-
-    except Exception as e:
-        logger.error(f"Error deleting execution logs: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete execution logs: {str(e)}")
