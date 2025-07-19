@@ -211,7 +211,7 @@ class AgentOpenAINode(Node):
                         logger.info("main 모듈에서 RAG 서비스를 찾았습니다.")
 
             # 설정 초기화 (필요한 경우)
-            api_key = config_composer.get_config_by_name("OPENAI_API_KEY").get("value", "")
+            api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
 
             if not api_key:
                 return "OpenAI API 키가 설정되지 않았습니다."

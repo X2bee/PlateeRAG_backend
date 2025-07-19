@@ -13,6 +13,7 @@ from pathlib import Path
 
 from editor.node_composer import (
     run_discovery,
+    run_force_discovery,
     generate_json_spec,
     get_node_registry,
     get_node_class_registry
@@ -78,15 +79,14 @@ async def refresh_nodes():
     """
     try:
         from editor.node_composer import NODE_REGISTRY
-        run_discovery()
+        run_force_discovery()
         output_filename = "./constants/exported_nodes.json"
         generate_json_spec(output_path=output_filename)
         if not os.path.exists(output_filename):
             raise HTTPException(status_code=500, detail="Failed to generate nodes JSON file.")
 
         else:
-            nodes = get_node_list()
-            return nodes
+            return {"status": "success", "message": "Nodes exported successfully", "file": output_filename}
 
     except Exception as e:
         logging.error(f"Error listing nodes: {e}")

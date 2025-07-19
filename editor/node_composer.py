@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import pkgutil
 import importlib
@@ -131,6 +132,42 @@ def run_discovery() -> None:
             importlib.import_module(module_info.name)
         except Exception as e:
             print(f"Error importing module {module_info.name}: {e}")
+
+def run_force_discovery() -> None:
+    """모든 노드 모듈을 강제로 다시 로드하여 __init_subclass__ 메서드가 다시 실행되도록 합니다."""
+    # 기존 레지스트리 초기화
+    clear_registries()
+
+    nodes_root_dir = Path(__file__).parent / "nodes"
+    for module_info in pkgutil.walk_packages(path=[str(nodes_root_dir)], prefix='editor.nodes.'):
+        try:
+            # 모듈이 이미 로드된 경우 다시 로드
+            if module_info.name in sys.modules:
+                module = sys.modules[module_info.name]
+
+                # 모듈에 Node 서브클래스가 있는지 확인
+                has_node_classes = False
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if (isinstance(attr, type) and
+                        issubclass(attr, Node) and
+                        attr != Node and
+                        hasattr(attr, '__init_subclass__')):
+                        has_node_classes = True
+                        break
+
+                if has_node_classes:
+                    print(f"Force reloading module: {module_info.name}")
+                    importlib.reload(module)
+                else:
+                    # Node 클래스가 없는 모듈은 일반 import
+                    importlib.import_module(module_info.name)
+            else:
+                # 새로운 모듈은 일반 import
+                importlib.import_module(module_info.name)
+
+        except Exception as e:
+            print(f"Error force importing module {module_info.name}: {e}")
 
 def generate_json_spec(output_path="export_nodes.json"):
     """등록된 노드 정보를 새로운 프론트엔드 형식에 맞춰 JSON 파일로 저장합니다."""
