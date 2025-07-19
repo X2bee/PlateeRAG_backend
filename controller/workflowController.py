@@ -748,6 +748,15 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
 
 async def _workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
     """
+    Updates the workflow data by setting the interaction ID in the parameters of nodes
+    with a function ID of 'memory', if applicable.
+
+    Args:
+        request_body: An object containing the interaction ID to be applied.
+        workflow_data: A dictionary representing the workflow's nodes and their parameters.
+
+    Returns:
+        The updated workflow data with the interaction ID applied where necessary.
     """
     if (request_body.interaction_id) and (request_body.interaction_id != "default"):
         for node in workflow_data.get('nodes', []):
