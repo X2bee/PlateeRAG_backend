@@ -36,15 +36,10 @@ class ConversationRequest(BaseModel):
     """통합 대화/워크플로우 실행 요청 모델"""
     user_input: str
     interaction_id: str
-    execution_type: str = "chat"  # "chat" 또는 "workflow"
-
-    # Chat 관련 필드
+    execution_type: str = "default_mode"  # "default_mode" 또는 "workflow"
     workflow_id: Optional[str] = None
     workflow_name: Optional[str] = None
     selected_collection: Optional[str] = None
-
-    # Workflow 관련 필드 (execution_type이 "workflow"일 때 필수)
-    workflow_file_name: Optional[str] = None
 
 def get_rag_service(request: Request):
     """RAG 서비스 의존성 주입"""
@@ -249,114 +244,6 @@ async def list_workflows_detail():
     except Exception as e:
         logger.error(f"Error listing workflow details: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
-
-@router.post("/execute", response_model=Dict[str, Any])
-async def execute_workflow(request: Request, workflow: WorkflowData):
-    """
-    주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
-    """
-
-    # print("DEBUG: 워크플로우 실행 요청\n", workflow)
-
-    try:
-        workflow_data = workflow.dict()
-
-        # 데이터베이스 매니저 가져오기
-        db_manager = None
-        if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
-            db_manager = request.app.state.app_db
-
-        executor = WorkflowExecutor(workflow_data, db_manager, workflow.interaction_id)
-        final_outputs = executor.execute_workflow()
-
-        return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
-
-    except ValueError as e:
-        logging.error(f"Workflow execution error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-
-@router.post("/execute/based_id", response_model=Dict[str, Any])
-async def execute_workflow_with_id(request: Request, request_body: WorkflowRequest):
-    """
-    주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
-    """
-
-    try:
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        if not request_body.workflow_name.endswith('.json'):
-            filename = f"{request_body.workflow_name}.json"
-        else:
-            filename = request_body.workflow_name
-        file_path = os.path.join(downloads_path, filename)
-
-        with open(file_path, 'r', encoding='utf-8') as f:
-            workflow_data = json.load(f)
-
-        if workflow_data.get('workflow_id') != request_body.workflow_id:
-            raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {request_body.workflow_id}")
-
-        if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
-            raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
-
-        print("--- 워크플로우 실행 시작 ---")
-        print(f"실행 워크플로우: {request_body.workflow_name} ({request_body.workflow_id})")
-        print(f"입력 데이터: {request_body.input_data}")
-
-        print(f"워크플로우 데이터: {workflow_data}")
-
-        if request_body.input_data is not None:
-            for node in workflow_data.get('nodes', []):
-                if node.get('data', {}).get('functionId') == 'startnode':
-                    parameters = node.get('data', {}).get('parameters', [])
-                    if parameters and isinstance(parameters, list):
-                        parameters[0]['value'] = request_body.input_data
-                        break
-
-        print(f"워크플로우 데이터: {workflow_data}")
-        # 데이터베이스 매니저 가져오기
-        db_manager = None
-        if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
-            db_manager = request.app.state.app_db
-
-        # interaction_id가 default가 아닌 경우 ExecutionMeta 관리
-        execution_meta = None
-        if request_body.interaction_id != "default" and db_manager:
-            execution_meta = await get_or_create_execution_meta(
-                db_manager,
-                request_body.interaction_id,
-                request_body.workflow_id,
-                request_body.workflow_name
-            )
-
-        executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)
-        final_outputs = executor.execute_workflow()
-
-        # interaction_id가 default가 아닌 경우 interaction_count 증가
-        if execution_meta:
-            await update_execution_meta_count(db_manager, execution_meta)
-
-        response_data = {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
-
-        # ExecutionMeta 정보가 있으면 응답에 포함
-        if execution_meta:
-            response_data["execution_meta"] = {
-                "interaction_id": execution_meta.interaction_id,
-                "interaction_count": execution_meta.interaction_count + 1,
-                "workflow_id": execution_meta.workflow_id,
-                "workflow_name": execution_meta.workflow_name
-            }
-
-        return response_data
-
-    except ValueError as e:
-        logging.error(f"Workflow execution error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/performance")
 async def get_workflow_performance(request: Request, workflow_name: str, workflow_id: str):
@@ -731,6 +618,113 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
         logger.error(f"Error deleting workflow logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")
 
+@router.post("/execute", response_model=Dict[str, Any])
+async def execute_workflow(request: Request, workflow: WorkflowData):
+    """
+    주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
+    """
+
+    # print("DEBUG: 워크플로우 실행 요청\n", workflow)
+
+    try:
+        workflow_data = workflow.dict()
+
+        # 데이터베이스 매니저 가져오기
+        db_manager = None
+        if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
+            db_manager = request.app.state.app_db
+
+        executor = WorkflowExecutor(workflow_data, db_manager, workflow.interaction_id)
+        final_outputs = executor.execute_workflow()
+
+        return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
+
+    except ValueError as e:
+        logging.error(f"Workflow execution error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.post("/execute/based_id", response_model=Dict[str, Any])
+async def execute_workflow_with_id(request: Request, request_body: WorkflowRequest):
+    """
+    주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
+    """
+
+    try:
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        if not request_body.workflow_name.endswith('.json'):
+            filename = f"{request_body.workflow_name}.json"
+        else:
+            filename = request_body.workflow_name
+        file_path = os.path.join(downloads_path, filename)
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            workflow_data = json.load(f)
+
+        if workflow_data.get('workflow_id') != request_body.workflow_id:
+            raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {request_body.workflow_id}")
+
+        if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
+            raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
+
+        print("--- 워크플로우 실행 시작 ---")
+        print(f"실행 워크플로우: {request_body.workflow_name} ({request_body.workflow_id})")
+        print(f"입력 데이터: {request_body.input_data}")
+
+        print(f"워크플로우 데이터: {workflow_data}")
+
+        if request_body.input_data is not None:
+            for node in workflow_data.get('nodes', []):
+                if node.get('data', {}).get('functionId') == 'startnode':
+                    parameters = node.get('data', {}).get('parameters', [])
+                    if parameters and isinstance(parameters, list):
+                        parameters[0]['value'] = request_body.input_data
+                        break
+
+        print(f"워크플로우 데이터: {workflow_data}")
+        # 데이터베이스 매니저 가져오기
+        db_manager = None
+        if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
+            db_manager = request.app.state.app_db
+
+        # interaction_id가 default가 아닌 경우 ExecutionMeta 관리
+        execution_meta = None
+        if request_body.interaction_id != "default" and db_manager:
+            execution_meta = await get_or_create_execution_meta(
+                db_manager,
+                request_body.interaction_id,
+                request_body.workflow_id,
+                request_body.workflow_name
+            )
+
+        executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)
+        final_outputs = executor.execute_workflow()
+
+        # interaction_id가 default가 아닌 경우 interaction_count 증가
+        if execution_meta:
+            await update_execution_meta_count(db_manager, execution_meta)
+
+        response_data = {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
+
+        # ExecutionMeta 정보가 있으면 응답에 포함
+        if execution_meta:
+            response_data["execution_meta"] = {
+                "interaction_id": execution_meta.interaction_id,
+                "interaction_count": execution_meta.interaction_count + 1,
+                "workflow_id": execution_meta.workflow_id,
+                "workflow_name": execution_meta.workflow_name
+            }
+
+        return response_data
+
+    except ValueError as e:
+        logging.error(f"Workflow execution error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.post("/conversation", response_model=Dict[str, Any])
 async def unified_conversation(request: Request, request_body: ConversationRequest):
@@ -739,7 +733,7 @@ async def unified_conversation(request: Request, request_body: ConversationReque
     execution_type에 따라 채팅 또는 워크플로우 실행을 수행합니다.
 
     Args:
-        execution_type: "chat" 또는 "workflow"
+        execution_type: "default_mode" 또는 "workflow"
         user_input: 사용자 입력
         interaction_id: 상호작용 ID
 
@@ -764,8 +758,17 @@ async def unified_conversation(request: Request, request_body: ConversationReque
         db_manager = request.app.state.app_db
         config_composer = request.app.state.config_composer
 
-        if request_body.execution_type == "chat":
-            return await _execute_chat_conversation(
+        # ExecutionMeta 조회 또는 생성
+        execution_meta = await get_or_create_execution_meta(
+            db_manager,
+            request_body.interaction_id,
+            request_body.workflow_id,
+            request_body.workflow_name,
+            first_msg=request_body.user_input
+        )
+
+        if request_body.execution_type == "default_mode":
+            return await _execute_default_mode_conversation(
                 request, request_body, db_manager, config_composer
             )
         elif request_body.execution_type == "workflow":
@@ -775,7 +778,7 @@ async def unified_conversation(request: Request, request_body: ConversationReque
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid execution_type: {request_body.execution_type}. Must be 'chat' or 'workflow'"
+                detail=f"Invalid execution_type: {request_body.execution_type}. Must be 'cdefault_modehat' or 'workflow'"
             )
 
     except HTTPException:
@@ -784,26 +787,24 @@ async def unified_conversation(request: Request, request_body: ConversationReque
         logger.error(f"Error in unified_conversation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-async def _execute_chat_conversation(
+async def _execute_default_mode_conversation(
     request: Request,
     request_body: ConversationRequest,
     db_manager,
-    config_composer
+    config_composer,
+    execution_meta
 ) -> Dict[str, Any]:
     """채팅 대화 실행"""
     try:
-        # 기본값 설정
-        workflow_id = request_body.workflow_id or "default_mode"
-        workflow_name = request_body.workflow_name or "default_mode"
+        workflow_id = request_body.workflow_id
+        workflow_name = request_body.workflow_name
 
-        # ExecutionMeta 조회 또는 생성
-        execution_meta = await get_or_create_execution_meta(
-            db_manager,
-            request_body.interaction_id,
-            workflow_id,
-            workflow_name,
-            first_msg=request_body.user_input
-        )
+        if workflow_id != "default_mode" or workflow_name != "default_mode":
+            if not request_body.workflow_id or not request_body.workflow_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="workflow_id and workflow_name are required for default mode execution"
+                )
 
         # RAG 서비스 준비
         rag_service = None
@@ -865,7 +866,8 @@ async def _execute_chat_conversation(
 async def _execute_workflow_conversation(
     request: Request,
     request_body: ConversationRequest,
-    db_manager
+    db_manager,
+    execution_meta
 ) -> Dict[str, Any]:
     """워크플로우 실행"""
     try:
@@ -906,17 +908,6 @@ async def _execute_workflow_conversation(
                     if parameters and isinstance(parameters, list):
                         parameters[0]['value'] = request_body.user_input
                         break
-
-        # ExecutionMeta 관리
-        execution_meta = None
-        if request_body.interaction_id != "default":
-            execution_meta = await get_or_create_execution_meta(
-                db_manager,
-                request_body.interaction_id,
-                workflow_id,
-                workflow_name,
-                first_msg=request_body.user_input
-            )
 
         # 워크플로우 실행
         executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)

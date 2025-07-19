@@ -32,7 +32,7 @@ class Node(ABC):
     nodeId: str = "Default"
     nodeName: str = "Default"
     description: str = "Default description"
-    tags: List[str] = [] 
+    tags: List[str] = []
     inputs: List[Port] = []
     outputs: List[Port] = []
     parameters: List[Parameter] = []
@@ -41,9 +41,9 @@ class Node(ABC):
         super().__init_subclass__(**kwargs)
         if cls.__name__ == 'Node':
             return
-        
+
         is_valid = True
-        
+
         if not hasattr(cls, 'categoryId') or cls.categoryId not in CATEGORIES_LABEL_MAP:
             is_valid = False
             allowed = list(CATEGORIES_LABEL_MAP.keys())
@@ -60,7 +60,7 @@ class Node(ABC):
                 f"[Node Registration Failed] Node '{cls.__name__}': 'functionId' is invalid.\n"
                 f"-> Assigned value: '{getattr(cls, 'functionId', 'not defined')}' (Allowed values: {allowed})\n"
             )
-        
+
         # 3. 파라미터 유효성 검사
         if hasattr(cls, 'parameters') and cls.parameters:
             params_valid, param_errors = validate_parameters(cls.parameters)
@@ -69,10 +69,34 @@ class Node(ABC):
                 print(f"[Node Registration Failed] Node '{cls.__name__}': Parameter validation failed.")
                 for error in param_errors:
                     print(f"  -> {error}")
-            
+
         if not is_valid:
             return
-        
+
+        # 파라미터의 함수형 options를 처리
+        processed_parameters = []
+        for param in cls.parameters:
+            processed_param = param.copy()
+
+            # options가 함수인 경우 처리
+            if 'options' in processed_param and callable(processed_param['options']):
+                try:
+                    # 실제 인스턴스를 생성해서 함수 호출
+                    try:
+                        temp_instance = cls()
+                        options_result = processed_param['options'](temp_instance)
+                        processed_param['options'] = options_result
+                        print(f"  -> Parameter '{param['id']}' options resolved: {len(options_result) if options_result else 0} items")
+                    except Exception as init_error:
+                        # __init__ 실패 시 빈 배열로 대체
+                        print(f"  -> Warning: Could not initialize instance for '{param['id']}' options: {init_error}")
+                        processed_param['options'] = []
+                except Exception as e:
+                    print(f"  -> Warning: Failed to resolve options for parameter '{param['id']}': {e}")
+                    processed_param['options'] = []
+
+            processed_parameters.append(processed_param)
+
         category_name = CATEGORIES_LABEL_MAP.get(cls.categoryId, "Unknown Category")
         function_name = FUNCTION_LABEL_MAP.get(cls.functionId, "Unknown Function")
 
@@ -87,7 +111,7 @@ class Node(ABC):
             "tags": cls.tags,
             "inputs": cls.inputs,
             "outputs": cls.outputs,
-            "parameters": cls.parameters
+            "parameters": processed_parameters
         }
         NODE_REGISTRY.append(spec)
         NODE_CLASS_REGISTRY[cls.nodeId] = cls
@@ -115,12 +139,12 @@ def generate_json_spec(output_path="export_nodes.json"):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
         print(f"Created directory: {output_dir}")
-    
+
     categories = {}
     for node_spec in NODE_REGISTRY:
         cat_id = node_spec["categoryId"]
         if cat_id not in categories:
-            
+
             icon_name = ICON_LABEL_MAP.get(cat_id, "Unknown Function")
             categories[cat_id] = {
                 "categoryId": cat_id,
@@ -128,7 +152,7 @@ def generate_json_spec(output_path="export_nodes.json"):
                 "icon": icon_name,
                 "functions": {}
             }
-        
+
         func_id = node_spec["functionId"]
         if func_id not in categories[cat_id]["functions"]:
             categories[cat_id]["functions"][func_id] = {
@@ -136,7 +160,7 @@ def generate_json_spec(output_path="export_nodes.json"):
                 "functionName": node_spec["functionName"],
                 "nodes": []
             }
-        
+
         node_info = {k: v for k, v in node_spec.items() if k not in ['categoryId', 'categoryName', 'functionName']}
         categories[cat_id]["functions"][func_id]["nodes"].append(node_info)
 
