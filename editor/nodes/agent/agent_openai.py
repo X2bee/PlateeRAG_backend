@@ -191,10 +191,10 @@ class AgentOpenAINode(Node):
             if "chunk_text" in item and item["chunk_text"]:
                 score = item.get("score", 0.0)
                 chunk_text = item["chunk_text"]
-                context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\\n{chunk_text}")
+                context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
 
         if context_parts:
-            context_text = "\\n".join(context_parts)
+            context_text = "\n".join(context_parts)
             enhanced_prompt = f"""다음 제시되는 문서들을 참고하여 사용자 질문에 효과적으로 활용하세요:
 [참고 문서]
 {context_text}"""
