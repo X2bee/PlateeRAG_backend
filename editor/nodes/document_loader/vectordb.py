@@ -143,6 +143,7 @@ class QdrantNode(Node):
                     "top_k": top_k,
                     "score_threshold": score_threshold
                 },
+                "status": "ready"
             }
 
             logger.info(f"RAG 컨텍스트 준비 완료: {rag_context['search_params']}")

@@ -138,31 +138,31 @@ class AgentOpenAINode(Node):
     def _perform_rag_search(self, rag_service, query: str, search_params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """RAG 서비스를 사용하여 문서 검색 수행 (동기 함수에서 비동기 호출)"""
         try:
-            # 비동기 함수를 동기 환경에서 실행
+            import asyncio
+            import concurrent.futures
+
+            # 비동기 함수를 실행하기 위한 헬퍼 함수
+            async def async_search():
+                return await rag_service.search_documents(
+                    collection_name=search_params["collection_name"],
+                    query_text=query,
+                    limit=search_params["top_k"],
+                    score_threshold=search_params["score_threshold"]
+                )
+
             try:
                 # 현재 이벤트 루프가 있는지 확인
                 loop = asyncio.get_running_loop()
-                # 새 태스크로 실행
-                future = asyncio.create_task(
-                    rag_service.search_documents(
-                        collection_name=search_params["collection_name"],
-                        query_text=query,
-                        limit=search_params["top_k"],
-                        score_threshold=search_params["score_threshold"]
-                    )
-                )
-                result = loop.run_until_complete(future)
-                return result
+
+                # 이미 실행 중인 루프가 있다면 ThreadPoolExecutor를 사용
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, async_search())
+                    result = future.result(timeout=30)  # 30초 타임아웃
+                    return result
+
             except RuntimeError:
                 # 이벤트 루프가 없는 경우 새로 생성
-                result = asyncio.run(
-                    rag_service.search_documents(
-                        collection_name=search_params["collection_name"],
-                        query_text=query,
-                        limit=search_params["top_k"],
-                        score_threshold=search_params["score_threshold"]
-                    )
-                )
+                result = asyncio.run(async_search())
                 return result
 
         except Exception as e:
