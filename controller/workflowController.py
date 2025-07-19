@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import os
 import json
 import logging
@@ -9,6 +9,7 @@ from datetime import datetime
 from editor.workflow_executor import WorkflowExecutor
 from service.database.models.executor import ExecutionMeta
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
+from service.general_function import create_conversation_function
 
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/api/workflow", tags=["workflow"])
@@ -31,6 +32,29 @@ class SaveWorkflowRequest(BaseModel):
     workflow_id: str
     content: WorkflowData
 
+class ConversationRequest(BaseModel):
+    """통합 대화/워크플로우 실행 요청 모델"""
+    user_input: str
+    interaction_id: str
+    execution_type: str = "chat"  # "chat" 또는 "workflow"
+
+    # Chat 관련 필드
+    workflow_id: Optional[str] = None
+    workflow_name: Optional[str] = None
+    selected_collection: Optional[str] = None
+
+    # Workflow 관련 필드 (execution_type이 "workflow"일 때 필수)
+    workflow_file_name: Optional[str] = None
+
+def get_rag_service(request: Request):
+    """RAG 서비스 의존성 주입"""
+    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
+        return request.app.state.rag_service
+    else:
+        raise HTTPException(status_code=500, detail="RAG service not available")
+
+
+
 @router.get("/list")
 async def list_workflows():
     """
@@ -38,21 +62,21 @@ async def list_workflows():
     """
     try:
         downloads_path = os.path.join(os.getcwd(), "downloads")
-        
+
         # downloads 폴더가 존재하지 않으면 생성
         if not os.path.exists(downloads_path):
             os.makedirs(downloads_path)
             return JSONResponse(content={"workflows": []})
-        
+
         # .json 확장자를 가진 파일들만 필터링
         workflow_files = []
         for file in os.listdir(downloads_path):
             if file.endswith('.json'):
                 workflow_files.append(file)
-        
+
         logger.info(f"Found {len(workflow_files)} workflow files")
         return JSONResponse(content={"workflows": workflow_files})
-        
+
     except Exception as e:
         logger.error(f"Error listing workflows: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflows: {str(e)}")
@@ -67,24 +91,24 @@ async def save_workflow(request: SaveWorkflowRequest):
         downloads_path = os.path.join(os.getcwd(), "downloads")
         if not os.path.exists(downloads_path):
             os.makedirs(downloads_path)
-        
+
         if not request.workflow_id.endswith('.json'):
             filename = f"{request.workflow_id}.json"
         else:
             filename = request.workflow_id
         file_path = os.path.join(downloads_path, filename)
-        
+
         # workflow content를 JSON 파일로 저장
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(request.content.dict(), f, indent=2, ensure_ascii=False)
-        
+
         logger.info(f"Workflow saved successfully: {filename}")
         return JSONResponse(content={
             "success": True,
             "message": f"Workflow '{request.workflow_id}' saved successfully",
             "filename": filename
         })
-        
+
     except Exception as e:
         logger.error(f"Error saving workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to save workflow: {str(e)}")
@@ -98,16 +122,16 @@ async def load_workflow(workflow_id: str):
         downloads_path = os.path.join(os.getcwd(), "downloads")
         filename = f"{workflow_id}.json"
         file_path = os.path.join(downloads_path, filename)
-        
+
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
-        
+
         with open(file_path, 'r', encoding='utf-8') as f:
             workflow_data = json.load(f)
-        
+
         logger.info(f"Workflow loaded successfully: {filename}")
         return JSONResponse(content=workflow_data)
-        
+
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
     except Exception as e:
@@ -123,18 +147,18 @@ async def delete_workflow(workflow_id: str):
         downloads_path = os.path.join(os.getcwd(), "downloads")
         filename = f"{workflow_id}.json"
         file_path = os.path.join(downloads_path, filename)
-        
+
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
-        
+
         os.remove(file_path)
-        
+
         logger.info(f"Workflow deleted successfully: {filename}")
         return JSONResponse(content={
             "success": True,
             "message": f"Workflow '{workflow_id}' deleted successfully"
         })
-        
+
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
     except Exception as e:
@@ -149,44 +173,44 @@ async def list_workflows_detail():
     """
     try:
         downloads_path = os.path.join(os.getcwd(), "downloads")
-        
+
         # downloads 폴더가 존재하지 않으면 생성
         if not os.path.exists(downloads_path):
             os.makedirs(downloads_path)
             return JSONResponse(content={"workflows": []})
-        
+
         workflow_details = []
-        
+
         # .json 확장자를 가진 파일들만 처리
         for file in os.listdir(downloads_path):
             if not file.endswith('.json'):
                 continue
-                
+
             file_path = os.path.join(downloads_path, file)
-            
+
             try:
                 # 파일 메타데이터 수집
                 file_stat = os.stat(file_path)
                 last_modified = datetime.fromtimestamp(file_stat.st_mtime).isoformat()
-                
+
                 # JSON 파일 읽기
                 with open(file_path, 'r', encoding='utf-8') as f:
                     workflow_data = json.load(f)
-                
+
                 # workflow_id 추출 (workflow_id 필드)
                 workflow_id = workflow_data.get('workflow_id', 'unknown')
-                
+
                 # nodes 수 계산
                 nodes = workflow_data.get('nodes', [])
                 node_count = len(nodes) if isinstance(nodes, list) else 0
-                
+
                 has_startnode = any(
                     node.get('data', {}).get('functionId') == 'startnode' for node in nodes
                 )
                 has_endnode = any(
                     node.get('data', {}).get('functionId') == 'endnode' for node in nodes
                 )
-                
+
                 # 상세 정보 추가
                 workflow_detail = {
                     "filename": file,
@@ -196,10 +220,10 @@ async def list_workflows_detail():
                     "has_startnode": has_startnode,
                     "has_endnode": has_endnode,
                 }
-                
+
                 workflow_details.append(workflow_detail)
                 logger.debug(f"Processed workflow file: {file} (ID: {workflow_id}, Nodes: {node_count})")
-                
+
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse JSON file {file}: {str(e)}")
                 # 파싱 실패한 파일도 기본 정보로 포함
@@ -220,10 +244,10 @@ async def list_workflows_detail():
                     "last_modified": datetime.fromtimestamp(os.stat(file_path).st_mtime).isoformat(),
                     "error": str(e)
                 })
-        
+
         logger.info(f"Found {len(workflow_details)} workflow files with detailed information")
         return JSONResponse(content={"workflows": workflow_details})
-        
+
     except Exception as e:
         logger.error(f"Error listing workflow details: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
@@ -233,20 +257,20 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
     """
     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
     """
-    
+
     # print("DEBUG: 워크플로우 실행 요청\n", workflow)
-    
+
     try:
         workflow_data = workflow.dict()
-        
+
         # 데이터베이스 매니저 가져오기
         db_manager = None
         if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
             db_manager = request.app.state.app_db
-        
+
         executor = WorkflowExecutor(workflow_data, db_manager, workflow.interaction_id)
         final_outputs = executor.execute_workflow()
-        
+
         return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
 
     except ValueError as e:
@@ -255,7 +279,7 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-    
+
 @router.post("/execute/based_id", response_model=Dict[str, Any])
 async def execute_workflow_with_id(request: Request, request_body: WorkflowRequest):
     """
@@ -272,17 +296,17 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
 
         with open(file_path, 'r', encoding='utf-8') as f:
             workflow_data = json.load(f)
-            
+
         if workflow_data.get('workflow_id') != request_body.workflow_id:
             raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {request_body.workflow_id}")
 
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
-        
+
         print("--- 워크플로우 실행 시작 ---")
         print(f"실행 워크플로우: {request_body.workflow_name} ({request_body.workflow_id})")
         print(f"입력 데이터: {request_body.input_data}")
-        
+
         print(f"워크플로우 데이터: {workflow_data}")
 
         if request_body.input_data is not None:
@@ -292,7 +316,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
                     if parameters and isinstance(parameters, list):
                         parameters[0]['value'] = request_body.input_data
                         break
-        
+
         print(f"워크플로우 데이터: {workflow_data}")
         # 데이터베이스 매니저 가져오기
         db_manager = None
@@ -303,9 +327,9 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         execution_meta = None
         if request_body.interaction_id != "default" and db_manager:
             execution_meta = await get_or_create_execution_meta(
-                db_manager, 
-                request_body.interaction_id, 
-                request_body.workflow_id, 
+                db_manager,
+                request_body.interaction_id,
+                request_body.workflow_id,
                 request_body.workflow_name
             )
 
@@ -317,7 +341,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
             await update_execution_meta_count(db_manager, execution_meta)
 
         response_data = {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
-        
+
         # ExecutionMeta 정보가 있으면 응답에 포함
         if execution_meta:
             response_data["execution_meta"] = {
@@ -341,11 +365,11 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
     """
     특정 워크플로우의 성능 통계를 반환합니다.
     node_id와 node_name별로 평균 성능 지표를 계산합니다.
-    
+
     Args:
         workflow_name: 워크플로우 이름
         workflow_id: 워크플로우 ID
-        
+
     Returns:
         노드별 성능 통계와 전체 워크플로우 통계
     """
@@ -353,12 +377,12 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
         # 데이터베이스 매니저 가져오기
         if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
-        
+
         db_manager = request.app.state.app_db
-        
+
         # SQL 쿼리 작성
         query = """
-        SELECT 
+        SELECT
             node_id,
             node_name,
             AVG(processing_time_ms) as avg_processing_time_ms,
@@ -368,19 +392,19 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
             AVG(CASE WHEN gpu_memory_mb IS NOT NULL THEN gpu_memory_mb END) as avg_gpu_memory_mb,
             COUNT(*) as execution_count,
             COUNT(CASE WHEN gpu_usage_percent IS NOT NULL THEN 1 END) as gpu_execution_count
-        FROM node_performance 
+        FROM node_performance
         WHERE workflow_name = %s AND workflow_id = %s
         GROUP BY node_id, node_name
         ORDER BY node_id
         """
-        
+
         # SQLite인 경우 파라미터 플레이스홀더 변경
         if db_manager.config_db_manager.db_type == "sqlite":
             query = query.replace("%s", "?")
-        
+
         # 쿼리 실행
         result = db_manager.config_db_manager.execute_query(query, (workflow_name, workflow_id))
-        
+
         if not result:
             logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
             return JSONResponse(content={
@@ -389,7 +413,7 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
                 "performance_stats": [],
                 "message": "No performance data found for this workflow"
             })
-        
+
         # 결과 포맷팅
         performance_stats = []
         for row in result:
@@ -398,12 +422,12 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
                 if value is None:
                     return None
                 return float(value)
-            
+
             def safe_round_float(value, decimals=2):
                 if value is None:
                     return None
                 return round(float(value), decimals)
-            
+
             stats = {
                 "node_id": row['node_id'],
                 "node_name": row['node_name'],
@@ -416,13 +440,13 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
                 "gpu_execution_count": int(row['gpu_execution_count']) if row['gpu_execution_count'] else 0
             }
             performance_stats.append(stats)
-        
+
         # 전체 워크플로우 통계 계산
         total_executions = sum(stat['execution_count'] for stat in performance_stats)
         avg_total_processing_time = sum(stat['avg_processing_time_ms'] * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
         avg_total_cpu_usage = sum(stat['avg_cpu_usage_percent'] * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
         avg_total_ram_usage = sum(stat['avg_ram_usage_mb'] * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
-        
+
         # GPU 통계 (GPU 데이터가 있는 경우만)
         gpu_stats = None
         total_gpu_executions = sum(stat['gpu_execution_count'] for stat in performance_stats)
@@ -430,13 +454,13 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
             gpu_processing_time_sum = sum(stat['avg_processing_time_ms'] * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_usage_percent'] is not None)
             gpu_usage_sum = sum(stat['avg_gpu_usage_percent'] * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_usage_percent'] is not None)
             gpu_memory_sum = sum(stat['avg_gpu_memory_mb'] * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_memory_mb'] is not None)
-            
+
             gpu_stats = {
                 "avg_gpu_usage_percent": round(float(gpu_usage_sum / total_gpu_executions), 2) if total_gpu_executions > 0 else None,
                 "avg_gpu_memory_mb": round(float(gpu_memory_sum / total_gpu_executions), 2) if total_gpu_executions > 0 else None,
                 "gpu_execution_count": total_gpu_executions
             }
-        
+
         response_data = {
             "workflow_name": workflow_name,
             "workflow_id": workflow_id,
@@ -449,10 +473,10 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
             },
             "performance_stats": performance_stats
         }
-        
+
         logger.info(f"Performance stats retrieved for workflow: {workflow_name} ({workflow_id})")
         return JSONResponse(content=response_data)
-        
+
     except Exception as e:
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
@@ -461,11 +485,11 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
 async def delete_workflow_performance(request: Request, workflow_name: str, workflow_id: str):
     """
     특정 워크플로우의 성능 데이터를 삭제합니다.
-    
+
     Args:
         workflow_name: 워크플로우 이름
         workflow_id: 워크플로우 ID
-        
+
     Returns:
         삭제된 성능 데이터 개수와 성공 메시지
     """
@@ -473,28 +497,28 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
         # 데이터베이스 매니저 가져오기
         if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
-        
+
         db_manager = request.app.state.app_db
-        
+
         # 먼저 삭제할 performance 데이터 개수 확인
         count_query = """
         SELECT COUNT(*) as count
-        FROM node_performance 
+        FROM node_performance
         WHERE workflow_name = %s AND workflow_id = %s
         """
-        
+
         # SQLite인 경우 파라미터 플레이스홀더 변경
         if db_manager.config_db_manager.db_type == "sqlite":
             count_query = count_query.replace("%s", "?")
-        
+
         # 삭제할 성능 데이터 개수 조회
         count_result = db_manager.config_db_manager.execute_query(
-            count_query, 
+            count_query,
             (workflow_name, workflow_id)
         )
-        
+
         delete_count = count_result[0]['count'] if count_result else 0
-        
+
         if delete_count == 0:
             logger.info(f"No performance data found to delete for workflow: {workflow_name} ({workflow_id})")
             return JSONResponse(content={
@@ -503,33 +527,33 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
                 "deleted_count": 0,
                 "message": "No performance data found to delete"
             })
-        
+
         # 삭제 쿼리 실행
         delete_query = """
-        DELETE FROM node_performance 
+        DELETE FROM node_performance
         WHERE workflow_name = %s AND workflow_id = %s
         """
-        
+
         # SQLite인 경우 파라미터 플레이스홀더 변경
         if db_manager.config_db_manager.db_type == "sqlite":
             delete_query = delete_query.replace("%s", "?")
-        
+
         # 삭제 실행
         db_manager.config_db_manager.execute_query(
-            delete_query, 
+            delete_query,
             (workflow_name, workflow_id)
         )
-        
+
         response_data = {
             "workflow_name": workflow_name,
             "workflow_id": workflow_id,
             "deleted_count": delete_count,
             "message": f"Successfully deleted {delete_count} performance records"
         }
-        
+
         logger.info(f"Deleted {delete_count} performance records for workflow: {workflow_name} ({workflow_id})")
         return JSONResponse(content=response_data)
-        
+
     except Exception as e:
         logger.error(f"Error deleting performance data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete performance data: {str(e)}")
@@ -538,12 +562,12 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
 async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = 'default'):
     """
     특정 워크플로우의 ExecutionIO 로그를 반환합니다.
-    
+
     Args:
         workflow_name: 워크플로우 이름
         workflow_id: 워크플로우 ID
         interaction_id: 상호작용 ID (선택적, 제공되지 않으면 default만 반환)
-        
+
     Returns:
         ExecutionIO 로그 리스트
     """
@@ -551,9 +575,9 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
         # 데이터베이스 매니저 가져오기
         if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
-        
+
         db_manager = request.app.state.app_db
-        
+
         # SQL 쿼리 작성 - interaction_id 조건 추가
         if interaction_id:
             query = """
@@ -564,7 +588,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
                 input_data,
                 output_data,
                 updated_at
-            FROM execution_io 
+            FROM execution_io
             WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
             ORDER BY updated_at
             """
@@ -578,19 +602,19 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
                 input_data,
                 output_data,
                 updated_at
-            FROM execution_io 
+            FROM execution_io
             WHERE workflow_name = %s AND workflow_id = %s
             ORDER BY updated_at
             """
             query_params = (workflow_name, workflow_id)
-        
+
         # SQLite인 경우 파라미터 플레이스홀더 변경
         if db_manager.config_db_manager.db_type == "sqlite":
             query = query.replace("%s", "?")
-        
+
         # 쿼리 실행
         result = db_manager.config_db_manager.execute_query(query, query_params)
-        
+
         if not result:
             logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
             return JSONResponse(content={
@@ -599,7 +623,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
                 "in_out_logs": [],
                 "message": "No in_out_logs data found for this workflow"
             })
-        
+
         performance_stats = []
         for idx, row in enumerate(result):
             log_entry = {
@@ -612,32 +636,32 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
                 "updated_at": row['updated_at'].isoformat() if isinstance(row['updated_at'], datetime) else row['updated_at']
             }
             performance_stats.append(log_entry)
-        
+
         response_data = {
             "workflow_name": workflow_name,
             "workflow_id": workflow_id,
             "in_out_logs": performance_stats,
             "message": "In/Out logs retrieved successfully"
         }
-        
+
         logger.info(f"Performance stats retrieved for workflow: {workflow_name} ({workflow_id})")
         return JSONResponse(content=response_data)
-        
+
     except Exception as e:
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
-    
+
 
 @router.delete("/io_logs")
 async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = "default"):
     """
     특정 워크플로우의 ExecutionIO 로그를 삭제합니다.
-    
+
     Args:
         workflow_name: 워크플로우 이름
         workflow_id: 워크플로우 ID
         interaction_id: 상호작용 ID (기본값: "default")
-        
+
     Returns:
         삭제된 로그 개수와 성공 메시지
     """
@@ -645,28 +669,28 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
         # 데이터베이스 매니저 가져오기
         if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
-        
+
         db_manager = request.app.state.app_db
-        
+
         # 먼저 삭제할 로그 개수 확인
         count_query = """
         SELECT COUNT(*) as count
-        FROM execution_io 
+        FROM execution_io
         WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
         """
-        
+
         # SQLite인 경우 파라미터 플레이스홀더 변경
         if db_manager.config_db_manager.db_type == "sqlite":
             count_query = count_query.replace("%s", "?")
-        
+
         # 삭제할 로그 개수 조회
         count_result = db_manager.config_db_manager.execute_query(
-            count_query, 
+            count_query,
             (workflow_name, workflow_id, interaction_id)
         )
-        
+
         delete_count = count_result[0]['count'] if count_result else 0
-        
+
         if delete_count == 0:
             logger.info(f"No logs found to delete for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
             return JSONResponse(content={
@@ -676,23 +700,319 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
                 "deleted_count": 0,
                 "message": "No logs found to delete"
             })
-        
+
         # 삭제 쿼리 실행
         delete_query = """
-        DELETE FROM execution_io 
+        DELETE FROM execution_io
         WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
         """
-        
+
         # SQLite인 경우 파라미터 플레이스홀더 변경
         if db_manager.config_db_manager.db_type == "sqlite":
             delete_query = delete_query.replace("%s", "?")
-        
+
         # 삭제 실행
         db_manager.config_db_manager.execute_query(
-            delete_query, 
+            delete_query,
             (workflow_name, workflow_id, interaction_id)
         )
-        
+
+        logger.info(f"Successfully deleted {delete_count} logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
+
+        return JSONResponse(content={
+            "workflow_name": workflow_name,
+            "workflow_id": workflow_id,
+            "interaction_id": interaction_id,
+            "deleted_count": delete_count,
+            "message": f"Successfully deleted {delete_count} execution logs"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting workflow logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")
+
+
+@router.post("/conversation", response_model=Dict[str, Any])
+async def unified_conversation(request: Request, request_body: ConversationRequest):
+    """
+    통합 대화/워크플로우 실행 API
+    execution_type에 따라 채팅 또는 워크플로우 실행을 수행합니다.
+
+    Args:
+        execution_type: "chat" 또는 "workflow"
+        user_input: 사용자 입력
+        interaction_id: 상호작용 ID
+
+        # Chat 실행 시 사용:
+        workflow_id: 워크플로우 ID (선택적, 기본값: "default_mode")
+        workflow_name: 워크플로우 이름 (선택적, 기본값: "default_mode")
+        selected_collection: RAG 컬렉션 이름 (선택적)
+
+        # Workflow 실행 시 사용:
+        workflow_file_name: 실행할 워크플로우 파일명 (필수)
+    """
+    try:
+        logger.info(f"Unified conversation: type={request_body.execution_type}, interaction_id={request_body.interaction_id}")
+
+        # 공통 의존성 확인
+        if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
+            raise HTTPException(status_code=500, detail="Database connection not available")
+
+        if not hasattr(request.app.state, 'config_composer'):
+            raise HTTPException(status_code=500, detail="Config composer not available")
+
+        db_manager = request.app.state.app_db
+        config_composer = request.app.state.config_composer
+
+        if request_body.execution_type == "chat":
+            return await _execute_chat_conversation(
+                request, request_body, db_manager, config_composer
+            )
+        elif request_body.execution_type == "workflow":
+            return await _execute_workflow_conversation(
+                request, request_body, db_manager
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid execution_type: {request_body.execution_type}. Must be 'chat' or 'workflow'"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in unified_conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+async def _execute_chat_conversation(
+    request: Request,
+    request_body: ConversationRequest,
+    db_manager,
+    config_composer
+) -> Dict[str, Any]:
+    """채팅 대화 실행"""
+    try:
+        # 기본값 설정
+        workflow_id = request_body.workflow_id or "default_mode"
+        workflow_name = request_body.workflow_name or "default_mode"
+
+        # ExecutionMeta 조회 또는 생성
+        execution_meta = await get_or_create_execution_meta(
+            db_manager,
+            request_body.interaction_id,
+            workflow_id,
+            workflow_name,
+            first_msg=request_body.user_input
+        )
+
+        # RAG 서비스 준비
+        rag_service = None
+        if request_body.selected_collection:
+            rag_service = get_rag_service(request)
+
+        # 대화 함수 생성
+        conversation = create_conversation_function(config_composer, db_manager, rag_service)
+
+        # 대화 실행
+        chat_result = await conversation(
+            user_input=request_body.user_input,
+            workflow_id=workflow_id,
+            workflow_name=workflow_name,
+            interaction_id=request_body.interaction_id,
+            selected_collection=request_body.selected_collection
+        )
+
+        if chat_result["status"] == "success":
+            # ExecutionIO에 채팅 로그 저장
+            await _save_chat_execution_io(
+                db_manager,
+                request_body.interaction_id,
+                workflow_id,
+                workflow_name,
+                request_body.user_input,
+                chat_result["ai_response"]
+            )
+
+            # ExecutionMeta 업데이트
+            await update_execution_meta_count(db_manager, execution_meta)
+
+            return JSONResponse(content={
+                "status": "success",
+                "execution_type": "chat",
+                "message": "Chat conversation completed successfully",
+                "user_input": request_body.user_input,
+                "ai_response": chat_result["ai_response"],
+                "interaction_id": request_body.interaction_id,
+                "session_id": chat_result["session_id"],
+                "execution_meta": {
+                    "interaction_id": execution_meta.interaction_id,
+                    "interaction_count": execution_meta.interaction_count + 1,
+                    "workflow_id": execution_meta.workflow_id,
+                    "workflow_name": execution_meta.workflow_name
+                },
+                "timestamp": chat_result["timestamp"]
+            })
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Chat execution failed: {chat_result.get('error_message')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in chat conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Chat conversation error: {str(e)}")
+
+async def _execute_workflow_conversation(
+    request: Request,
+    request_body: ConversationRequest,
+    db_manager
+) -> Dict[str, Any]:
+    """워크플로우 실행"""
+    try:
+        if not request_body.workflow_file_name:
+            raise HTTPException(
+                status_code=400,
+                detail="workflow_file_name is required for workflow execution"
+            )
+
+        # 워크플로우 파일 로드
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        filename = request_body.workflow_file_name
+        if not filename.endswith('.json'):
+            filename = f"{filename}.json"
+        file_path = os.path.join(downloads_path, filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Workflow file not found: {filename}")
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            workflow_data = json.load(f)
+
+        if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
+            raise ValueError(f"Invalid workflow data in file: {filename}")
+
+        # 워크플로우 ID 및 이름 추출
+        workflow_id = workflow_data.get('workflow_id', request_body.workflow_file_name)
+        workflow_name = workflow_data.get('workflow_name', request_body.workflow_file_name)
+
+        logger.info(f"Executing workflow: {workflow_name} ({workflow_id})")
+        logger.info(f"Input data: {request_body.user_input}")
+
+        # 입력 데이터를 startnode에 설정
+        if request_body.user_input:
+            for node in workflow_data.get('nodes', []):
+                if node.get('data', {}).get('functionId') == 'startnode':
+                    parameters = node.get('data', {}).get('parameters', [])
+                    if parameters and isinstance(parameters, list):
+                        parameters[0]['value'] = request_body.user_input
+                        break
+
+        # ExecutionMeta 관리
+        execution_meta = None
+        if request_body.interaction_id != "default":
+            execution_meta = await get_or_create_execution_meta(
+                db_manager,
+                request_body.interaction_id,
+                workflow_id,
+                workflow_name,
+                first_msg=request_body.user_input
+            )
+
+        # 워크플로우 실행
+        executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)
+        final_outputs = executor.execute_workflow()
+
+        # ExecutionMeta 업데이트
+        if execution_meta:
+            await update_execution_meta_count(db_manager, execution_meta)
+
+        response_data = {
+            "status": "success",
+            "execution_type": "workflow",
+            "message": "Workflow execution completed successfully",
+            "user_input": request_body.user_input,
+            "workflow_outputs": final_outputs,
+            "interaction_id": request_body.interaction_id,
+            "workflow_id": workflow_id,
+            "workflow_name": workflow_name,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        # ExecutionMeta 정보가 있으면 응답에 포함
+        if execution_meta:
+            response_data["execution_meta"] = {
+                "interaction_id": execution_meta.interaction_id,
+                "interaction_count": execution_meta.interaction_count + 1,
+                "workflow_id": execution_meta.workflow_id,
+                "workflow_name": execution_meta.workflow_name
+            }
+
+        return JSONResponse(content=response_data)
+
+    except Exception as e:
+        logger.error(f"Error in workflow conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Workflow conversation error: {str(e)}")
+
+async def _save_chat_execution_io(
+    db_manager,
+    interaction_id: str,
+    workflow_id: str,
+    workflow_name: str,
+    user_input: str,
+    ai_response: str
+):
+    """채팅 실행 결과를 ExecutionIO 테이블에 저장합니다."""
+    try:
+        # 입력 데이터 (사용자 메시지)
+        input_data = {
+            "node_id": "chat_input",
+            "node_name": "Chat Input",
+            "inputs": {
+                "user_input": user_input
+            },
+            "result": user_input
+        }
+
+        # 출력 데이터 (AI 응답)
+        output_data = {
+            "node_id": "chat_output",
+            "node_name": "Chat Output",
+            "inputs": {
+                "ai_response": ai_response
+            },
+            "result": ai_response
+        }
+
+        # JSON 형태로 변환하여 저장
+        input_json = json.dumps(input_data, ensure_ascii=False)
+        output_json = json.dumps(output_data, ensure_ascii=False)
+
+        # DB 타입에 따른 쿼리 준비
+        db_type = db_manager.config_db_manager.db_type
+        if db_type == "postgresql":
+            query = """
+                INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
+                VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            """
+        else:  # SQLite
+            query = """
+                INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """
+
+        db_manager.config_db_manager.execute_query(
+            query,
+            (interaction_id, workflow_id, workflow_name, input_json, output_json)
+        )
+
+        logger.info(f"Chat ExecutionIO 데이터 저장 완료: interaction_id={interaction_id}, workflow_id={workflow_id}")
+
+    except Exception as e:
+        logger.error(f"Chat ExecutionIO 저장 중 오류 발생: {str(e)}")
+        # 로그 저장 실패해도 전체 실행은 계속 진행
+
         response_data = {
             "workflow_name": workflow_name,
             "workflow_id": workflow_id,
@@ -700,10 +1020,10 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
             "deleted_count": delete_count,
             "message": f"Successfully deleted {delete_count} execution logs"
         }
-        
+
         logger.info(f"Deleted {delete_count} execution logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
         return JSONResponse(content=response_data)
-        
+
     except Exception as e:
         logger.error(f"Error deleting execution logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete execution logs: {str(e)}")
