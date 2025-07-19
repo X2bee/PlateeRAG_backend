@@ -2,13 +2,82 @@
   "workflow_name": "default_mode",
   "workflow_id": "default_mode",
   "view": {
-    "x": -62631,
-    "y": -31451.5,
+    "x": -62720,
+    "y": -31482.5,
     "scale": 1
   },
   "nodes": [
     {
-      "id": "agents/openai-1752919249808",
+      "id": "document_loaders/Qdrant-1752937999260",
+      "data": {
+        "functionId": "document_loaders",
+        "id": "document_loaders/Qdrant",
+        "nodeName": "Qdrant Search",
+        "description": "RAG 서비스와 검색 파라미터를 설정하여 다음 노드로 전달하는 노드",
+        "tags": [
+          "document_loader",
+          "qdrant",
+          "vector_db",
+          "rag",
+          "setup"
+        ],
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DICT"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "collection_name",
+            "name": "Collection Name",
+            "type": "STR",
+            "value": "Select Collection",
+            "required": true,
+            "options": [
+              {
+                "value": "zz2",
+                "label": "zz2"
+              },
+              {
+                "value": "zzz",
+                "label": "zzz"
+              }
+            ]
+          },
+          {
+            "id": "top_k",
+            "name": "Top K Results",
+            "type": "INT",
+            "value": 4,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 10,
+            "step": 1
+          },
+          {
+            "id": "score_threshold",
+            "name": "Score Threshold",
+            "type": "FLOAT",
+            "value": 0.5,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 1,
+            "step": 0.1
+          }
+        ]
+      },
+      "position": {
+        "x": 63220,
+        "y": 31927.5
+      }
+    },
+    {
+      "id": "agents/openai-1752938001881",
       "data": {
         "functionId": "agents",
         "id": "agents/openai",
@@ -32,6 +101,13 @@
             "id": "rag_context",
             "name": "RAG Context",
             "type": "DICT",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "memory",
+            "name": "Memory",
+            "type": "OBJECT",
             "multi": false,
             "required": false
           }
@@ -91,81 +167,47 @@
         ]
       },
       "position": {
-        "x": 63816,
-        "y": 31717.5
+        "x": 63985,
+        "y": 31735.5
       }
     },
     {
-      "id": "document_loaders/Qdrant-1752919252986",
+      "id": "memory/db_memory-1752938015689",
       "data": {
-        "functionId": "document_loaders",
-        "id": "document_loaders/Qdrant",
-        "nodeName": "Qdrant Search",
-        "description": "RAG 서비스와 검색 파라미터를 설정하여 다음 노드로 전달하는 노드",
+        "functionId": "memory",
+        "id": "memory/db_memory",
+        "nodeName": "DB Memory",
+        "description": "DB에서 대화 기록을 로드하여 ConversationBufferMemory로 반환하는 노드입니다.",
         "tags": [
-          "document_loader",
-          "qdrant",
-          "vector_db",
-          "rag",
-          "setup"
+          "memory",
+          "database",
+          "chat_history",
+          "langchain"
         ],
         "inputs": [],
         "outputs": [
           {
-            "id": "rag_context",
-            "name": "RAG Context",
-            "type": "DICT"
+            "id": "memory",
+            "name": "Memory",
+            "type": "OBJECT"
           }
         ],
         "parameters": [
           {
-            "id": "collection_name",
-            "name": "Collection Name",
+            "id": "interaction_id",
+            "name": "Interaction ID",
             "type": "STR",
-            "value": "zzz",
-            "required": true,
-            "options": [
-              {
-                "value": "zz2",
-                "label": "zz2"
-              },
-              {
-                "value": "zzz",
-                "label": "zzz"
-              }
-            ]
-          },
-          {
-            "id": "top_k",
-            "name": "Top K Results",
-            "type": "INT",
-            "value": 4,
-            "required": false,
-            "optional": true,
-            "min": 1,
-            "max": 10,
-            "step": 1
-          },
-          {
-            "id": "score_threshold",
-            "name": "Score Threshold",
-            "type": "FLOAT",
-            "value": 0.5,
-            "required": false,
-            "optional": true,
-            "min": 0,
-            "max": 1,
-            "step": 0.1
+            "value": ""
           }
         ]
       },
       "position": {
-        "x": 62883,
-        "y": 31691.5
+        "x": 63219,
+        "y": 32249.5
       }
     },
     {
-      "id": "tools/print_any-1752919256024",
+      "id": "tools/print_any-1752938022538",
       "data": {
         "functionId": "endnode",
         "id": "tools/print_any",
@@ -193,12 +235,12 @@
         "parameters": []
       },
       "position": {
-        "x": 64404,
-        "y": 31769.5
+        "x": 64594,
+        "y": 31792.5
       }
     },
     {
-      "id": "input_string-1752919257946",
+      "id": "input_string-1752938024317",
       "data": {
         "functionId": "startnode",
         "id": "input_string",
@@ -231,50 +273,64 @@
         ]
       },
       "position": {
-        "x": 63249,
-        "y": 32121.5
+        "x": 63221,
+        "y": 31643.5
       }
     }
   ],
   "edges": [
     {
-      "id": "edge-document_loaders/Qdrant-1752919252986:rag_context-agents/openai-1752919249808:rag_context-1752919261700",
+      "id": "edge-document_loaders/Qdrant-1752937999260:rag_context-agents/openai-1752938001881:rag_context-1752938005085",
       "source": {
-        "nodeId": "document_loaders/Qdrant-1752919252986",
+        "nodeId": "document_loaders/Qdrant-1752937999260",
         "portId": "rag_context",
         "portType": "output",
         "type": "DICT"
       },
       "target": {
-        "nodeId": "agents/openai-1752919249808",
+        "nodeId": "agents/openai-1752938001881",
         "portId": "rag_context",
         "portType": "input"
       }
     },
     {
-      "id": "edge-input_string-1752919257946:result-agents/openai-1752919249808:text-1752919263549",
+      "id": "edge-memory/db_memory-1752938015689:memory-agents/openai-1752938001881:memory-1752938018009",
       "source": {
-        "nodeId": "input_string-1752919257946",
+        "nodeId": "memory/db_memory-1752938015689",
+        "portId": "memory",
+        "portType": "output",
+        "type": "OBJECT"
+      },
+      "target": {
+        "nodeId": "agents/openai-1752938001881",
+        "portId": "memory",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-input_string-1752938024317:result-agents/openai-1752938001881:text-1752938026138",
+      "source": {
+        "nodeId": "input_string-1752938024317",
         "portId": "result",
         "portType": "output",
         "type": "STR"
       },
       "target": {
-        "nodeId": "agents/openai-1752919249808",
+        "nodeId": "agents/openai-1752938001881",
         "portId": "text",
         "portType": "input"
       }
     },
     {
-      "id": "edge-agents/openai-1752919249808:result-tools/print_any-1752919256024:input_print-1752919264508",
+      "id": "edge-agents/openai-1752938001881:result-tools/print_any-1752938022538:input_print-1752938027357",
       "source": {
-        "nodeId": "agents/openai-1752919249808",
+        "nodeId": "agents/openai-1752938001881",
         "portId": "result",
         "portType": "output",
         "type": "STR"
       },
       "target": {
-        "nodeId": "tools/print_any-1752919256024",
+        "nodeId": "tools/print_any-1752938022538",
         "portId": "input_print",
         "portType": "input"
       }

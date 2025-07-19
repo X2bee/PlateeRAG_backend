@@ -653,26 +653,27 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
     """
     try:
+        ## 일반채팅인 경우 미리 정의된 워크플로우를 이용하여 일반 채팅에 사용.
         if request_body.workflow_name == 'default_mode':
-            print("DEBUG: 기본 모드 워크플로우 실행")
             default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
             file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
             with open(file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
             workflow_data = await _default_workflow_parameter_helper(request_body, workflow_data)
 
+        ## 워크플로우 실행인 경우, 해당하는 워크플로우 파일을 찾아서 사용.
         else:
-            print("DEBUG: 워크플로우 실행 요청", request_body)
             downloads_path = os.path.join(os.getcwd(), "downloads")
             if not request_body.workflow_name.endswith('.json'):
                 filename = f"{request_body.workflow_name}.json"
             else:
                 filename = request_body.workflow_name
             file_path = os.path.join(downloads_path, filename)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                workflow_data = json.load(f)
+            workflow_data = await _workflow_parameter_helper(request_body, workflow_data)
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            workflow_data = json.load(f)
-
+        ## ========== 워크플로우 데이터 검증 ==========
         if workflow_data.get('workflow_id') != request_body.workflow_id:
             raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {request_body.workflow_id}")
 
@@ -683,8 +684,8 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         print(f"실행 워크플로우: {request_body.workflow_name} ({request_body.workflow_id})")
         print(f"입력 데이터: {request_body.input_data}")
 
-        print(f"워크플로우 데이터: {workflow_data}")
-
+        ## 모든 워크플로우는 startnode가 있어야 하며, 입력 데이터는 startnode의 첫 번째 파라미터로 설정되어야 함.
+        ## 사용자의 인풋은 여기에 입력되고, 워크플로우가 실행됨.
         if request_body.input_data is not None:
             for node in workflow_data.get('nodes', []):
                 if node.get('data', {}).get('functionId') == 'startnode':
@@ -693,12 +694,15 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
                         parameters[0]['value'] = request_body.input_data
                         break
 
-        print(f"워크플로우 데이터: {workflow_data}")
-        # 데이터베이스 매니저 가져오기
+        ## app에 저장된 db_manager를 가져옴. 이걸 통해 DB에 접근할 수 있음.
+        ## DB에 접근하여 execution 데이터를 활용하여, 기록된 대화를 가져올지 말지 결정.
         db_manager = None
         if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
             db_manager = request.app.state.app_db
 
+        ## 일반적인 실행(execution)이 아닌 경우, 즉 대화형 실행(conversation execution)인 경우
+        ## interaction_id가 "default"가 아닌 경우, 대화형 실행을 위한 메타데이터를 가져오거나 생성
+        ## interaction_id가 "default"인 경우, execution_meta는 None으로 설정
         execution_meta = None
         if request_body.interaction_id != "default" and db_manager:
             execution_meta = await get_or_create_execution_meta(
@@ -709,9 +713,15 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
                 request_body.input_data
             )
 
+        ## 워크플로우를 실질적으로 실행 (가장중요)
+        ## 워크플로우 실행 관련 로직은 WorkflowExecutor 클래스에 정의되어 있음.
+        ## WorkflowExecutor 클래스는 워크플로우의 노드와 엣지를 기반으로 워크플로우를 실행하는 역할을 함.
+        ## 워크플로우 실행 시, interaction_id를 전달하여 대화형 실행을 지원함. (이렇게 되는 경우, interaction_id는 대화형 실행의 ID로 사용되어 DB에 저장됨)
+        ## 워크플로우 실행 결과는 final_outputs에 저장됨.
         executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id)
         final_outputs = executor.execute_workflow()
 
+        ## 대화형 실행인 경우 execution_meta의 값을 가지고, 이 경우에는 대화 count를 증가.
         if execution_meta:
             await update_execution_meta_count(db_manager, execution_meta)
 
@@ -734,8 +744,21 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-
 # Helper Functions
+
+async def _workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    """
+    if (request_body.interaction_id) and (request_body.interaction_id != "default"):
+        for node in workflow_data.get('nodes', []):
+            if node.get('data', {}).get('functionId') == 'memory':
+                parameters = node.get('data', {}).get('parameters', [])
+                for parameter in parameters:
+                    if parameter.get('id') == 'interaction_id':
+                        parameter['value'] = request_body.interaction_id
+
+    return workflow_data
+
 async def _default_workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     """
@@ -746,5 +769,13 @@ async def _default_workflow_parameter_helper(request_body, workflow_data: Dict[s
                 for parameter in parameters:
                     if parameter.get('id') == 'collection_name':
                         parameter['value'] = request_body.selected_collection
+
+    if (request_body.interaction_id) and (request_body.interaction_id != "default"):
+        for node in workflow_data.get('nodes', []):
+            if node.get('data', {}).get('functionId') == 'memory':
+                parameters = node.get('data', {}).get('parameters', [])
+                for parameter in parameters:
+                    if parameter.get('id') == 'interaction_id':
+                        parameter['value'] = request_body.interaction_id
 
     return workflow_data

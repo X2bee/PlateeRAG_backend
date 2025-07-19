@@ -10,16 +10,14 @@ from .performanceController import router as performanceRouter
 from .embeddingController import router as embeddingRouter
 from .retrievalController import router as retrievalRouter
 from .interactionController import router as interactionRouter
-from .chatController import router as chatRouter
 
 __all__ = [
     "nodeRouter",
-    "configRouter", 
+    "configRouter",
     "workflowRouter",
     "nodeStateRouter",
     "performanceRouter",
     "embeddingRouter",
     "retrievalRouter",
     "interactionRouter",
-    "chatRouter"
 ]
