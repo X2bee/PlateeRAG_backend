@@ -761,6 +761,21 @@ async def _workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]
 
 async def _default_workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
     """
+    Updates the workflow data with default parameters based on the request body.
+
+    This function modifies the `workflow_data` dictionary by setting specific parameter values
+    for nodes in the workflow. It updates the `collection_name` parameter for nodes with the
+    `document_loaders` function ID and the `interaction_id` parameter for nodes with the
+    `memory` function ID, based on the values provided in the `request_body`.
+
+    Parameters:
+        request_body: An object containing the request data. It should have attributes
+            `selected_collection` (optional) and `interaction_id` (optional).
+        workflow_data: A dictionary representing the workflow structure. It contains a list
+            of nodes, each of which may have a `data` dictionary with `functionId` and `parameters`.
+
+    Returns:
+        A dictionary representing the updated workflow data with modified parameters.
     """
     if request_body.selected_collection:
         for node in workflow_data.get('nodes', []):
