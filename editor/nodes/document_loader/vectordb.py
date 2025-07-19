@@ -32,6 +32,7 @@ class QdrantNode(Node):
             "id": "collection_name",
             "name": "Collection Name",
             "type": "STR",
+            "value": "Select Collection",
             "required": True,
             "options": get_collection_options,
         },
@@ -67,15 +68,9 @@ class QdrantNode(Node):
             raise RuntimeError("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
         self.vector_manager = self.rag_service.vector_manager
 
-        # 컬렉션 목록을 미리 캐시해둠
         try:
             collections = self.vector_manager.list_collections().get('collections', [])
             self._collections_cache = [{"value": collection, "label": collection} for collection in collections]
-            print(f"초기 컬렉션 목록 로딩 완료: {self._collections_cache}")
-
-            print("test")
-            self._collections_cache = [{"value": "test1", "label": "test1"}, {"value": "test2", "label": "test2"}, {"value": "test3", "label": "test3"}]
-            print(f"테스트 컬렉션 목록 설정: {self._collections_cache}")
         except Exception as e:
             logger.warning(f"초기 컬렉션 목록 로딩 실패: {e}")
             self._collections_cache = []
@@ -89,7 +84,6 @@ class QdrantNode(Node):
                 if hasattr(main_module, 'app') and hasattr(main_module.app, 'state'):
                     if hasattr(main_module.app.state, 'rag_service'):
                         rag_service = main_module.app.state.rag_service
-                        # 캐시해서 다음번에 빠르게 접근
                         self._cached_rag_service = rag_service
                         logger.info("main 모듈에서 RAG 서비스를 찾았습니다.")
                         return rag_service
@@ -110,10 +104,9 @@ class QdrantNode(Node):
             logger.error(f"RAG 서비스 접근 중 오류: {e}")
             return None
 
-    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.0) -> Dict[str, Any]:
+    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.5) -> Dict[str, Any]:
         """
         RAG 서비스와 검색 파라미터를 준비하여 다음 노드로 전달합니다.
-
         Args:
             collection_name: 검색할 컬렉션 이름
             top_k: 반환할 최대 결과 수
@@ -150,12 +143,6 @@ class QdrantNode(Node):
                     "top_k": top_k,
                     "score_threshold": score_threshold
                 },
-                "status": "ready",
-                "node_info": {
-                    "node_name": self.nodeName,
-                    "node_id": self.nodeId,
-                    "processed_at": self._get_current_timestamp()
-                }
             }
 
             logger.info(f"RAG 컨텍스트 준비 완료: {rag_context['search_params']}")
@@ -169,8 +156,3 @@ class QdrantNode(Node):
                 "search_params": None,
                 "status": "error"
             }
-
-    def _get_current_timestamp(self) -> str:
-        """현재 시간을 ISO 형식으로 반환"""
-        from datetime import datetime
-        return datetime.now().isoformat()

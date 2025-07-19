@@ -16,8 +16,8 @@ class AgentOpenAINode(Node):
 
     inputs = [
         {
-            "id": "user_input",
-            "name": "User Input",
+            "id": "text",
+            "name": "Text",
             "type": "STR",
             "multi": False,
             "required": True
@@ -32,8 +32,8 @@ class AgentOpenAINode(Node):
     ]
     outputs = [
         {
-            "id": "response",
-            "name": "Agent Response",
+            "id": "result",
+            "name": "Result",
             "type": "STR"
         },
     ]
@@ -42,32 +42,46 @@ class AgentOpenAINode(Node):
             "id": "model",
             "name": "Model",
             "type": "STR",
-            "required": False,
-            "default": "gpt-3.5-turbo"
+            "value": "gpt-3.5-turbo",
+            "required": True,
+            "optional": False,
+            "options": [
+                {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
+                {"value": "gpt-4", "label": "GPT-4"},
+                {"value": "gpt-4o", "label": "GPT-4o"}
+            ]
         },
         {
             "id": "temperature",
             "name": "Temperature",
             "type": "FLOAT",
+            "value": 0.7,
             "required": False,
-            "default": 0.7
+            "optional": True,
+            "min": 0.0,
+            "max": 2.0,
+            "step": 0.1
         },
         {
             "id": "max_tokens",
             "name": "Max Tokens",
-            "type": "INT",
+            "type": "INTEGER",
+            "value": 1000,
             "required": False,
-            "default": 1000
+            "optional": True,
+            "min": 1,
+            "max": 4000,
+            "step": 1
         }
     ]
 
-    def execute(self, user_input: str, rag_context: Optional[Dict[str, Any]] = None,
+    def execute(self, text: str, rag_context: Optional[Dict[str, Any]] = None,
                 model: str = "gpt-3.5-turbo", temperature: float = 0.7, max_tokens: int = 1000) -> str:
         """
         RAG 컨텍스트를 사용하여 사용자 입력에 대한 채팅 응답을 생성합니다.
 
         Args:
-            user_input: 사용자 입력
+            text: 사용자 입력
             rag_context: QdrantNode에서 전달받은 RAG 컨텍스트
             model: 사용할 언어 모델
             temperature: 생성 온도
@@ -77,10 +91,10 @@ class AgentOpenAINode(Node):
             Agent 응답
         """
         try:
-            logger.info(f"Chat Agent 실행: user_input='{user_input[:50]}...', model={model}")
+            logger.info(f"Chat Agent 실행: text='{text[:50]}...', model={model}")
 
             # RAG 컨텍스트 확인 및 문서 검색
-            enhanced_prompt = user_input
+            enhanced_prompt = text
             if rag_context and rag_context.get("status") == "ready":
                 logger.info("RAG 컨텍스트가 제공되었습니다. 문서 검색을 수행합니다.")
 
@@ -92,13 +106,13 @@ class AgentOpenAINode(Node):
                         # 문서 검색 수행
                         search_result = self._perform_rag_search(
                             rag_service,
-                            user_input,
+                            text,
                             search_params
                         )
 
                         if search_result:
                             # 검색 결과를 프롬프트에 추가
-                            enhanced_prompt = self._enhance_prompt_with_context(user_input, search_result)
+                            enhanced_prompt = self._enhance_prompt_with_context(text, search_result)
                             logger.info(f"RAG 검색 완료: {len(search_result.get('results', []))}개 결과 추가")
                         else:
                             logger.warning("RAG 검색 결과가 없습니다.")
@@ -155,11 +169,11 @@ class AgentOpenAINode(Node):
             logger.error(f"RAG 검색 수행 중 오류: {e}")
             return None
 
-    def _enhance_prompt_with_context(self, user_input: str, search_result: Dict[str, Any]) -> str:
+    def _enhance_prompt_with_context(self, text: str, search_result: Dict[str, Any]) -> str:
         """검색 결과를 사용하여 프롬프트 강화"""
         results = search_result.get("results", [])
         if not results:
-            return user_input
+            return text
 
         # 검색된 문서들을 컨텍스트로 구성
         context_parts = []
@@ -177,33 +191,31 @@ class AgentOpenAINode(Node):
 {context_text}
 
 [질문]
-{user_input}
+{text}
 
 위 문서들의 정보를 바탕으로 정확하고 도움이 되는 답변을 제공해주세요."""
             return enhanced_prompt
 
-        return user_input
+        return text
 
     def _generate_chat_response(self, prompt: str, model: str, temperature: float, max_tokens: int) -> str:
         """OpenAI API를 사용하여 채팅 응답 생성"""
         try:
-            # OpenAI 설정 가져오기
-            from config.config_composer import config_composer
+            import sys
+            if 'main' in sys.modules:
+                main_module = sys.modules['main']
+                if hasattr(main_module, 'app') and hasattr(main_module.app, 'state'):
+                    if hasattr(main_module.app.state, 'rag_service'):
+                        config_composer = main_module.app.state.config_composer
+                        self._cached_rag_service = config_composer
+                        logger.info("main 모듈에서 RAG 서비스를 찾았습니다.")
 
             # 설정 초기화 (필요한 경우)
-            config_composer.initialize_database_config_only()
-            configs = config_composer.initialize_remaining_configs()
-
-            if "openai" not in configs:
-                return "OpenAI 설정을 찾을 수 없습니다."
-
-            openai_config = configs["openai"]
-            api_key = openai_config.API_KEY.value
+            api_key = config_composer.get_config_by_name("OPENAI_API_KEY").get("value", "")
 
             if not api_key:
                 return "OpenAI API 키가 설정되지 않았습니다."
 
-            # OpenAI 클라이언트 사용
             from langchain_openai import ChatOpenAI
 
             llm = ChatOpenAI(

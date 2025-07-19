@@ -34,7 +34,7 @@ def get_node_list():
 
         if not nodes:
             raise HTTPException(status_code=404, detail="No nodes available. Please run discovery first.")
-        
+
         return nodes
 
     except Exception as e:
@@ -63,10 +63,31 @@ async def export_nodes():
         generate_json_spec(output_path=output_filename)
         if not os.path.exists(output_filename):
             raise HTTPException(status_code=500, detail="Failed to generate nodes JSON file.")
-        
+
         else:
             return {"status": "success", "message": "Nodes exported successfully", "file": output_filename}
-        
+
+    except Exception as e:
+        logging.error(f"Error listing nodes: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/refresh", response_model=Dict[str, Any])
+async def refresh_nodes():
+    """
+    Refesh and export the list of nodes to a JSON file.
+    """
+    try:
+        from editor.node_composer import NODE_REGISTRY
+        run_discovery()
+        output_filename = "./constants/exported_nodes.json"
+        generate_json_spec(output_path=output_filename)
+        if not os.path.exists(output_filename):
+            raise HTTPException(status_code=500, detail="Failed to generate nodes JSON file.")
+
+        else:
+            nodes = get_node_list()
+            return nodes
+
     except Exception as e:
         logging.error(f"Error listing nodes: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -79,7 +100,7 @@ async def get_node_registry_info():
     try:
         node_registry = get_node_registry()
         node_class_registry = get_node_class_registry()
-        
+
         return {
             "status": "success",
             "node_count": len(node_registry),
@@ -87,7 +108,7 @@ async def get_node_registry_info():
             "registry_data": node_registry,
             "class_registry_keys": list(node_class_registry.keys())
         }
-        
+
     except Exception as e:
         logging.error(f"Error getting node registry: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -100,7 +121,7 @@ async def get_all_nodes():
     try:
         node_registry = get_node_registry()
         return node_registry
-        
+
     except Exception as e:
         logging.error(f"Error getting all nodes: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -115,9 +136,9 @@ async def get_node_by_id(node_id: str):
         for node in node_registry:
             if node["id"] == node_id:
                 return node
-        
+
         raise HTTPException(status_code=404, detail=f"Node with id '{node_id}' not found")
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -137,16 +158,16 @@ async def search_nodes(
     try:
         node_registry = get_node_registry()
         filtered_nodes = node_registry.copy()
-        
+
         # query로 description과 nodeName 검색
         if query:
             query_lower = query.lower()
             filtered_nodes = [
                 node for node in filtered_nodes
-                if query_lower in node.get("description", "").lower() or 
+                if query_lower in node.get("description", "").lower() or
                    query_lower in node.get("nodeName", "").lower()
             ]
-        
+
         # tags로 필터링 (쉼표로 구분된 태그들)
         if tags:
             search_tags = [tag.strip().lower() for tag in tags.split(",")]
@@ -157,23 +178,23 @@ async def search_nodes(
                     for search_tag in search_tags
                 )
             ]
-        
+
         # category로 필터링
         if category:
             filtered_nodes = [
                 node for node in filtered_nodes
                 if node.get("categoryId", "").lower() == category.lower()
             ]
-        
+
         # function으로 필터링
         if function:
             filtered_nodes = [
                 node for node in filtered_nodes
                 if node.get("functionId", "").lower() == function.lower()
             ]
-        
+
         return filtered_nodes
-        
+
     except Exception as e:
         logging.error(f"Error searching nodes: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -186,13 +207,13 @@ async def get_all_tags():
     try:
         node_registry = get_node_registry()
         all_tags = set()
-        
+
         for node in node_registry:
             for tag in node.get("tags", []):
                 all_tags.add(tag)
-        
+
         return sorted(list(all_tags))
-        
+
     except Exception as e:
         logging.error(f"Error getting all tags: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -205,15 +226,15 @@ async def get_all_categories():
     try:
         node_registry = get_node_registry()
         categories = {}
-        
+
         for node in node_registry:
             cat_id = node.get("categoryId")
             cat_name = node.get("categoryName")
             if cat_id and cat_name:
                 categories[cat_id] = cat_name
-        
+
         return [{"id": cat_id, "name": cat_name} for cat_id, cat_name in categories.items()]
-        
+
     except Exception as e:
         logging.error(f"Error getting all categories: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -228,16 +249,16 @@ async def get_categorized_parameters(node_id: str):
         for node in node_registry:
             if node["id"] == node_id:
                 parameters = node.get("parameters", [])
-                
+
                 basic_params = []
                 advanced_params = []
-                
+
                 for param in parameters:
                     if param.get("optional", False):
                         advanced_params.append(param)
                     else:
                         basic_params.append(param)
-                
+
                 return {
                     "node_id": node_id,
                     "node_name": node.get("nodeName", ""),
@@ -246,9 +267,9 @@ async def get_categorized_parameters(node_id: str):
                     "advanced_parameters": advanced_params,
                     "has_advanced": len(advanced_params) > 0
                 }
-        
+
         raise HTTPException(status_code=404, detail=f"Node with id '{node_id}' not found")
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -262,10 +283,10 @@ async def validate_all_parameters():
     """
     try:
         from editor.model.node import validate_parameters
-        
+
         node_registry = get_node_registry()
         validation_results = []
-        
+
         for node in node_registry:
             parameters = node.get("parameters", [])
             if parameters:
@@ -277,16 +298,16 @@ async def validate_all_parameters():
                     "errors": errors,
                     "parameter_count": len(parameters)
                 })
-        
+
         valid_count = sum(1 for result in validation_results if result["is_valid"])
-        
+
         return {
             "total_nodes": len(validation_results),
             "valid_nodes": valid_count,
             "invalid_nodes": len(validation_results) - valid_count,
             "validation_results": validation_results
         }
-        
+
     except Exception as e:
         logging.error(f"Error validating parameters: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
