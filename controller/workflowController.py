@@ -53,8 +53,6 @@ def get_rag_service(request: Request):
     else:
         raise HTTPException(status_code=500, detail="RAG service not available")
 
-
-
 @router.get("/list")
 async def list_workflows():
     """
