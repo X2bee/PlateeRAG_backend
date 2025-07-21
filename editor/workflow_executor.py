@@ -74,13 +74,26 @@ class WorkflowExecutor:
 
             kwargs: Dict[str, Any] = {}
             connected_edges: List[Dict[str, Any]] = [edge for edge in self.edges if edge['target']['nodeId'] == node_id]
+
+            # 포트별로 들어오는 값들을 수집
+            port_values: Dict[str, List[Any]] = {}
             for edge in connected_edges:
                 source_node_id: str = edge['source']['nodeId']
                 source_port_id: str = edge['source']['portId']
                 target_port_id: str = edge['target']['portId']
 
                 if source_node_id in node_outputs and source_port_id in node_outputs[source_node_id]:
-                    kwargs[target_port_id] = node_outputs[source_node_id][source_port_id]
+                    value = node_outputs[source_node_id][source_port_id]
+                    if target_port_id not in port_values:
+                        port_values[target_port_id] = []
+                    port_values[target_port_id].append(value)
+
+            # 포트별로 값 할당 (단일 값이면 그대로, 여러 값이면 리스트로)
+            for port_id, values in port_values.items():
+                if len(values) == 1:
+                    kwargs[port_id] = values[0]  # 단일 값은 그대로
+                else:
+                    kwargs[port_id] = values  # 여러 값은 리스트로
 
             if 'parameters' in node_info['data'] and node_info['data']['parameters']:
                 for param in node_info['data']['parameters']:

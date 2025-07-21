@@ -2,6 +2,7 @@ from editor.node_composer import Node
 import logging
 import json
 from typing import List, Optional, Dict, Any
+from editor.utils.helper.service_helper import AppServiceManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,38 +31,9 @@ class DBMemoryNode(Node):
         },
     ]
 
-    def _get_db_manager(self):
-        """FastAPI 앱에서 DB 매니저를 가져오는 함수"""
-        try:
-            import sys
-            if 'main' in sys.modules:
-                main_module = sys.modules['main']
-                if hasattr(main_module, 'app') and hasattr(main_module.app, 'state'):
-                    if hasattr(main_module.app.state, 'rag_service'):
-                        db_manager = main_module.app.state.app_db
-                        self._cached_db_manager = db_manager
-                        logger.info("main 모듈에서 DB 매니저를 찾았습니다.")
-                        return db_manager
-
-            for module_name, module in sys.modules.items():
-                if hasattr(module, 'app'):
-                    app = getattr(module, 'app')
-                    if hasattr(app, 'state') and hasattr(app.state, 'app_db'):
-                        db_manager = app.state.app_db
-                        self._cached_db_manager = db_manager
-                        logger.info(f"{module_name} 모듈에서 DB 매니저를 찾았습니다.")
-                        return db_manager
-
-            logger.warning("DB 매니저를 찾을 수 없습니다. 서버가 실행되지 않았을 수 있습니다.")
-            return None
-
-        except Exception as e:
-            logger.error(f"DB 매니저 접근 중 오류: {e}")
-            return None
-
     def _load_messages_from_db(self, interaction_id: str) -> List[Dict[str, str]]:
         """DB에서 대화 기록을 로드하여 메시지 리스트로 반환"""
-        db_manager = self._get_db_manager()
+        db_manager = AppServiceManager.get_db_manager()
         if not db_manager or interaction_id == "default":
             return []
 

@@ -2,6 +2,7 @@ import os
 import logging
 from typing import Optional, Dict, Any
 from editor.node_composer import Node
+from editor.utils.helper.service_helper import AppServiceManager
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class QdrantNode(Node):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.rag_service = self._get_rag_service()
+        self.rag_service = AppServiceManager.get_rag_service()
         if not self.rag_service:
             logger.error("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
             raise RuntimeError("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
@@ -75,36 +76,7 @@ class QdrantNode(Node):
             logger.warning(f"초기 컬렉션 목록 로딩 실패: {e}")
             self._collections_cache = []
 
-    def _get_rag_service(self):
-        """FastAPI 앱에서 RAG 서비스를 가져오는 함수"""
-        try:
-            import sys
-            if 'main' in sys.modules:
-                main_module = sys.modules['main']
-                if hasattr(main_module, 'app') and hasattr(main_module.app, 'state'):
-                    if hasattr(main_module.app.state, 'rag_service'):
-                        rag_service = main_module.app.state.rag_service
-                        self._cached_rag_service = rag_service
-                        logger.info("main 모듈에서 RAG 서비스를 찾았습니다.")
-                        return rag_service
-
-            for module_name, module in sys.modules.items():
-                if hasattr(module, 'app'):
-                    app = getattr(module, 'app')
-                    if hasattr(app, 'state') and hasattr(app.state, 'rag_service'):
-                        rag_service = app.state.rag_service
-                        self._cached_rag_service = rag_service
-                        logger.info(f"{module_name} 모듈에서 RAG 서비스를 찾았습니다.")
-                        return rag_service
-
-            logger.warning("RAG 서비스를 찾을 수 없습니다. 서버가 실행되지 않았을 수 있습니다.")
-            return None
-
-        except Exception as e:
-            logger.error(f"RAG 서비스 접근 중 오류: {e}")
-            return None
-
-    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.5) -> Dict[str, Any]:
+    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.2) -> Dict[str, Any]:
         """
         RAG 서비스와 검색 파라미터를 준비하여 다음 노드로 전달합니다.
         Args:
