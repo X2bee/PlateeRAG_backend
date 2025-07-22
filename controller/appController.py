@@ -25,7 +25,7 @@ def get_rag_service(request: Request) -> RAGService:
         return RAGService(vectordb_config, openai_config)
     else:
         raise HTTPException(status_code=500, detail="Configuration not available")
-    
+
 def get_config_composer(request: Request):
     """request.app.state에서 config_composer 가져오기"""
     if hasattr(request.app.state, 'config_composer') and request.app.state.config_composer:
@@ -82,7 +82,7 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
         config_composer = get_config_composer(request)
         config_obj = config_composer.get_config_by_name(config_name)
         old_value = config_obj.value
-                
+
         # 값 타입에 따라 적절히 변환
         value = new_value.value
         if isinstance(config_obj.env_value, bool):
@@ -93,9 +93,9 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
             config_obj.value = float(value)
         else:
             config_obj.value = str(value)
-        
+
         config_obj.save()
-        
+
         return {
             "message": f"Config '{config_name}' updated successfully",
             "old_value": old_value,
@@ -120,6 +120,65 @@ async def save_persistent_configs(request: Request):
     config_composer.save_all()
     return {"message": "All persistent configs saved successfully to database"}
 
+@router.post("/config/models/list")
+async def get_models_list(request: Request):
+    """모든 모델 관련 설정 정보 반환"""
+    config_composer = get_config_composer(request)
+
+    if not config_composer:
+        raise HTTPException(status_code=500, detail="Configuration composer not available")
+
+    openai_config = config_composer.get_config_by_category_name("openai").get_config_summary()
+    vllm_config = config_composer.get_config_by_category_name("vllm").get_config_summary()
+
+    result = []
+
+    if not openai_config:
+        openai_api_key = None
+        openai_url = None
+        print("OpenAI config not found")
+    else:
+        openai_api_key = openai_config.get("configs", {}).get("OPENAI_API_KEY", {}).get("current_value", "")
+        openai_url = openai_config.get("configs", {}).get("OPENAI_API_BASE_URL", {}).get("current_value", "")
+
+        openai_models = [
+            "gpt-4o-2024-11-20",
+            "gpt-4o-mini-2024-07-18",
+            "gpt-4.1-2025-04-14",
+            "gpt-4.1-mini-2025-04-14"
+        ]
+
+        temperature_default = openai_config.get("configs", {}).get("OPENAI_TEMPERATURE_DEFAULT", {}).get("current_value", 0.7)
+        max_tokens_default = openai_config.get("configs", {}).get("OPENAI_MAX_TOKENS_DEFAULT", {}).get("current_value", 1000)
+
+        for model in openai_models:
+            result.append({
+                "provider": "OpenAI",
+                "api_key": openai_api_key,
+                "api_base_url": openai_url,
+                "model": model,
+                "temperature_default": temperature_default,
+                "max_tokens_default": max_tokens_default
+            })
+
+    if not vllm_config:
+        vllm_model = None
+        vllm_url = None
+        print("VLLM config not found")
+    else:
+        vllm_model = vllm_config.get("configs", {}).get("VLLM_MODEL_NAME", {}).get("current_value", "")
+        vllm_url = vllm_config.get("configs", {}).get("VLLM_API_BASE_URL", {}).get("current_value", "")
+        result.append({
+            "provider": "vLLM",
+            "api_key": "",
+            "api_base_url": vllm_url,
+            "model": vllm_model,
+            "temperature_default": vllm_config.get("configs", {}).get("VLLM_TEMPERATURE_DEFAULT", {}).get("current_value", 0.7),
+            "max_tokens_default": vllm_config.get("configs", {}).get("VLLM_MAX_TOKENS_DEFAULT", {}).get("current_value", 512)
+        })
+
+    return {"result": result}
+
 @router.put("/config")
 async def update_app_config(new_config: dict):
     """애플리케이션 설정 업데이트"""
@@ -130,7 +189,7 @@ async def get_demo_users(request: Request):
     """데모용: 사용자 목록 조회"""
     if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
         raise HTTPException(status_code=500, detail="Application database not available")
-    
+
     users = request.app.state.app_db.find_all(User, limit=10)
     return {
         "users": [user.to_dict() for user in users],
@@ -142,16 +201,16 @@ async def create_demo_user(request: Request, user_data: UserCreateRequest):
     """데모용: 새 사용자 생성"""
     if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
         raise HTTPException(status_code=500, detail="Application database not available")
-    
+
     user = User(
         username=user_data.username,
         email=user_data.email,
         full_name=user_data.full_name,
         password_hash="demo_hash_" + user_data.username
     )
-    
+
     user_id = request.app.state.app_db.insert(user)
-    
+
     if user_id:
         user.id = user_id
         return {"message": "User created successfully", "user": user.to_dict()}
@@ -164,13 +223,13 @@ async def health_check(request: Request):
     """RAG 시스템 연결 상태 확인"""
     try:
         rag_service = get_rag_service(request)
-        
+
         health_status = {
             "qdrant_client": rag_service.vector_manager.is_connected(),
             "embeddings_client": bool(rag_service.embeddings_client),
             "embedding_provider": rag_service.config.EMBEDDING_PROVIDER.value
         }
-        
+
         if rag_service.vector_manager.is_connected():
             collections = rag_service.vector_manager.list_collections()
             health_status.update({
@@ -179,7 +238,7 @@ async def health_check(request: Request):
             })
         else:
             health_status["qdrant_status"] = "disconnected"
-        
+
         # 임베딩 클라이언트 상태 상세 확인
         if rag_service.embeddings_client:
             try:
@@ -193,13 +252,13 @@ async def health_check(request: Request):
         else:
             health_status["embeddings_status"] = "not_initialized"
             health_status["embeddings_available"] = False
-        
+
         overall_status = "healthy" if all([
-            rag_service.vector_manager.is_connected(), 
+            rag_service.vector_manager.is_connected(),
             rag_service.embeddings_client,
             health_status.get("embeddings_available", False)
         ]) else "partial"
-        
+
         return {
             "status": overall_status,
             "message": "RAG system status check",
@@ -211,17 +270,17 @@ async def health_check(request: Request):
             "status": "unhealthy",
             "message": f"Health check failed: {e}"
         }
-        
+
 # Configuration Endpoints
 @router.get("/docs/config")
 async def get_rag_config(request: Request):
     """현재 RAG 시스템 설정 조회"""
     config_composer = get_config_composer(request)
-    
+
     try:
         if config_composer:
             vectordb_config = config_composer.get_config_by_category_name("vectordb")
-            
+
             return {
                 "vectordb": {
                     "host": vectordb_config.QDRANT_HOST.value,

@@ -136,16 +136,16 @@ async def upload_document(
     """문서 업로드 및 처리"""
     try:
         rag_service = get_rag_service(request)
-        
+
         # 파일 저장
         upload_dir = Path("downloads")
         upload_dir.mkdir(exist_ok=True)
-        
+
         file_path = upload_dir / file.filename
         async with aiofiles.open(file_path, 'wb') as f:
             content = await file.read()
             await f.write(content)
-        
+
         # 메타데이터 파싱
         doc_metadata = {}
         if metadata:
@@ -153,7 +153,7 @@ async def upload_document(
                 doc_metadata = json.loads(metadata)
             except json.JSONDecodeError:
                 logger.warning("Invalid metadata JSON: %s", metadata)
-        
+
         # 문서 처리
         result = await rag_service.process_document(
             str(file_path),
@@ -162,15 +162,15 @@ async def upload_document(
             chunk_overlap,
             doc_metadata
         )
-        
+
         # 임시 파일 삭제
         try:
             os.unlink(file_path)
         except Exception:
             pass
-        
+
         return result
-        
+
     except Exception as e:
         logger.error("Document upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to upload document: {str(e)}")
@@ -234,14 +234,14 @@ async def insert_points(request: Request, insert_request: InsertPointsRequest):
             if point.id is not None:
                 point_dict["id"] = point.id
             points_data.append(point_dict)
-        
+
         return rag_service.vector_manager.insert_points(
             insert_request.collection_name,
             points_data
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to insert points: {str(e)}")
-    
+
 @router.delete("/points")
 async def delete_points(request: Request, delete_request: DeletePointsRequest):
     """포인트 삭제 (기존 호환성)"""
@@ -253,7 +253,7 @@ async def delete_points(request: Request, delete_request: DeletePointsRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete points: {str(e)}")
-    
+
 @router.post("/search")
 async def search_points(request: Request, search_request: SearchRequest):
     """벡터 유사도 검색 (기존 호환성)"""
@@ -274,12 +274,12 @@ async def retrieval_health_check(request: Request):
     """retrieval 시스템 상태 확인"""
     try:
         rag_service = get_rag_service(request)
-        
+
         health_status = {
             "qdrant_client": rag_service.vector_manager.is_connected(),
             "document_processor": bool(rag_service.document_processor),
         }
-        
+
         if rag_service.vector_manager.is_connected():
             collections = rag_service.vector_manager.list_collections()
             health_status.update({
@@ -288,12 +288,12 @@ async def retrieval_health_check(request: Request):
             })
         else:
             health_status["qdrant_status"] = "disconnected"
-        
+
         overall_status = "healthy" if all([
-            rag_service.vector_manager.is_connected(), 
+            rag_service.vector_manager.is_connected(),
             rag_service.document_processor
         ]) else "unhealthy"
-        
+
         return {
             "status": overall_status,
             "message": "Retrieval system status check",
@@ -312,7 +312,7 @@ async def get_retrieval_debug_info(request: Request):
     try:
         rag_service = get_rag_service(request)
         vectordb_config = rag_service.config
-        
+
         debug_info = {
             "vector_manager": {
                 "connected": rag_service.vector_manager.is_connected(),
@@ -327,7 +327,7 @@ async def get_retrieval_debug_info(request: Request):
             },
             "collection_info": {}
         }
-        
+
         # 컬렉션 정보 추가
         if rag_service.vector_manager.is_connected():
             try:
@@ -335,9 +335,9 @@ async def get_retrieval_debug_info(request: Request):
                 debug_info["collection_info"] = collections
             except Exception as e:
                 debug_info["collection_info"] = {"error": str(e)}
-        
+
         return debug_info
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get retrieval debug info: {str(e)}")
 
@@ -347,7 +347,7 @@ async def get_retrieval_config(request: Request):
     try:
         if hasattr(request.app.state, 'config') and request.app.state.config:
             vectordb_config = request.app.state.config["vectordb"]
-            
+
             return {
                 "vectordb": {
                     "host": vectordb_config.QDRANT_HOST.value,
