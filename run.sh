@@ -39,4 +39,4 @@ done
 
 echo "[INFO] Running main.py"
 export DATABASE_TYPE=sqlite
-python main.py
+uv run --active main.py

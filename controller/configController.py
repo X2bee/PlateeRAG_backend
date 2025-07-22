@@ -17,6 +17,10 @@ from config.persistent_config import (
     export_config_summary,
     PersistentConfig
 )
+import requests
+from requests.exceptions import RequestException
+import asyncio
+from service.llm.llm_service import LLMService
 
 router = APIRouter(
     prefix="/api/config",
@@ -202,3 +206,221 @@ async def _auto_switch_embedding_provider_after_delay():
             
     except Exception as e:
         logging.error(f"Failed to auto-switch embedding provider: {e}")
+
+@router.get("/llm/status")
+async def get_llm_status():
+    """LLM 제공자 상태 정보 반환"""
+    try:
+        configs = get_all_persistent_configs()
+        
+        # 현재 기본 제공자 가져오기
+        current_provider = "openai"  # 기본값
+        for config in configs:
+            if config.env_name == "DEFAULT_LLM_PROVIDER":
+                current_provider = config.value
+                break
+        
+        # 각 제공자별 설정 상태 확인
+        providers_status = {}
+        
+        # OpenAI 상태 확인
+        openai_config = {}
+        for config in configs:
+            if config.env_name == "OPENAI_API_KEY":
+                openai_config['api_key'] = config.value
+            elif config.env_name == "OPENAI_API_BASE_URL":
+                openai_config['base_url'] = config.value
+            elif config.env_name == "OPENAI_MODEL_DEFAULT":
+                openai_config['model'] = config.value
+        
+        llm_service = LLMService()
+
+        openai_validation = llm_service.validate_provider_config("openai", openai_config)
+        providers_status["openai"] = {
+            "configured": openai_validation["valid"],
+            "available": openai_validation["valid"],
+            "error": openai_validation.get("error")
+        }
+        
+        # vLLM 상태 확인
+        vllm_config = {}
+        for config in configs:
+            if config.env_name == "VLLM_API_BASE_URL":
+                vllm_config['base_url'] = config.value
+            elif config.env_name == "VLLM_API_KEY":
+                vllm_config['api_key'] = config.value
+            elif config.env_name == "VLLM_MODEL_NAME":
+                vllm_config['model_name'] = config.value
+        
+        vllm_validation = llm_service.validate_provider_config("vllm", vllm_config)
+        providers_status["vllm"] = {
+            "configured": vllm_validation["valid"],
+            "available": vllm_validation["valid"],
+            "error": vllm_validation.get("error")
+        }
+        
+        # 사용 가능한 제공자 목록
+        available_providers = [provider for provider, status in providers_status.items() if status["available"]]
+        
+        return {
+            "current_provider": current_provider,
+            "available_providers": available_providers,
+            "providers": providers_status
+        }
+        
+    except Exception as e:
+        logging.error(f"Error getting LLM status: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.post("/llm/switch-provider")
+async def switch_llm_provider(request: dict):
+    """LLM 기본 제공자 변경"""
+    try:
+        provider = request.get("provider")
+        if not provider:
+            raise HTTPException(status_code=400, detail="Provider is required")
+        
+        if provider not in ["openai", "vllm"]:
+            raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai' or 'vllm'")
+        
+        # DEFAULT_LLM_PROVIDER 설정 업데이트
+        configs = get_all_persistent_configs()
+        for config in configs:
+            if config.env_name == "DEFAULT_LLM_PROVIDER":
+                old_value = config.value
+                config.value = provider
+                config.save()
+                
+                return {
+                    "status": "success",
+                    "message": f"Default LLM provider switched to {provider}",
+                    "old_provider": old_value,
+                    "new_provider": provider
+                }
+        
+        # DEFAULT_LLM_PROVIDER 설정이 없는 경우
+        raise HTTPException(status_code=404, detail="DEFAULT_LLM_PROVIDER config not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error switching LLM provider: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.post("/llm/auto-switch")
+async def auto_switch_llm_provider():
+    """사용 가능한 LLM 제공자로 자동 전환"""
+    try:
+        configs = get_all_persistent_configs()
+        
+        # 각 제공자별 사용 가능 여부 확인
+        available_providers = []
+        
+        # OpenAI 확인
+        openai_config = {}
+        for config in configs:
+            if config.env_name == "OPENAI_API_KEY":
+                openai_config['api_key'] = config.value
+        
+        llm_service = LLMService()
+
+        if llm_service.validate_provider_config("openai", openai_config)["valid"]:
+            available_providers.append("openai")
+        
+        # vLLM 확인
+        vllm_config = {}
+        for config in configs:
+            if config.env_name == "VLLM_API_BASE_URL":
+                vllm_config['base_url'] = config.value
+        
+        if llm_service.validate_provider_config("vllm", vllm_config)["valid"]:
+            available_providers.append("vllm")
+        
+        if not available_providers:
+            raise HTTPException(status_code=400, detail="No LLM providers are available")
+        
+        # 첫 번째 사용 가능한 제공자로 설정
+        selected_provider = available_providers[0]
+        
+        # DEFAULT_LLM_PROVIDER 업데이트
+        for config in configs:
+            if config.env_name == "DEFAULT_LLM_PROVIDER":
+                old_value = config.value
+                config.value = selected_provider
+                config.save()
+                
+                return {
+                    "status": "success",
+                    "message": f"Auto-selected provider: {selected_provider}",
+                    "old_provider": old_value,
+                    "new_provider": selected_provider,
+                    "available_providers": available_providers
+                }
+        
+        raise HTTPException(status_code=404, detail="DEFAULT_LLM_PROVIDER config not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error auto-switching LLM provider: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+# 기존 test_connection 함수 수정
+@router.post("/test/{category}")
+async def test_connection(category: str):
+    """연결 테스트 API - OpenAI, vLLM, 현재 LLM 제공자 테스트"""
+    try:
+        configs = get_all_persistent_configs()
+        config_dict = {config.env_name: config.value for config in configs}
+        llm_service = LLMService()
+        
+        if category == "openai":
+            config_data = {
+                'api_key': config_dict.get('OPENAI_API_KEY'),
+                'base_url': config_dict.get('OPENAI_API_BASE_URL', 'https://api.openai.com/v1'),
+                'model': config_dict.get('OPENAI_MODEL_DEFAULT', 'gpt-3.5-turbo')
+            }
+            return await llm_service.test_openai_connection(config_data)
+            
+        elif category == "vllm":
+            config_data = {
+                'base_url': config_dict.get('VLLM_API_BASE_URL'),
+                'api_key': config_dict.get('VLLM_API_KEY'),
+                'model_name': config_dict.get('VLLM_MODEL_NAME')
+            }
+            return await llm_service.test_vllm_connection(config_data)
+            
+        elif category == "llm":
+            # 현재 기본 LLM 제공자 테스트
+            current_provider = config_dict.get('DEFAULT_LLM_PROVIDER', 'openai')
+            
+            if current_provider == "openai":
+                config_data = {
+                    'api_key': config_dict.get('OPENAI_API_KEY'),
+                    'base_url': config_dict.get('OPENAI_API_BASE_URL', 'https://api.openai.com/v1'),
+                    'model': config_dict.get('OPENAI_MODEL_DEFAULT', 'gpt-3.5-turbo')
+                }
+                return await llm_service.test_openai_connection(config_data)
+                
+            elif current_provider == "vllm":
+                config_data = {
+                    'base_url': config_dict.get('VLLM_API_BASE_URL'),
+                    'api_key': config_dict.get('VLLM_API_KEY'),
+                    'model_name': config_dict.get('VLLM_MODEL_NAME')
+                }
+                return await llm_service.test_vllm_connection(config_data)
+                
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported LLM provider: {current_provider}")
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported category: {category}")
+            
+    except HTTPException:
+        raise
+    except (ValueError, ConnectionError, RequestException) as e:
+        logging.error(f"Connection test failed for {category}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Connection test failed for {category}: {e}")
+        raise HTTPException(status_code=500, detail=f"Connection test failed: {str(e)}")
