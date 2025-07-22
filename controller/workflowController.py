@@ -659,7 +659,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
             file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
             with open(file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
-            workflow_data = await _default_workflow_parameter_helper(request_body, workflow_data)
+            workflow_data = await _default_workflow_parameter_helper(request, request_body, workflow_data)
 
         ## 워크플로우 실행인 경우, 해당하는 워크플로우 파일을 찾아서 사용.
         else:
@@ -768,7 +768,7 @@ async def _workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]
 
     return workflow_data
 
-async def _default_workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+async def _default_workflow_parameter_helper(request, request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Updates the workflow data with default parameters based on the request body.
 
@@ -786,6 +786,30 @@ async def _default_workflow_parameter_helper(request_body, workflow_data: Dict[s
     Returns:
         A dictionary representing the updated workflow data with modified parameters.
     """
+    config_composer = request.app.state.config_composer
+    if not config_composer:
+        raise HTTPException(status_code=500, detail="Config composer not available")
+
+    llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
+
+    if llm_provider == "openai":
+        model = config_composer.get_config_by_name("OPENAI_MODEL_DEFAULT").value
+        url = config_composer.get_config_by_name("OPENAI_API_BASE_URL").value
+    elif llm_provider == "vllm":
+        model = config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+        url = config_composer.get_config_by_name("VLLM_API_BASE_URL").value
+    else:
+        raise HTTPException(status_code=500, detail="Unsupported LLM provider")
+
+    for node in workflow_data.get('nodes', []):
+        if node.get('data', {}).get('functionId') == 'agents':
+            parameters = node.get('data', {}).get('parameters', [])
+            for parameter in parameters:
+                if parameter.get('id') == 'model':
+                    parameter['value'] = model
+                if parameter.get('id') == 'base_url':
+                    parameter['value'] = url
+
     if request_body.selected_collection:
         for node in workflow_data.get('nodes', []):
             if node.get('data', {}).get('functionId') == 'document_loaders':

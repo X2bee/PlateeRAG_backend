@@ -56,7 +56,7 @@ class AgentOpenAINodeV2(Node):
             "id": "model",
             "name": "Model",
             "type": "STR",
-            "value": "gpt-3.5-turbo",
+            "value": "gpt-4o",
             "required": True,
             "optional": False,
             "options": [
@@ -86,11 +86,19 @@ class AgentOpenAINodeV2(Node):
             "min": 1,
             "max": 4000,
             "step": 1
-        }
+        },
+        {
+            "id": "base_url",
+            "name": "Base URL",
+            "type": "STRING",
+            "value": "https://api.openai.com/v1",
+            "required": False,
+            "optional": True
+        },
     ]
 
     def execute(self, text: str, tools, memory: Optional[Any] = None,
-                model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 1000) -> str:
+                model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 1000, base_url: str = "https://api.openai.com/v1") -> str:
         """
         RAG 컨텍스트를 사용하여 사용자 입력에 대한 채팅 응답을 생성합니다.
 
@@ -120,7 +128,7 @@ class AgentOpenAINodeV2(Node):
             prompt = default_prompt
 
             # OpenAI API를 사용하여 응답 생성
-            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens)
+            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, base_url)
 
             logger.info(f"Chat Agent 응답 생성 완료: {len(response)}자")
             return response
@@ -130,16 +138,28 @@ class AgentOpenAINodeV2(Node):
             return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
 
 
-    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int) -> str:
+    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, base_url: str) -> str:
         """OpenAI API를 사용하여 채팅 응답 생성"""
         try:
             config_composer = AppServiceManager.get_config_composer()
             if not config_composer:
                 return "Config Composer가 설정되지 않았습니다."
 
-            api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
-            if not api_key:
-                return "OpenAI API 키가 설정되지 않았습니다."
+            # OpenAI API 키 설정
+            llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
+            if llm_provider == "openai":
+                api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
+                if not api_key:
+                    return "OpenAI API 키가 설정되지 않았습니다."
+
+            elif llm_provider == "vllm":
+                print("vLLM API를 사용합니다.")
+                api_key = None # 현재 vLLM API 키는 별도로 설정하지 않음
+
+                # TODO: vLLM API 키 설정 로직 추가
+                # api_key = config_composer.get_config_by_name("VLLM_API_KEY").value
+                # if not api_key:
+                #     return "vLLM API 키가 설정되지 않았습니다."
 
             from langchain_openai import ChatOpenAI
 
@@ -147,7 +167,8 @@ class AgentOpenAINodeV2(Node):
                 api_key=api_key,
                 model=model,
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                base_url=base_url
             )
 
             final_prompt = ChatPromptTemplate.from_messages([
