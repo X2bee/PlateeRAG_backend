@@ -14,7 +14,7 @@ class VLLMConfig(BaseConfig):
         self.API_BASE_URL = self.create_persistent_config(
             env_name="VLLM_API_BASE_URL",
             config_path="vllm.api_base_url",
-            default_value="http://localhost:8000/v1"
+            default_value="http://localhost:12721/v1"
         )
 
         # vLLM API Key (선택사항, 인증이 필요한 경우)
@@ -29,7 +29,7 @@ class VLLMConfig(BaseConfig):
         self.MODEL_NAME = self.create_persistent_config(
             env_name="VLLM_MODEL_NAME",
             config_path="vllm.model_name",
-            default_value="meta-llama/Llama-2-7b-chat-hf"
+            default_value="Qwen/Qwen3-4B"
         )
 
         # 기본 온도 설정

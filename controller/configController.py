@@ -259,6 +259,24 @@ async def get_llm_status():
             "error": vllm_validation.get("error")
         }
         
+        # SGL 상태 확인
+        sgl_config = {}
+        for config in configs:
+            if config.env_name == "SGL_API_BASE_URL":
+                sgl_config['base_url'] = config.value
+            elif config.env_name == "SGL_API_KEY":
+                sgl_config['api_key'] = config.value
+            elif config.env_name == "SGL_MODEL_NAME":
+                sgl_config['model_name'] = config.value
+        
+        sgl_validation = llm_service.validate_provider_config("sgl", sgl_config)
+        providers_status["sgl"] = {
+            "configured": sgl_validation["valid"],
+            "available": sgl_validation["valid"],
+            "error": sgl_validation.get("error", sgl_validation.get("errors")),
+            "warnings": sgl_validation.get("warnings")
+        }
+        
         # 사용 가능한 제공자 목록
         available_providers = [provider for provider, status in providers_status.items() if status["available"]]
         
@@ -280,8 +298,8 @@ async def switch_llm_provider(request: dict):
         if not provider:
             raise HTTPException(status_code=400, detail="Provider is required")
         
-        if provider not in ["openai", "vllm"]:
-            raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai' or 'vllm'")
+        if provider not in ["openai", "vllm", "sgl"]:
+            raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai', 'vllm', or 'sgl'")
         
         # DEFAULT_LLM_PROVIDER 설정 업데이트
         configs = get_all_persistent_configs()
@@ -336,6 +354,17 @@ async def auto_switch_llm_provider():
         if llm_service.validate_provider_config("vllm", vllm_config)["valid"]:
             available_providers.append("vllm")
         
+        # SGL 확인
+        sgl_config = {}
+        for config in configs:
+            if config.env_name == "SGL_API_BASE_URL":
+                sgl_config['base_url'] = config.value
+            elif config.env_name == "SGL_MODEL_NAME":
+                sgl_config['model_name'] = config.value
+        
+        if llm_service.validate_provider_config("sgl", sgl_config)["valid"]:
+            available_providers.append("sgl")
+        
         if not available_providers:
             raise HTTPException(status_code=400, detail="No LLM providers are available")
         
@@ -365,10 +394,56 @@ async def auto_switch_llm_provider():
         logging.error(f"Error auto-switching LLM provider: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+@router.get("/llm/models/{provider}")
+async def get_llm_models(provider: str):
+    """특정 LLM 제공자의 사용 가능한 모델 목록 조회"""
+    try:
+        if provider not in ["openai", "vllm", "sgl"]:
+            raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai', 'vllm', or 'sgl'")
+        
+        configs = get_all_persistent_configs()
+        config_dict = {config.env_name: config.value for config in configs}
+        
+        llm_service = LLMService()
+        
+        if provider == "sgl":
+            config_data = {
+                'base_url': config_dict.get('SGL_API_BASE_URL'),
+                'api_key': config_dict.get('SGL_API_KEY')
+            }
+        elif provider == "vllm":
+            config_data = {
+                'base_url': config_dict.get('VLLM_API_BASE_URL'),
+                'api_key': config_dict.get('VLLM_API_KEY'),
+                'model_name': config_dict.get('VLLM_MODEL_NAME')
+            }
+        else:
+            # OpenAI는 모델 목록 조회가 제한적이므로 기본 모델 목록 반환
+            return {
+                "status": "success",
+                "models": [
+                    {"id": "gpt-4", "object": "model"},
+                    {"id": "gpt-4-turbo", "object": "model"},
+                    {"id": "gpt-3.5-turbo", "object": "model"},
+                    {"id": "gpt-3.5-turbo-16k", "object": "model"}
+                ],
+                "count": 4,
+                "note": "OpenAI models list is predefined"
+            }
+        
+        result = await llm_service.get_provider_models(provider, config_data)
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting models for {provider}: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
 # 기존 test_connection 함수 수정
 @router.post("/test/{category}")
 async def test_connection(category: str):
-    """연결 테스트 API - OpenAI, vLLM, 현재 LLM 제공자 테스트"""
+    """연결 테스트 API - OpenAI, vLLM, SGL, 현재 LLM 제공자 테스트"""
     try:
         configs = get_all_persistent_configs()
         config_dict = {config.env_name: config.value for config in configs}
@@ -390,6 +465,14 @@ async def test_connection(category: str):
             }
             return await llm_service.test_vllm_connection(config_data)
             
+        elif category == "sgl":
+            config_data = {
+                'base_url': config_dict.get('SGL_API_BASE_URL'),
+                'api_key': config_dict.get('SGL_API_KEY'),
+                'model_name': config_dict.get('SGL_MODEL_NAME')
+            }
+            return await llm_service.test_sgl_connection(config_data)
+            
         elif category == "llm":
             # 현재 기본 LLM 제공자 테스트
             current_provider = config_dict.get('DEFAULT_LLM_PROVIDER', 'openai')
@@ -410,6 +493,14 @@ async def test_connection(category: str):
                 }
                 return await llm_service.test_vllm_connection(config_data)
                 
+            elif current_provider == "sgl":
+                config_data = {
+                    'base_url': config_dict.get('SGL_API_BASE_URL'),
+                    'api_key': config_dict.get('SGL_API_KEY'),
+                    'model_name': config_dict.get('SGL_MODEL_NAME')
+                }
+                return await llm_service.test_sgl_connection(config_data)
+                
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported LLM provider: {current_provider}")
         
@@ -424,3 +515,48 @@ async def test_connection(category: str):
     except Exception as e:
         logging.error(f"Connection test failed for {category}: {e}")
         raise HTTPException(status_code=500, detail=f"Connection test failed: {str(e)}")
+
+@router.post("/llm/validate/{provider}")
+async def validate_llm_provider_config(provider: str):
+    """특정 LLM 제공자 설정 유효성 검사"""
+    try:
+        if provider not in ["openai", "vllm", "sgl"]:
+            raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai', 'vllm', or 'sgl'")
+        
+        configs = get_all_persistent_configs()
+        config_dict = {config.env_name: config.value for config in configs}
+        
+        llm_service = LLMService()
+        
+        if provider == "openai":
+            config_data = {
+                'api_key': config_dict.get('OPENAI_API_KEY'),
+                'base_url': config_dict.get('OPENAI_API_BASE_URL'),
+                'model': config_dict.get('OPENAI_MODEL_DEFAULT')
+            }
+        elif provider == "vllm":
+            config_data = {
+                'base_url': config_dict.get('VLLM_API_BASE_URL'),
+                'api_key': config_dict.get('VLLM_API_KEY'),
+                'model_name': config_dict.get('VLLM_MODEL_NAME')
+            }
+        elif provider == "sgl":
+            config_data = {
+                'base_url': config_dict.get('SGL_API_BASE_URL'),
+                'api_key': config_dict.get('SGL_API_KEY'),
+                'model_name': config_dict.get('SGL_MODEL_NAME')
+            }
+        
+        validation_result = llm_service.validate_provider_config(provider, config_data)
+        
+        return {
+            "provider": provider,
+            "validation": validation_result,
+            "config_data": {k: "***" if "key" in k.lower() and v else v for k, v in config_data.items()}
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error validating {provider} config: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
