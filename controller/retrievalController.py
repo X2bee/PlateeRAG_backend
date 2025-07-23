@@ -91,6 +91,9 @@ async def list_collections(request: Request):
 @router.post("/collections")
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):
     """새 컬렉션 생성"""
+    user_id = request.headers.get("X-User-ID")
+    token = request.headers.get("Authorization")
+    
     rag_service = get_rag_service(request)
     vector_size = rag_service.config.VECTOR_DIMENSION.value
     try:
