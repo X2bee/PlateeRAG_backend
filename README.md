@@ -13,6 +13,11 @@
 - **📊 성능 모니터링**: 실시간 성능 추적 및 분석
 - **🔧 확장 가능**: 새로운 노드 타입 쉽게 추가 가능
 
+## TODO List
+- Database Guest 계정 자동 삭제 기능
+- OLLAMA 연동
+- vLLM 컨트롤러 vast.AI 연동
+
 ### 🏗️ 시스템 아키텍처 (예시)
 
 ```
@@ -154,10 +159,10 @@ class CustomProcessNode(Node):
     functionId = "tools"
     nodeId = "custom/process"
     nodeName = "Custom Process"
-    
+
     inputs = [{"id": "input", "name": "Input", "type": "STR"}]
     outputs = [{"id": "output", "name": "Output", "type": "STR"}]
-    
+
     def execute(self, input: str) -> str:
         return f"처리됨: {input}"
 ```
@@ -305,7 +310,7 @@ class SlackNotificationNode(Node):
 # 워크플로우 실행 시 자동 성능 측정
 with PerformanceLogger(workflow_name, node_id):
     result = node.execute(input_data)
-    
+
 # 성능 데이터 API로 조회
 GET /api/performance/workflow/{workflow_name}/{workflow_id}
 ```
