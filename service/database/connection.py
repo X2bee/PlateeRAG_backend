@@ -90,9 +90,8 @@ class AppDatabaseManager:
         try:
             db_type = self.config_db_manager.db_type
             query, values = model.get_update_query(db_type)
-
             affected_rows = self.config_db_manager.execute_update_delete(query, tuple(values))
-            return affected_rows is not None and affected_rows > 0
+            return {"result": "success"}
 
         except AttributeError as e:
             self.logger.error("Failed to update %s: %s", model.__class__.__name__, e)
@@ -105,7 +104,7 @@ class AppDatabaseManager:
             db_type = self.config_db_manager.db_type
 
             if db_type == "postgresql":
-                query = f"DELETE FROM {table_name} WHERE id = $1"
+                query = f"DELETE FROM {table_name} WHERE id = %s"
             else:
                 query = f"DELETE FROM {table_name} WHERE id = ?"
 
@@ -115,6 +114,34 @@ class AppDatabaseManager:
         except AttributeError as e:
             self.logger.error("Failed to delete %s with id %s: %s",
                             model_class.__name__, record_id, e)
+            return False
+
+    def delete_by_condition(self, model_class: Type[BaseModel], conditions: Dict[str, Any]) -> bool:
+        """조건으로 레코드 삭제"""
+        try:
+            table_name = model_class().get_table_name()
+            db_type = self.config_db_manager.db_type
+
+            # WHERE 조건 생성
+            where_clauses = []
+            values = []
+
+            for key, value in conditions.items():
+                if db_type == "postgresql":
+                    where_clauses.append(f"{key} = %s")
+                else:
+                    where_clauses.append(f"{key} = ?")
+                values.append(value)
+
+            where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+            query = f"DELETE FROM {table_name} WHERE {where_clause}"
+
+            affected_rows = self.config_db_manager.execute_update_delete(query, tuple(values))
+            return affected_rows is not None and affected_rows > 0
+
+        except AttributeError as e:
+            self.logger.error("Failed to delete %s by condition: %s", model_class.__name__, e)
             return False
 
     def find_by_id(self, model_class: Type[BaseModel], record_id: int) -> Optional[BaseModel]:

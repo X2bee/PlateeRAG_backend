@@ -7,6 +7,7 @@ from service.database.models.user import User, UserSession
 from service.database.models.performance import WorkflowExecution, NodeExecution, SystemMetrics, NodePerformance
 from service.database.models.persistent_config_model import PersistentConfigModel
 from service.database.models.executor import ExecutionIO, ExecutionMeta
+from service.database.models.workflow import WorkflowMeta
 
 # 사용 가능한 모델들
 __all__ = [
@@ -14,7 +15,7 @@ __all__ = [
     'User', 'UserSession',
     'WorkflowExecution', 'NodeExecution', 'SystemMetrics', 'NodePerformance',
     'PersistentConfigModel',
-    'ExecutionIO', 'ExecutionMeta'
+    'ExecutionIO', 'ExecutionMeta', 'WorkflowMeta'
 ]
 
 # 애플리케이션에서 사용할 모델 목록
@@ -26,5 +27,6 @@ APPLICATION_MODELS = [
     NodeExecution,
     SystemMetrics,
     NodePerformance,
-    ExecutionIO, ExecutionMeta
+    ExecutionIO, ExecutionMeta,
+    WorkflowMeta
 ]

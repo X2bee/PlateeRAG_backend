@@ -5,13 +5,16 @@ from typing import Dict, Any, List, Optional
 from editor.node_composer import NODE_CLASS_REGISTRY, run_discovery
 from service.monitoring.performance_logger import PerformanceLogger
 
+from service.database.models.executor import ExecutionIO
+
 logger = logging.getLogger('Workflow-Executor')
 
 class WorkflowExecutor:
-    def __init__(self, workflow_data: Dict[str, Any], db_manager=None, interaction_id: Optional[str] = None):
+    def __init__(self, workflow_data: Dict[str, Any], db_manager=None, interaction_id: Optional[str] = None, user_id: Optional[int] = None):
         self.workflow_id: str = workflow_data['workflow_id']
         self.workflow_name: str = workflow_data['workflow_name']
         self.interaction_id: str = interaction_id or 'default'
+        self.user_id: int = user_id or 0
         self.db_manager = db_manager
         self.nodes: Dict[str, Dict[str, Any]] = {node['id']: node for node in workflow_data['nodes']}
         self.edges: List[Dict[str, Any]] = workflow_data['edges']
@@ -116,6 +119,7 @@ class WorkflowExecutor:
                     workflow_name=self.workflow_name,
                     workflow_id=self.workflow_id,
                     node_id=node_id,
+                    user_id=self.user_id,
                     node_name=node_name_for_logging,
                     db_manager=self.db_manager
                 ) as perf_logger:
@@ -199,24 +203,32 @@ class WorkflowExecutor:
             # JSON 형태로 변환하여 저장
             input_json = json.dumps(input_data, ensure_ascii=False)
             output_json = json.dumps(output_data, ensure_ascii=False)
-
-            # DB 타입에 따른 쿼리 준비
-            db_type = self.db_manager.config_db_manager.db_type
-            if db_type == "postgresql":
-                query = """
-                    INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
-                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                """
-            else:  # SQLite
-                query = """
-                    INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """
-
-            self.db_manager.config_db_manager.execute_query(
-                query,
-                (self.interaction_id, self.workflow_id, self.workflow_name, input_json, output_json)
+            insert_data = ExecutionIO(
+                user_id=self.user_id,
+                interaction_id=self.interaction_id,
+                workflow_id=self.workflow_id,
+                workflow_name=self.workflow_name,
+                input_data=input_json,
+                output_data=output_json
             )
+            self.db_manager.insert(insert_data)
+            # DB 타입에 따른 쿼리 준비
+            # db_type = self.db_manager.config_db_manager.db_type
+            # if db_type == "postgresql":
+            #     query = """
+            #         INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
+            #         VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            #     """
+            # else:  # SQLite
+            #     query = """
+            #         INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
+            #         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            #     """
+
+            # self.db_manager.config_db_manager.execute_query(
+            #     query,
+            #     (self.interaction_id, self.workflow_id, self.workflow_name, input_json, output_json)
+            # )
 
             logger.info("ExecutionIO 데이터가 성공적으로 저장되었습니다. workflow_id: %s", self.workflow_id)
 

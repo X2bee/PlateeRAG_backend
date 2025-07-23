@@ -8,7 +8,6 @@ import jwt
 import secrets
 import logging
 from datetime import datetime, timedelta
-
 from service.database.models.user import User
 
 logger = logging.getLogger("auth-controller")
