@@ -13,6 +13,7 @@ from controller.embeddingController import router as embeddingRouter
 from controller.retrievalController import router as retrievalRouter
 from controller.interactionController import router as interactionRouter
 from controller.appController import router as appRouter
+from controller.authController import router as authRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from config.config_composer import config_composer
 from service.database import AppDatabaseManager
@@ -141,6 +142,7 @@ app.add_middleware(
 )
 
 app.include_router(nodeRouter)
+app.include_router(authRouter)
 app.include_router(configRouter)
 app.include_router(workflowController)
 app.include_router(nodeStateRouter)

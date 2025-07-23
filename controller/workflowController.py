@@ -592,14 +592,23 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
         DELETE FROM execution_io
         WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
         """
+        delete_query_meta = """
+        DELETE FROM execution_meta
+        WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
+        """
 
         # SQLite인 경우 파라미터 플레이스홀더 변경
         if db_manager.config_db_manager.db_type == "sqlite":
             delete_query = delete_query.replace("%s", "?")
+            delete_query_meta = delete_query_meta.replace("%s", "?")
 
         # 삭제 실행
         db_manager.config_db_manager.execute_query(
             delete_query,
+            (workflow_name, workflow_id, interaction_id)
+        )
+        db_manager.config_db_manager.execute_query(
+            delete_query_meta,
             (workflow_name, workflow_id, interaction_id)
         )
 
