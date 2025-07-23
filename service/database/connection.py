@@ -188,7 +188,9 @@ class AppDatabaseManager:
     def find_by_condition(self, model_class: Type[BaseModel],
                          conditions: Dict[str, Any],
                          limit: int = 100,
-                         offset: int = 0) -> List[BaseModel]:
+                         offset: int = 0,
+                         orderby: str = "id",
+                         return_list: bool = False) -> List[BaseModel]:
         """조건으로 레코드 조회"""
         try:
             table_name = model_class().get_table_name()
@@ -215,11 +217,14 @@ class AppDatabaseManager:
 
             values.extend([limit, offset])
 
-            query = f"SELECT * FROM {table_name} WHERE {where_clause} ORDER BY id DESC {limit_clause}"
+            query = f"SELECT * FROM {table_name} WHERE {where_clause} ORDER BY {orderby} DESC {limit_clause}"
 
             results = self.config_db_manager.execute_query(query, tuple(values))
 
-            return [model_class.from_dict(dict(row)) for row in results] if results else []
+            if return_list:
+                return [row for row in results] if results else []
+            else:
+                return [model_class.from_dict(dict(row)) for row in results] if results else []
 
         except AttributeError as e:
             self.logger.error("Failed to find %s by condition: %s", model_class.__name__, e)

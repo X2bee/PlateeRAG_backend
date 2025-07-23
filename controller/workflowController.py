@@ -10,7 +10,7 @@ from editor.workflow_executor import WorkflowExecutor
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 from service.general_function import create_conversation_function
 
-from service.database.models.executor import ExecutionMeta
+from service.database.models.executor import ExecutionMeta, ExecutionIO
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.performance import NodePerformance
 
@@ -354,19 +354,26 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
                 "message": "No performance data found for this workflow"
             })
 
+        # Decimal 타입을 float로 변환하는 헬퍼 함수
+        def safe_round_float(value, decimal_places=4):
+            if value is None:
+                return None
+            try:
+                # Decimal, float, int, str 모든 타입을 float로 변환
+                if hasattr(value, '__float__'):  # Decimal 포함
+                    return round(float(value), decimal_places)
+                elif isinstance(value, (int, float)):
+                    return round(float(value), decimal_places)
+                elif isinstance(value, str):
+                    return round(float(value), decimal_places)
+                else:
+                    return float(value) if value else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
         # 결과 포맷팅
         performance_stats = []
         for row in result:
-            # Decimal 타입을 float로 변환하는 헬퍼 함수
-            def safe_round_float(value, decimal_places=4):
-                if isinstance(value, float):
-                    return round(value, decimal_places)
-                elif isinstance(value, int):
-                    return float(value)
-                elif isinstance(value, str):
-                    return round(float(value), decimal_places)
-                return value
-
             stats = {
                 "node_id": row['node_id'],
                 "node_name": row['node_name'],
@@ -382,17 +389,17 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
 
         # 전체 워크플로우 통계 계산
         total_executions = sum(stat['execution_count'] for stat in performance_stats)
-        avg_total_processing_time = sum(stat['avg_processing_time_ms'] * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
-        avg_total_cpu_usage = sum(stat['avg_cpu_usage_percent'] * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
-        avg_total_ram_usage = sum(stat['avg_ram_usage_mb'] * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
+        avg_total_processing_time = sum(float(stat['avg_processing_time_ms']) * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
+        avg_total_cpu_usage = sum(float(stat['avg_cpu_usage_percent']) * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
+        avg_total_ram_usage = sum(float(stat['avg_ram_usage_mb']) * stat['execution_count'] for stat in performance_stats) / total_executions if total_executions > 0 else 0.0
 
         # GPU 통계 (GPU 데이터가 있는 경우만)
         gpu_stats = None
         total_gpu_executions = sum(stat['gpu_execution_count'] for stat in performance_stats)
         if total_gpu_executions > 0:
-            gpu_processing_time_sum = sum(stat['avg_processing_time_ms'] * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_usage_percent'] is not None)
-            gpu_usage_sum = sum(stat['avg_gpu_usage_percent'] * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_usage_percent'] is not None)
-            gpu_memory_sum = sum(stat['avg_gpu_memory_mb'] * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_memory_mb'] is not None)
+            gpu_processing_time_sum = sum(float(stat['avg_processing_time_ms']) * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_usage_percent'] is not None)
+            gpu_usage_sum = sum(float(stat['avg_gpu_usage_percent']) * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_usage_percent'] is not None)
+            gpu_memory_sum = sum(float(stat['avg_gpu_memory_mb']) * stat['gpu_execution_count'] for stat in performance_stats if stat['avg_gpu_memory_mb'] is not None)
 
             gpu_stats = {
                 "avg_gpu_usage_percent": round(float(gpu_usage_sum / total_gpu_executions), 2) if total_gpu_executions > 0 else None,
@@ -503,49 +510,25 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
     try:
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
+        app_db = request.app.state.app_db
+        if not app_db:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not available"
+            )
 
-        # 데이터베이스 매니저 가져오기
-        if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
-        db_manager = request.app.state.app_db
-
-        # SQL 쿼리 작성 - interaction_id 조건 추가
-        if interaction_id:
-            query = """
-            SELECT
-                interaction_id,
-                workflow_name,
-                workflow_id,
-                input_data,
-                output_data,
-                updated_at
-            FROM execution_io
-            WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
-            ORDER BY updated_at
-            """
-            query_params = (workflow_name, workflow_id, interaction_id)
-        else:
-            query = """
-            SELECT
-                interaction_id,
-                workflow_name,
-                workflow_id,
-                input_data,
-                output_data,
-                updated_at
-            FROM execution_io
-            WHERE workflow_name = %s AND workflow_id = %s
-            ORDER BY updated_at
-            """
-            query_params = (workflow_name, workflow_id)
-
-        # SQLite인 경우 파라미터 플레이스홀더 변경
-        if db_manager.config_db_manager.db_type == "sqlite":
-            query = query.replace("%s", "?")
-
-        # 쿼리 실행
-        result = db_manager.config_db_manager.execute_query(query, query_params)
+        result = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "interaction_id": interaction_id
+            },
+            limit=1000000,  # 필요에 따라 조정 가능
+            orderby="updated_at",
+            return_list=True
+        )
 
         if not result:
             logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
@@ -601,30 +584,25 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
 
-        # 데이터베이스 매니저 가져오기
-        if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
+        app_db = request.app.state.app_db
+        if not app_db:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not available"
+            )
 
-        db_manager = request.app.state.app_db
-
-        # 먼저 삭제할 로그 개수 확인
-        count_query = """
-        SELECT COUNT(*) as count
-        FROM execution_io
-        WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
-        """
-
-        # SQLite인 경우 파라미터 플레이스홀더 변경
-        if db_manager.config_db_manager.db_type == "sqlite":
-            count_query = count_query.replace("%s", "?")
-
-        # 삭제할 로그 개수 조회
-        count_result = db_manager.config_db_manager.execute_query(
-            count_query,
-            (workflow_name, workflow_id, interaction_id)
+        existing_data = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "interaction_id": interaction_id
+            },
+            limit=1000000
         )
 
-        delete_count = count_result[0]['count'] if count_result else 0
+        delete_count = len(existing_data) if existing_data else 0
 
         if delete_count == 0:
             logger.info(f"No logs found to delete for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
@@ -636,29 +614,14 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
                 "message": "No logs found to delete"
             })
 
-        # 삭제 쿼리 실행
-        delete_query = """
-        DELETE FROM execution_io
-        WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
-        """
-        delete_query_meta = """
-        DELETE FROM execution_meta
-        WHERE workflow_name = %s AND workflow_id = %s AND interaction_id = %s
-        """
-
-        # SQLite인 경우 파라미터 플레이스홀더 변경
-        if db_manager.config_db_manager.db_type == "sqlite":
-            delete_query = delete_query.replace("%s", "?")
-            delete_query_meta = delete_query_meta.replace("%s", "?")
-
-        # 삭제 실행
-        db_manager.config_db_manager.execute_query(
-            delete_query,
-            (workflow_name, workflow_id, interaction_id)
-        )
-        db_manager.config_db_manager.execute_query(
-            delete_query_meta,
-            (workflow_name, workflow_id, interaction_id)
+        app_db.delete_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "interaction_id": interaction_id
+            }
         )
 
         logger.info(f"Successfully deleted {delete_count} logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
