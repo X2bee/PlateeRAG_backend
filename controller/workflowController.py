@@ -623,6 +623,15 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
                 "interaction_id": interaction_id
             }
         )
+        app_db.delete_by_condition(
+            ExecutionMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "interaction_id": interaction_id
+            }
+        )
 
         logger.info(f"Successfully deleted {delete_count} logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
 
@@ -736,6 +745,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         if request_body.interaction_id != "default" and db_manager:
             execution_meta = await get_or_create_execution_meta(
                 db_manager,
+                user_id,
                 request_body.interaction_id,
                 request_body.workflow_id,
                 request_body.workflow_name,
