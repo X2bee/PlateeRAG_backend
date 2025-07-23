@@ -13,6 +13,9 @@ import aiofiles
 import os
 import json
 from pathlib import Path
+import datetime
+import uuid
+from service.database.models.vectordb import VectorDB
 
 logger = logging.getLogger("retrieval-controller")
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
@@ -30,13 +33,14 @@ class SearchQuery(BaseModel):
     filter: Optional[Dict[str, Any]] = None
 
 class CollectionCreateRequest(BaseModel):
+    collection_make_name: str
     collection_name: str
     distance: str = "Cosine"
     description: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
 class CollectionDeleteRequest(BaseModel):
-    collection_name: str
+    collection_id: str
 
 class InsertPointsRequest(BaseModel):
     collection_name: str
@@ -80,37 +84,103 @@ def get_document_processor(request: Request):
 
 # Collection Management Endpoints
 @router.get("/collections")
-async def list_collections(request: Request):
+async def list_collections(request: Request,):
     """모든 컬렉션 목록 조회"""
+    user_id = 3
+    # token = request.headers.get("Authorization")
+
+    app_db = request.app.state.app_db
+    if not app_db:
+        raise HTTPException(
+            status_code=500,
+            detail="Database connection not available"
+        )   
     try:
-        vector_manager = get_vector_manager(request)
-        return vector_manager.list_collections()
+        existing_data = app_db.find_by_condition(
+            VectorDB,
+            {
+                "user_id": user_id,
+            },
+            limit=10000
+        )
+        return existing_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
 
 @router.post("/collections")
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):
-    """새 컬렉션 생성"""
+    """새 컬렉션 생성 및 메타 등록"""
+    user_id = 3
+    # token = request.headers.get("Authorization")
+
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Missing X-User-ID header")
+
+    app_db = request.app.state.app_db
+    if not app_db:
+        raise HTTPException(
+            status_code=500,
+            detail="Database connection not available"
+        )   
+
     rag_service = get_rag_service(request)
     vector_size = rag_service.config.VECTOR_DIMENSION.value
+    vector_manager = rag_service.vector_manager
+
+    # UUID 기반으로 컬렉션 이름 생성
+    collection_name = str(uuid.uuid4())
+    collection_name = collection_request.collection_make_name+'_'+collection_name
+
     try:
-        vector_manager = rag_service.vector_manager
-        return vector_manager.create_collection(
-            collection_request.collection_name,
-            vector_size,
-            collection_request.distance,
-            collection_request.description,
-            collection_request.metadata
+        # 1. DB 먼저 등록
+        vector_db = VectorDB(
+            user_id=user_id,
+            collection_make_name=collection_request.collection_make_name,
+            collection_name=collection_name,
+            description=collection_request.description,
+            registered_at=datetime.datetime.now(),
+            updated_at=datetime.datetime.now()
         )
+        app_db.insert(vector_db)
+            
+
+        # 2. Qdrant에 컬렉션 생성
+        result = vector_manager.create_collection(
+            collection_name=collection_name,  # 실제 Qdrant 컬렉션 이름은 UUID
+            vector_size=vector_size,
+            distance=collection_request.distance,
+            description=collection_request.description,
+            metadata={
+                **(collection_request.metadata or {}),
+                "user_id": user_id,
+                "original_name": collection_request.collection_name
+            }
+        )
+
+        return {
+            "message": "Collection created",
+            "collection_name": collection_name,
+            "result": result
+        }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create collection: {str(e)}")
+
 
 @router.delete("/collections")
 async def delete_collection(request: Request, collection_request: CollectionDeleteRequest):
     """컬렉션 삭제"""
     try:
-        vector_manager = get_vector_manager(request)
-        return vector_manager.delete_collection(collection_request.collection_name)
+        app_db = request.app.state.app_db
+        if not app_db:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not available"
+            )   
+        app_db.delete_by_condition(VectorDB, {
+            "collection_name": collection_request.collection_name
+        })
+        return {"message": "Collection deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}")
 
