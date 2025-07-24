@@ -86,8 +86,8 @@ def get_document_processor(request: Request):
 @router.get("/collections")
 async def list_collections(request: Request,):
     """모든 컬렉션 목록 조회"""
-    user_id = 3
-    # token = request.headers.get("Authorization")
+    user_id = request.headers.get("X-User-ID")
+    token = request.headers.get("Authorization")
 
     app_db = request.app.state.app_db
     if not app_db:
@@ -110,8 +110,8 @@ async def list_collections(request: Request,):
 @router.post("/collections")
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):
     """새 컬렉션 생성 및 메타 등록"""
-    user_id = 3
-    # token = request.headers.get("Authorization")
+    user_id = request.headers.get("X-User-ID")
+    token = request.headers.get("Authorization")
 
     if not user_id:
         raise HTTPException(status_code=400, detail="Missing X-User-ID header")
