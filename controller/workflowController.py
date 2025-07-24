@@ -45,6 +45,13 @@ class ConversationRequest(BaseModel):
     workflow_name: Optional[str] = None
     selected_collection: Optional[str] = None
 
+def get_db_manager(request: Request):
+    """데이터베이스 매니저 의존성 주입"""
+    if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
+        return request.app.state.app_db
+    else:
+        raise HTTPException(status_code=500, detail="Database connection not available")
+
 def get_rag_service(request: Request):
     """RAG 서비스 의존성 주입"""
     if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
@@ -105,12 +112,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             filename = workflow_request.workflow_name
         file_path = os.path.join(download_path_id, filename)
 
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
+        app_db = get_db_manager(request)
 
         # nodes 수 계산
         nodes = workflow_data.get('nodes', [])
@@ -219,12 +221,7 @@ async def delete_workflow(request: Request, workflow_name: str):
     try:
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
+        app_db = get_db_manager(request)
 
         existing_data = app_db.find_by_condition(
             WorkflowMeta,
@@ -267,13 +264,7 @@ async def list_workflows_detail(request: Request):
     try:
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
-
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
+        app_db = get_db_manager(request)
 
         existing_data = app_db.find_by_condition(
             WorkflowMeta,
@@ -312,13 +303,7 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
     try:
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
-
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
+        app_db = get_db_manager(request)
 
         # SQL 쿼리 작성
         query = """
@@ -442,13 +427,7 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
     try:
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
-
+        app_db = get_db_manager(request)
         existing_data = app_db.find_by_condition(
             NodePerformance,
             {
@@ -510,13 +489,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
     try:
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
-
+        app_db = get_db_manager(request)
         result = app_db.find_by_condition(
             ExecutionIO,
             {
@@ -527,6 +500,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
             },
             limit=1000000,  # 필요에 따라 조정 가능
             orderby="updated_at",
+            orderby_asc=True,
             return_list=True
         )
 
@@ -583,13 +557,7 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
     try:
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
-
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
+        app_db = get_db_manager(request)
 
         existing_data = app_db.find_by_condition(
             ExecutionIO,
@@ -660,15 +628,10 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
     try:
         user_id = request.headers.get("X-User-ID")
         token = request.headers.get("Authorization")
-
         workflow_data = workflow.dict()
+        app_db = get_db_manager(request)
 
-        # 데이터베이스 매니저 가져오기
-        db_manager = None
-        if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
-            db_manager = request.app.state.app_db
-
-        executor = WorkflowExecutor(workflow_data, db_manager, workflow.interaction_id, user_id)
+        executor = WorkflowExecutor(workflow_data, app_db, workflow.interaction_id, user_id)
         final_outputs = executor.execute_workflow()
 
         return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
@@ -734,17 +697,15 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
 
         ## app에 저장된 db_manager를 가져옴. 이걸 통해 DB에 접근할 수 있음.
         ## DB에 접근하여 execution 데이터를 활용하여, 기록된 대화를 가져올지 말지 결정.
-        db_manager = None
-        if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
-            db_manager = request.app.state.app_db
+        app_db = get_db_manager(request)
 
         ## 일반적인 실행(execution)이 아닌 경우, 즉 대화형 실행(conversation execution)인 경우
         ## interaction_id가 "default"가 아닌 경우, 대화형 실행을 위한 메타데이터를 가져오거나 생성
         ## interaction_id가 "default"인 경우, execution_meta는 None으로 설정
         execution_meta = None
-        if request_body.interaction_id != "default" and db_manager:
+        if request_body.interaction_id != "default" and app_db:
             execution_meta = await get_or_create_execution_meta(
-                db_manager,
+                app_db,
                 user_id,
                 request_body.interaction_id,
                 request_body.workflow_id,
@@ -757,12 +718,12 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         ## WorkflowExecutor 클래스는 워크플로우의 노드와 엣지를 기반으로 워크플로우를 실행하는 역할을 함.
         ## 워크플로우 실행 시, interaction_id를 전달하여 대화형 실행을 지원함. (이렇게 되는 경우, interaction_id는 대화형 실행의 ID로 사용되어 DB에 저장됨)
         ## 워크플로우 실행 결과는 final_outputs에 저장됨.
-        executor = WorkflowExecutor(workflow_data, db_manager, request_body.interaction_id, user_id)
+        executor = WorkflowExecutor(workflow_data, app_db, request_body.interaction_id, user_id)
         final_outputs = executor.execute_workflow()
 
         ## 대화형 실행인 경우 execution_meta의 값을 가지고, 이 경우에는 대화 count를 증가.
         if execution_meta:
-            await update_execution_meta_count(db_manager, execution_meta)
+            await update_execution_meta_count(app_db, execution_meta)
 
         response_data = {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
 
