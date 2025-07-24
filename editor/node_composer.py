@@ -10,6 +10,7 @@ from editor.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, F
 
 NODE_REGISTRY = []
 NODE_CLASS_REGISTRY: Dict[str, Type['Node']] = {}
+CURRENT_USER_ID: str = None  # 현재 discovery 과정에서 사용할 user_id 저장
 
 def get_node_registry() -> List[NodeSpec]:
     """전역 NODE_REGISTRY에 접근하는 함수"""
@@ -23,9 +24,10 @@ def get_node_by_id(node_id: str) -> Type['Node']:
     return NODE_CLASS_REGISTRY.get(node_id)
 
 def clear_registries():
-    global NODE_REGISTRY, NODE_CLASS_REGISTRY
+    global NODE_REGISTRY, NODE_CLASS_REGISTRY, CURRENT_USER_ID
     NODE_REGISTRY = []
     NODE_CLASS_REGISTRY = {}
+    CURRENT_USER_ID = None
 
 class Node(ABC):
     categoryId: str = "Default"
@@ -84,7 +86,17 @@ class Node(ABC):
                 try:
                     # 실제 인스턴스를 생성해서 함수 호출
                     try:
-                        temp_instance = cls()
+                        # user_id가 있고 __init__이 user_id를 받을 수 있는지 확인
+                        import inspect
+                        init_signature = inspect.signature(cls.__init__)
+                        init_params = list(init_signature.parameters.keys())
+
+                        if CURRENT_USER_ID and 'user_id' in init_params:
+                            temp_instance = cls(user_id=CURRENT_USER_ID)
+                            print(f"  -> Created instance with user_id: {CURRENT_USER_ID}")
+                        else:
+                            temp_instance = cls()
+
                         options_result = processed_param['options'](temp_instance)
                         processed_param['options'] = options_result
                         print(f"  -> Parameter '{param['id']}' options resolved: {len(options_result) if options_result else 0} items")
@@ -133,10 +145,16 @@ def run_discovery() -> None:
         except Exception as e:
             print(f"Error importing module {module_info.name}: {e}")
 
-def run_force_discovery() -> None:
+def run_force_discovery(user_id: str = None) -> None:
     """모든 노드 모듈을 강제로 다시 로드하여 __init_subclass__ 메서드가 다시 실행되도록 합니다."""
     # 기존 레지스트리 초기화
     clear_registries()
+
+    # user_id가 제공된 경우 전역 변수에 설정
+    global CURRENT_USER_ID
+    if user_id:
+        CURRENT_USER_ID = user_id
+        print(f"Setting user_id for node discovery: {user_id}")
 
     nodes_root_dir = Path(__file__).parent / "nodes"
     for module_info in pkgutil.walk_packages(path=[str(nodes_root_dir)], prefix='editor.nodes.'):

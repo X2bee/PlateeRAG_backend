@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, Union, List
 import threading
@@ -25,9 +25,12 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-def get_node_list():
+def get_node_list(user_id = None):
     try:
-        exported_nodes_path = "./constants/exported_nodes.json"
+        if user_id:
+            exported_nodes_path = f"./constants/{user_id}/exported_nodes.json"
+        else:
+            exported_nodes_path = "./constants/exported_nodes.json"
         if not os.path.exists(exported_nodes_path):
             raise HTTPException(status_code=404, detail="No nodes available. Please run discovery first.")
         with open(exported_nodes_path, 'r') as file:
@@ -42,9 +45,11 @@ def get_node_list():
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/get", response_model=List[Dict[str, Any]])
-async def list_nodes():
+async def list_nodes(request: Request):
     try:
-        nodes = get_node_list()
+        user_id = request.headers.get("X-User-ID")
+        token = request.headers.get("Authorization")
+        nodes = get_node_list(user_id=user_id)
         return nodes
     except HTTPException as e:
         raise e
@@ -53,14 +58,17 @@ async def list_nodes():
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/export", response_model=Dict[str, Any])
-async def export_nodes():
+async def export_nodes(request: Request):
     """
     Refesh and export the list of nodes to a JSON file.
     """
     try:
+        user_id = request.headers.get("X-User-ID")
+        token = request.headers.get("Authorization")
+
         from editor.node_composer import NODE_REGISTRY
         run_discovery()
-        output_filename = "./constants/exported_nodes.json"
+        output_filename = f"./constants/{user_id}/exported_nodes.json"
         generate_json_spec(output_path=output_filename)
         if not os.path.exists(output_filename):
             raise HTTPException(status_code=500, detail="Failed to generate nodes JSON file.")
@@ -73,14 +81,17 @@ async def export_nodes():
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/refresh", response_model=Dict[str, Any])
-async def refresh_nodes():
+async def refresh_nodes(request: Request):
     """
     Refesh and export the list of nodes to a JSON file.
     """
     try:
+        user_id = request.headers.get("X-User-ID")
+        token = request.headers.get("Authorization")
+
         from editor.node_composer import NODE_REGISTRY
-        run_force_discovery()
-        output_filename = "./constants/exported_nodes.json"
+        run_force_discovery(user_id=user_id)
+        output_filename = f"./constants/{user_id}/exported_nodes.json"
         generate_json_spec(output_path=output_filename)
         if not os.path.exists(output_filename):
             raise HTTPException(status_code=500, detail="Failed to generate nodes JSON file.")

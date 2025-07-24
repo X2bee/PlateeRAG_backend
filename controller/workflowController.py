@@ -143,13 +143,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             WorkflowMeta,
             {
                 "user_id": user_id,
-                "workflow_id": workflow_request.content.workflow_id,
                 "workflow_name": workflow_request.workflow_name,
-                "node_count": node_count,
-                "edge_count": edge_count,
-                "has_startnode": has_startnode,
-                "has_endnode": has_endnode,
-                "is_completed": (has_startnode and has_endnode),
             },
             limit=1
         )
@@ -232,6 +226,8 @@ async def delete_workflow(request: Request, workflow_name: str):
             limit=1
         )
 
+        app_db.delete(WorkflowMeta, existing_data[0].id if existing_data else None)
+
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
         filename = f"{workflow_name}.json"
@@ -240,7 +236,6 @@ async def delete_workflow(request: Request, workflow_name: str):
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
-        app_db.delete(WorkflowMeta, existing_data[0].id if existing_data else None)
         os.remove(file_path)
 
         logger.info(f"Workflow deleted successfully: {filename}")

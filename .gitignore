@@ -10,7 +10,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
-constants/exported_nodes.json
+exported_nodes.json
 develop-eggs/
 dist/
 downloads/

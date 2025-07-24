@@ -6,6 +6,7 @@ from editor.node_composer import Node
 from langchain.agents import tool
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.tools.async_helper import sync_run_async
+from service.database.models.vectordb import VectorDB
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +79,26 @@ class QdrantRetrievalTool(Node):
         }
     ]
 
-    def __init__(self, **kwargs):
+    def __init__(self, user_id: str = None, **kwargs):
         super().__init__(**kwargs)
+        self.user_id = user_id
+        self.db_service = AppServiceManager.get_db_manager()
         self.rag_service = AppServiceManager.get_rag_service()
-        if not self.rag_service:
+        print(self.user_id)
+        if not self.db_service:
             logger.error("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
             raise RuntimeError("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
-        self.vector_manager = self.rag_service.vector_manager
 
         try:
-            collections = self.vector_manager.list_collections().get('collections', [])
-            self._collections_cache = [{"value": collection, "label": collection} for collection in collections]
+            collections = self.db_service.find_by_condition(
+                VectorDB,
+                {
+                "user_id": self.user_id
+                },
+                limit=1000,
+            )
+            self._collections_cache = [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
+
         except Exception as e:
             logger.warning(f"초기 컬렉션 목록 로딩 실패: {e}")
             self._collections_cache = []

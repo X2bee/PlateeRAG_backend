@@ -34,13 +34,19 @@ class SearchQuery(BaseModel):
 
 class CollectionCreateRequest(BaseModel):
     collection_make_name: str
-    collection_name: str
     distance: str = "Cosine"
     description: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
+class DocumentCreateRequest(BaseModel):
+    file: UploadFile = File(...)
+    collection_name: str = Form(...)
+    chunk_size: int = Form(1000)
+    chunk_overlap: int = Form(200)
+    metadata: Optional[str] = Form(None)
+
 class CollectionDeleteRequest(BaseModel):
-    collection_id: str
+    collection_name: str
 
 class InsertPointsRequest(BaseModel):
     collection_name: str
@@ -94,14 +100,15 @@ async def list_collections(request: Request,):
         raise HTTPException(
             status_code=500,
             detail="Database connection not available"
-        )   
+        )
     try:
         existing_data = app_db.find_by_condition(
             VectorDB,
             {
                 "user_id": user_id,
             },
-            limit=10000
+            limit=10000,
+            return_list=True
         )
         return existing_data
     except Exception as e:
@@ -121,15 +128,16 @@ async def create_collection(request: Request, collection_request: CollectionCrea
         raise HTTPException(
             status_code=500,
             detail="Database connection not available"
-        )   
+        )
 
     rag_service = get_rag_service(request)
     vector_size = rag_service.config.VECTOR_DIMENSION.value
     vector_manager = rag_service.vector_manager
-
     # UUID 기반으로 컬렉션 이름 생성
     collection_name = str(uuid.uuid4())
     collection_name = collection_request.collection_make_name+'_'+collection_name
+
+    print(collection_name)
 
     try:
         # 1. DB 먼저 등록
@@ -142,7 +150,7 @@ async def create_collection(request: Request, collection_request: CollectionCrea
             updated_at=datetime.datetime.now()
         )
         app_db.insert(vector_db)
-            
+
 
         # 2. Qdrant에 컬렉션 생성
         result = vector_manager.create_collection(
@@ -153,7 +161,7 @@ async def create_collection(request: Request, collection_request: CollectionCrea
             metadata={
                 **(collection_request.metadata or {}),
                 "user_id": user_id,
-                "original_name": collection_request.collection_name
+                "original_name": collection_request.collection_make_name,
             }
         )
 
@@ -176,10 +184,15 @@ async def delete_collection(request: Request, collection_request: CollectionDele
             raise HTTPException(
                 status_code=500,
                 detail="Database connection not available"
-            )   
+            )
+        rag_service = get_rag_service(request)
+        vector_manager = rag_service.vector_manager
+
         app_db.delete_by_condition(VectorDB, {
             "collection_name": collection_request.collection_name
         })
+        vector_manager.delete_collection(collection_request.collection_name)
+
         return {"message": "Collection deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}")
