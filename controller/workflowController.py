@@ -266,7 +266,8 @@ async def list_workflows_detail(request: Request):
             {
                 "user_id": user_id,
             },
-            limit=10000
+            limit=10000,
+            orderby="updated_at",
         )
 
         response_data = []
