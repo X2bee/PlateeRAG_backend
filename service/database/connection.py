@@ -190,6 +190,7 @@ class AppDatabaseManager:
                          limit: int = 100,
                          offset: int = 0,
                          orderby: str = "id",
+                         orderby_asc: bool = False,
                          return_list: bool = False) -> List[BaseModel]:
         """조건으로 레코드 조회"""
         try:
@@ -216,8 +217,8 @@ class AppDatabaseManager:
                 limit_clause = "LIMIT ? OFFSET ?"
 
             values.extend([limit, offset])
-
-            query = f"SELECT * FROM {table_name} WHERE {where_clause} ORDER BY {orderby} DESC {limit_clause}"
+            orderby_type = "ASC" if orderby_asc else "DESC"
+            query = f"SELECT * FROM {table_name} WHERE {where_clause} ORDER BY {orderby} {orderby_type} {limit_clause}"
 
             results = self.config_db_manager.execute_query(query, tuple(values))
 

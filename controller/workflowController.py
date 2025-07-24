@@ -500,6 +500,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
             },
             limit=1000000,  # 필요에 따라 조정 가능
             orderby="updated_at",
+            orderby_asc=True,
             return_list=True
         )
 
