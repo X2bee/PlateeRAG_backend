@@ -263,6 +263,8 @@ class AgentOpenAINodeV2(Node):
             logger.info(f"[CHAT_RESPONSE] Tool calling agent 생성 완료")
 
             logger.info(f"[CHAT_RESPONSE] AgentExecutor 생성")
+            if tools == None:
+                tools = []
             agent_executor = AgentExecutor(
                 agent=agent,
                 tools=tools,
