@@ -10,6 +10,7 @@ from editor.workflow_executor import WorkflowExecutor
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 from controller.controller_helper import extract_user_id_from_request
 
+from service.database.models.user import User
 from service.database.models.executor import ExecutionMeta, ExecutionIO
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.performance import NodePerformance
@@ -264,9 +265,14 @@ async def list_workflows_detail(request: Request):
             orderby="updated_at",
         )
 
+        user_data = app_db.find_by_condition(User,{"id": user_id}, limit=1,
+        )
+        user_name = user_data[0].username if user_data else "Unknown User"
+
         response_data = []
         for data in existing_data:
             data_dict = data.to_dict()
+            data_dict['user_name'] = user_name
             response_data.append(data_dict)
 
         logger.info(f"Found {len(existing_data)} workflow files with detailed information")

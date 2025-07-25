@@ -64,7 +64,7 @@ class AgentVLLMNodeV2(Node):
             "id": "temperature",
             "name": "Temperature",
             "type": "FLOAT",
-            "value": None,
+            "value": 0.0,
             "required": False,
             "optional": True,
             "min": 0.0,
@@ -107,7 +107,7 @@ class AgentVLLMNodeV2(Node):
         self.vllm_repetition_penalty = self.config_composer.get_config_by_name("VLLM_REPETITION_PENALTY").value
         self.vllm_best_of = self.config_composer.get_config_by_name("VLLM_BEST_OF").value
 
-    def execute(self, text: str, tools, memory: Optional[Any] = None,
+    def execute(self, text: str, tools: Optional[Any] = None, memory: Optional[Any] = None,
                 model: str = "", temperature: float = None, max_tokens: int = None, base_url: str = "") -> str:
         """
         RAG 컨텍스트를 사용하여 사용자 입력에 대한 채팅 응답을 생성합니다.
@@ -193,13 +193,6 @@ class AgentVLLMNodeV2(Node):
                 base_url=base_url
             )
 
-            final_prompt = ChatPromptTemplate.from_messages([
-                ("system", prompt),
-                MessagesPlaceholder(variable_name="chat_history"),
-                ("user", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad")
-            ])
-
             chat_history = []
             if memory:
                 chat_history = memory.load_memory_variables({})["chat_history"]
@@ -209,13 +202,34 @@ class AgentVLLMNodeV2(Node):
                 "input": text
             }
 
-            agent = create_tool_calling_agent(llm, tools, final_prompt)
-            agent_executor = AgentExecutor(
-                agent=agent,
-                tools=tools,
-                verbose=True,
-                handle_parsing_errors=True,
-            )
+            if tools is not None:
+                final_prompt = ChatPromptTemplate.from_messages([
+                    ("system", prompt),
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("user", "{input}"),
+                    MessagesPlaceholder(variable_name="agent_scratchpad")
+                ])
+                agent = create_tool_calling_agent(llm, tools, final_prompt)
+                agent_executor = AgentExecutor(
+                    agent=agent,
+                    tools=tools,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                )
+                response = agent_executor.invoke(inputs)
+                output = response["output"]
+
+                return output
+
+            else:
+                final_prompt = ChatPromptTemplate.from_messages([
+                    ("system", prompt),
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("user", "{input}")
+                ])
+                chain = final_prompt | llm | StrOutputParser()
+                response = chain.invoke(inputs)
+                return response
 
             response = agent_executor.invoke(inputs)
             return response["output"]
