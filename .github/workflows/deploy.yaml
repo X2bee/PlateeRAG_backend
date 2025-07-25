@@ -1,0 +1,23 @@
+name: Deploy Back
+
+on:
+  push:
+    branches: [ deploy ]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Pull latest code
+        run: |
+          cd /polarag_backend
+          git pull origin deploy
+          echo "✅ Pulled latest source code."
+
+      - name: Install dependencies & Restart server
+        run: |
+          cd /polarag_backend
+          pip install --no-cache-dir -r requirements.txt
+          python3 -m pip install --upgrade pip setuptools
+          pm2 reload backend
+          echo "🚀 Backend server restarted."
