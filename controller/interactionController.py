@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from editor.workflow_executor import WorkflowExecutor
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
+from controller.controller_helper import extract_user_id_from_request
 
 from service.database.models.executor import ExecutionMeta
 
@@ -46,8 +47,7 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
         ExecutionMeta 데이터 리스트
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
 
         app_db = request.app.state.app_db
         if not app_db:

@@ -16,6 +16,7 @@ from pathlib import Path
 import datetime
 import uuid
 from service.database.models.vectordb import VectorDB
+from controller.controller_helper import extract_user_id_from_request
 
 logger = logging.getLogger("retrieval-controller")
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
@@ -92,8 +93,7 @@ def get_document_processor(request: Request):
 @router.get("/collections")
 async def list_collections(request: Request,):
     """모든 컬렉션 목록 조회"""
-    user_id = request.headers.get("X-User-ID")
-    token = request.headers.get("Authorization")
+    user_id = extract_user_id_from_request(request)
 
     app_db = request.app.state.app_db
     if not app_db:
@@ -117,11 +117,7 @@ async def list_collections(request: Request,):
 @router.post("/collections")
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):
     """새 컬렉션 생성 및 메타 등록"""
-    user_id = request.headers.get("X-User-ID")
-    token = request.headers.get("Authorization")
-
-    if not user_id:
-        raise HTTPException(status_code=400, detail="Missing X-User-ID header")
+    user_id = extract_user_id_from_request(request)
 
     app_db = request.app.state.app_db
     if not app_db:

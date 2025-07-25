@@ -10,6 +10,7 @@ import json
 from datetime import datetime
 import glob
 from pathlib import Path
+from controller.controller_helper import extract_user_id_from_request
 
 from editor.node_composer import (
     run_discovery,
@@ -47,8 +48,7 @@ def get_node_list(user_id = None):
 @router.get("/get", response_model=List[Dict[str, Any]])
 async def list_nodes(request: Request):
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
         nodes = get_node_list(user_id=user_id)
         return nodes
     except HTTPException as e:
@@ -63,8 +63,7 @@ async def export_nodes(request: Request):
     Refesh and export the list of nodes to a JSON file.
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
 
         from editor.node_composer import NODE_REGISTRY
         run_discovery()
@@ -86,8 +85,7 @@ async def refresh_nodes(request: Request):
     Refesh and export the list of nodes to a JSON file.
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
 
         from editor.node_composer import NODE_REGISTRY
         run_force_discovery(user_id=user_id)

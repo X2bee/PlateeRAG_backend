@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from editor.workflow_executor import WorkflowExecutor
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
-from service.general_function import create_conversation_function
+from controller.controller_helper import extract_user_id_from_request
 
 from service.database.models.executor import ExecutionMeta, ExecutionIO
 from service.database.models.workflow import WorkflowMeta
@@ -65,9 +65,7 @@ async def list_workflows(request: Request):
     downloads 폴더에 있는 모든 workflow 파일들의 이름을 반환합니다.
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
-
+        user_id = extract_user_id_from_request(request)
 
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
@@ -97,8 +95,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
     파일명: {workflow_name}.json
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
 
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
@@ -183,8 +180,7 @@ async def load_workflow(request: Request, workflow_id: str):
     특정 workflow를 로드합니다.
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
 
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
@@ -213,8 +209,7 @@ async def delete_workflow(request: Request, workflow_name: str):
     특정 workflow를 삭제합니다.
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
 
         existing_data = app_db.find_by_condition(
@@ -257,8 +252,7 @@ async def list_workflows_detail(request: Request):
     각 워크플로우에 대해 파일명, workflow_id, 노드 수, 마지막 수정일자를 포함합니다.
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
 
         existing_data = app_db.find_by_condition(
@@ -297,8 +291,7 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
         노드별 성능 통계와 전체 워크플로우 통계
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
 
         # SQL 쿼리 작성
@@ -421,8 +414,7 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
         삭제된 성능 데이터 개수와 성공 메시지
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
         existing_data = app_db.find_by_condition(
             NodePerformance,
@@ -483,8 +475,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
         ExecutionIO 로그 리스트
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
         result = app_db.find_by_condition(
             ExecutionIO,
@@ -551,8 +542,7 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
         삭제된 로그 개수와 성공 메시지
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
 
         existing_data = app_db.find_by_condition(
@@ -622,8 +612,7 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
     # print("DEBUG: 워크플로우 실행 요청\n", workflow)
 
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
         workflow_data = workflow.dict()
         app_db = get_db_manager(request)
 
@@ -645,8 +634,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
     """
     try:
-        user_id = request.headers.get("X-User-ID")
-        token = request.headers.get("Authorization")
+        user_id = extract_user_id_from_request(request)
 
         ## 일반채팅인 경우 미리 정의된 워크플로우를 이용하여 일반 채팅에 사용.
         if request_body.workflow_name == 'default_mode':
