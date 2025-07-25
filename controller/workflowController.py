@@ -2,9 +2,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+import hashlib
 import os
+import copy
 import json
 import logging
+import re
 from datetime import datetime
 from editor.workflow_executor import WorkflowExecutor
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
@@ -18,12 +21,32 @@ from service.database.models.performance import NodePerformance
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/api/workflow", tags=["workflow"])
 
+def extract_collection_name(collection_full_name: str) -> str:
+    """
+    컬렉션 이름에서 UUID 부분을 제거하고 실제 이름만 추출합니다.
+
+    예: '장하렴연구_3a6a552d-d277-490d-9f3c-cead80d651f7' -> '장하렴연구'
+
+    Args:
+        collection_full_name: UUID가 포함된 전체 컬렉션 이름
+
+    Returns:
+        UUID 부분이 제거된 깨끗한 컬렉션 이름
+    """
+    # UUID 패턴: 8-4-4-4-12 형태의 16진수 문자열
+    uuid_pattern = r'_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+    # UUID 부분을 제거하고 앞의 이름만 반환
+    clean_name = re.sub(uuid_pattern, '', collection_full_name, flags=re.IGNORECASE)
+
+    return clean_name
+
 class WorkflowRequest(BaseModel):
     workflow_name: str
     workflow_id: str
     input_data: str = ""
     interaction_id: str = "default"
-    selected_collection: Optional[str] = None
+    selected_collections: Optional[List[str]] = None
 
 class WorkflowData(BaseModel):
     workflow_name: str
@@ -44,7 +67,7 @@ class ConversationRequest(BaseModel):
     execution_type: str = "default_mode"  # "default_mode" 또는 "workflow"
     workflow_id: Optional[str] = None
     workflow_name: Optional[str] = None
-    selected_collection: Optional[str] = None
+    selected_collections: Optional[List[str]] = None
 
 def get_db_manager(request: Request):
     """데이터베이스 매니저 의존성 주입"""
@@ -800,13 +823,33 @@ async def _default_workflow_parameter_helper(request, request_body, workflow_dat
                 if parameter.get('id') == 'base_url':
                     parameter['value'] = url
 
-    if request_body.selected_collection:
-        for node in workflow_data.get('nodes', []):
-            if node.get('data', {}).get('functionId') == 'document_loaders':
-                parameters = node.get('data', {}).get('parameters', [])
-                for parameter in parameters:
-                    if parameter.get('id') == 'collection_name':
-                        parameter['value'] = request_body.selected_collection
+    if request_body.selected_collections:
+        constant_folder = os.path.join(os.getcwd(), "constants")
+        collection_file_path = os.path.join(constant_folder, "collection_node_template.json")
+        edge_template_path = os.path.join(constant_folder, "base_edge_template.json")
+        with open(collection_file_path, 'r', encoding='utf-8') as f:
+            collection_node_template = json.load(f)
+        with open(edge_template_path, 'r', encoding='utf-8') as f:
+            edge_template = json.load(f)
+
+        for collection in request_body.selected_collections:
+            # UUID 부분을 제거하고 깨끗한 컬렉션 이름 추출
+            collection_name = extract_collection_name(collection)
+            coleection_code = hashlib.sha1(collection_name.encode('utf-8')).hexdigest()[:8]
+
+            print(f"Adding collection node for: {collection} (clean name: {collection_name})")
+            collection_node = copy.deepcopy(collection_node_template)
+            edge = copy.deepcopy(edge_template)
+            collection_node['id'] = f"document_loaders_{collection}"
+            collection_node['data']['parameters'][0]['value'] = collection
+            collection_node['data']['parameters'][1]['value'] = f"retrieval_search_tool_for_{coleection_code}"
+            collection_node['data']['parameters'][2]['value'] = f"Use when a search is needed for the given question related to {collection_name}."
+            workflow_data['nodes'].append(collection_node)
+
+            edge_id = f"{collection_node['id']}:tools-default_agents:tools-{coleection_code}"
+            edge['id'] = edge_id
+            edge['source']['nodeId'] = collection_node['id']
+            workflow_data['edges'].append(edge)
 
     if (request_body.interaction_id) and (request_body.interaction_id != "default"):
         for node in workflow_data.get('nodes', []):
