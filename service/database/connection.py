@@ -79,7 +79,8 @@ class AppDatabaseManager:
                 return {"result": "success"}
             else:
                 # SQLite의 경우 execute_insert 사용
-                return self.config_db_manager.execute_insert(query, tuple(values))
+                self.config_db_manager.execute_insert(query, tuple(values))
+                return {"result": "success"}
 
         except AttributeError as e:
             self.logger.error("Failed to insert %s: %s", model.__class__.__name__, e)
