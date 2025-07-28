@@ -7,13 +7,14 @@ from langchain.agents import tool
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.tools.async_helper import sync_run_async
 from service.database.models.vectordb import VectorDB
+from fastapi import Request
+from controller.controller_helper import extract_user_id_from_request
 
 logger = logging.getLogger(__name__)
 
 class QdrantRetrievalTool(Node):
     categoryId = "langchain"
     functionId = "document_loaders"
-
     nodeId = "document_loaders/QdrantRetrievalTool"
     nodeName = "Qdrant Retrieval Tool"
     description = "VectorDB 검색 Tool을 전달"
@@ -27,10 +28,6 @@ class QdrantRetrievalTool(Node):
             "type": "TOOL"
         },
     ]
-
-    def get_collection_options(self):
-        """컬렉션 옵션을 가져오는 함수"""
-        return getattr(self, '_collections_cache', [])
 
     parameters = [
         {
@@ -53,7 +50,9 @@ class QdrantRetrievalTool(Node):
             "type": "STR",
             "value": "Select Collection",
             "required": True,
-            "options": get_collection_options,
+            "is_api": True,
+            "api_name": "api_collection",
+            "options": [],
         },
         {
             "id": "top_k",
@@ -79,36 +78,25 @@ class QdrantRetrievalTool(Node):
         }
     ]
 
-    def __init__(self, user_id: str = None, **kwargs):
-        super().__init__(**kwargs)
-        self.user_id = user_id
-        self.db_service = AppServiceManager.get_db_manager()
-        self.rag_service = AppServiceManager.get_rag_service()
-        print(self.user_id)
-        if not self.db_service:
-            logger.error("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
-            raise RuntimeError("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
-
-        try:
-            collections = self.db_service.find_by_condition(
-                VectorDB,
-                {
-                "user_id": self.user_id
-                },
-                limit=1000,
-            )
-            self._collections_cache = [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
-
-        except Exception as e:
-            logger.warning(f"초기 컬렉션 목록 로딩 실패: {e}")
-            self._collections_cache = []
+    def api_collection(self, request: Request) -> Dict[str, Any]:
+        user_id = extract_user_id_from_request(request)
+        db_service = request.app.state.app_db
+        collections = db_service.find_by_condition(
+            VectorDB,
+            {
+            "user_id": user_id
+            },
+            limit=1000,
+        )
+        return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
     def execute(self, tool_name, description, collection_name: str, top_k: int = 4, score_threshold: float = 0.2):
         def create_vectordb_tool():
             @tool(tool_name, description=description)
             def vectordb_retrieval_tool(query: str) -> str:
+                rag_service = AppServiceManager.get_rag_service()
                 try:
-                    search_result = sync_run_async(self.rag_service.search_documents(
+                    search_result = sync_run_async(rag_service.search_documents(
                         collection_name=collection_name,
                         query_text=query,
                         limit=top_k,

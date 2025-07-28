@@ -3,13 +3,15 @@ import sys
 import json
 import pkgutil
 import importlib
+import inspect
 from pathlib import Path
-from typing import List, Dict, Any, Type
+from typing import List, Dict, Any, Type, Callable
 from abc import ABC, abstractmethod
 from editor.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP, validate_parameters
 
 NODE_REGISTRY = []
 NODE_CLASS_REGISTRY: Dict[str, Type['Node']] = {}
+NODE_API_REGISTRY: Dict[str, Dict[str, Callable]] = {}  # {nodeId: {api_name: function}}
 CURRENT_USER_ID: str = None  # 현재 discovery 과정에서 사용할 user_id 저장
 
 def get_node_registry() -> List[NodeSpec]:
@@ -20,13 +22,18 @@ def get_node_class_registry() -> Dict[str, Type['Node']]:
     """전역 NODE_CLASS_REGISTRY에 접근하는 함수"""
     return NODE_CLASS_REGISTRY
 
+def get_node_api_registry() -> Dict[str, Dict[str, Callable]]:
+    """전역 NODE_API_REGISTRY에 접근하는 함수"""
+    return NODE_API_REGISTRY
+
 def get_node_by_id(node_id: str) -> Type['Node']:
     return NODE_CLASS_REGISTRY.get(node_id)
 
 def clear_registries():
-    global NODE_REGISTRY, NODE_CLASS_REGISTRY, CURRENT_USER_ID
+    global NODE_REGISTRY, NODE_CLASS_REGISTRY, NODE_API_REGISTRY, CURRENT_USER_ID
     NODE_REGISTRY = []
     NODE_CLASS_REGISTRY = {}
+    NODE_API_REGISTRY = {}
     CURRENT_USER_ID = None
 
 class Node(ABC):
@@ -87,7 +94,6 @@ class Node(ABC):
                     # 실제 인스턴스를 생성해서 함수 호출
                     try:
                         # user_id가 있고 __init__이 user_id를 받을 수 있는지 확인
-                        import inspect
                         init_signature = inspect.signature(cls.__init__)
                         init_params = list(init_signature.parameters.keys())
 
@@ -109,6 +115,20 @@ class Node(ABC):
                     processed_param['options'] = []
 
             processed_parameters.append(processed_param)
+
+        # API 함수 검색 및 등록
+        api_functions = {}
+        for method_name in dir(cls):
+            if method_name.startswith('api_'):
+                method = getattr(cls, method_name)
+                if callable(method) and not method_name.startswith('api___'):  # 특수 메서드 제외
+                    api_name = method_name[4:]  # 'api_' 제거
+                    api_functions[api_name] = method
+                    print(f"  -> Found API function: {method_name} -> {api_name}")
+
+        if api_functions:
+            NODE_API_REGISTRY[cls.nodeId] = api_functions
+            print(f"  -> Registered {len(api_functions)} API functions for node '{cls.nodeId}'")
 
         category_name = CATEGORIES_LABEL_MAP.get(cls.categoryId, "Unknown Category")
         function_name = FUNCTION_LABEL_MAP.get(cls.functionId, "Unknown Function")

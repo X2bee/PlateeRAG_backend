@@ -14,6 +14,14 @@ from controller.retrievalController import router as retrievalRouter
 from controller.interactionController import router as interactionRouter
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
+from controller.nodeApiController import router as nodeApiRouter, register_node_api_routes
+from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
+from controller.performanceController import router as performanceRouter
+from controller.embeddingController import router as embeddingRouter
+from controller.retrievalController import router as retrievalRouter
+from controller.interactionController import router as interactionRouter
+from controller.appController import router as appRouter
+from controller.authController import router as authRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from config.config_composer import config_composer
 from service.database import AppDatabaseManager
@@ -102,6 +110,11 @@ async def lifespan(app: FastAPI):
             app.state.node_registry = get_node_registry()
             app.state.node_count = len(app.state.node_registry)
 
+            # 노드 API 라우트 등록
+            logger.info("Registering node API routes...")
+            register_node_api_routes()
+            logger.info("Node API routes registered successfully")
+
             logger.info(f"Node discovery completed! Registered {app.state.node_count} nodes")
         else:
             logger.info("Node auto-discovery is disabled")
@@ -151,6 +164,7 @@ app.include_router(embeddingRouter)
 app.include_router(retrievalRouter)
 app.include_router(interactionRouter)
 app.include_router(appRouter)
+app.include_router(nodeApiRouter)
 
 # 기존 /app 엔드포인트들은 appController로 이동했으므로 여기서 제거
 
