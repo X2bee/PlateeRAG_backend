@@ -3,9 +3,8 @@ import sys
 import json
 import pkgutil
 import importlib
-import inspect
 from pathlib import Path
-from typing import List, Dict, Any, Type, Callable
+from typing import List, Dict, Type, Callable
 from abc import ABC, abstractmethod
 from editor.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP, validate_parameters
 
@@ -83,39 +82,6 @@ class Node(ABC):
         if not is_valid:
             return
 
-        # 파라미터의 함수형 options를 처리
-        processed_parameters = []
-        for param in cls.parameters:
-            processed_param = param.copy()
-
-            # options가 함수인 경우 처리
-            if 'options' in processed_param and callable(processed_param['options']):
-                try:
-                    # 실제 인스턴스를 생성해서 함수 호출
-                    try:
-                        # user_id가 있고 __init__이 user_id를 받을 수 있는지 확인
-                        init_signature = inspect.signature(cls.__init__)
-                        init_params = list(init_signature.parameters.keys())
-
-                        if CURRENT_USER_ID and 'user_id' in init_params:
-                            temp_instance = cls(user_id=CURRENT_USER_ID)
-                            print(f"  -> Created instance with user_id: {CURRENT_USER_ID}")
-                        else:
-                            temp_instance = cls()
-
-                        options_result = processed_param['options'](temp_instance)
-                        processed_param['options'] = options_result
-                        print(f"  -> Parameter '{param['id']}' options resolved: {len(options_result) if options_result else 0} items")
-                    except Exception as init_error:
-                        # __init__ 실패 시 빈 배열로 대체
-                        print(f"  -> Warning: Could not initialize instance for '{param['id']}' options: {init_error}")
-                        processed_param['options'] = []
-                except Exception as e:
-                    print(f"  -> Warning: Failed to resolve options for parameter '{param['id']}': {e}")
-                    processed_param['options'] = []
-
-            processed_parameters.append(processed_param)
-
         # API 함수 검색 및 등록
         api_functions = {}
         for method_name in dir(cls):
@@ -144,7 +110,7 @@ class Node(ABC):
             "tags": cls.tags,
             "inputs": cls.inputs,
             "outputs": cls.outputs,
-            "parameters": processed_parameters
+            "parameters": cls.parameters
         }
         NODE_REGISTRY.append(spec)
         NODE_CLASS_REGISTRY[cls.nodeId] = cls
