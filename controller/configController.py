@@ -516,6 +516,44 @@ async def test_connection(category: str):
         logging.error(f"Connection test failed for {category}: {e}")
         raise HTTPException(status_code=500, detail=f"Connection test failed: {str(e)}")
 
+@router.post("/test/collection/{category}")
+async def test_collection_connection(category: str):
+    """Collection 연결 테스트 API - 이미지-텍스트 변환 설정 기반 연결 테스트"""
+    try:
+        configs = get_all_persistent_configs()
+        config_dict = {config.env_name: config.value for config in configs}
+        
+        logging.info(config_dict)
+        # IMAGE_TEXT 관련 설정에서 제공자 결정 (예: "openai" 또는 "vllm")
+        const_provider = config_dict.get("IMAGE_TEXT_MODEL_PROVIDER", "no_model").lower()
+        if const_provider not in ("openai", "vllm"):
+            raise HTTPException(status_code=400, detail=f"Unsupported collection provider: {const_provider}")
+        
+        llm_service = LLMService()
+        
+        if const_provider == "openai":
+            config_data = {
+                'api_key': config_dict.get("IMAGE_TEXT_API_KEY"),
+                'base_url': config_dict.get("IMAGE_TEXT_BASE_URL", "https://api.openai.com/v1"),
+                'model': config_dict.get("IMAGE_TEXT_MODEL_NAME", "gpt-4-vision-preview")
+            }
+            return await llm_service.test_openai_connection(config_data)
+        elif const_provider == "vllm":
+            config_data = {
+                'base_url':  config_dict.get("IMAGE_TEXT_BASE_URL"),  # ← 여기를 IMAGE_TEXT_BASE_URL로
+                'api_key':   config_dict.get("IMAGE_TEXT_API_KEY"),
+                'model_name':config_dict.get("IMAGE_TEXT_MODEL_NAME")
+            }
+            return await llm_service.test_vllm_connection(config_data)
+    except HTTPException:
+        raise
+    except (ValueError, ConnectionError, RequestException) as e:
+        logging.error(f"Collection connection test failed for {category}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Collection connection test failed for {category}: {e}")
+        raise HTTPException(status_code=500, detail=f"Collection connection test failed: {str(e)}")
+
 @router.post("/llm/validate/{provider}")
 async def validate_llm_provider_config(provider: str):
     """특정 LLM 제공자 설정 유효성 검사"""

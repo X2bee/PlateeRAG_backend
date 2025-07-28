@@ -56,7 +56,7 @@ class LLMService:
         model = config_data.get('model', 'gpt-3.5-turbo')
         
         return await self.openai_service.test_connection(api_key, base_url, model)
-    
+
     async def test_vllm_connection(self, config_data: Dict[str, Any]) -> Dict[str, Any]:
         """vLLM 연결 테스트"""
         base_url = config_data.get('base_url')
