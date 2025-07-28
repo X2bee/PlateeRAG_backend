@@ -11,8 +11,12 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install --upgrade uv
 
-COPY . .
+COPY ./requirements.txt .
+COPY ./uv.lock .
+COPY ./pyproject.toml .
 
 RUN uv sync
 
 RUN uv add -r requirements.txt
+
+COPY . .
