@@ -7,12 +7,14 @@
 
 import logging
 import re
+import base64
 from pathlib import Path
-from typing import List, Dict, Set
+from typing import List, Dict, Optional, Any
 import aiofiles
 import PyPDF2
 from docx import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+from service.llm.llm_service import LLMService
 
 try:
     import pandas as pd
@@ -26,71 +28,156 @@ try:
 except ImportError:
     PDFMINER_AVAILABLE = False
 
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    PDF2IMAGE_AVAILABLE = False
+
+try:
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage
+    LANGCHAIN_OPENAI_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_OPENAI_AVAILABLE = False
+
 logger = logging.getLogger("document-processor")
 
-# Langchain에서 지원하는 언어별 코드 분할 매핑
 LANGCHAIN_CODE_LANGUAGE_MAP = {
-    'py': Language.PYTHON,
-    'js': Language.JS,
-    'ts': Language.TS,
-    'java': Language.JAVA,
-    'cpp': Language.CPP,
-    'c': Language.CPP,
-    'cs': Language.CSHARP,
-    'go': Language.GO,
-    'rs': Language.RUST,
-    'php': Language.PHP,
-    'rb': Language.RUBY,
-    'swift': Language.SWIFT,
-    'kt': Language.KOTLIN,
-    'scala': Language.SCALA,
-    'html': Language.HTML,
-    'jsx': Language.JS,
-    'tsx': Language.TS,
-    # vue, svelte 등은 언어 지원 범위에 따라 fallback 처리 필요
+    'py': Language.PYTHON, 'js': Language.JS, 'ts': Language.TS,
+    'java': Language.JAVA, 'cpp': Language.CPP, 'c': Language.CPP,
+    'cs': Language.CSHARP, 'go': Language.GO, 'rs': Language.RUST,
+    'php': Language.PHP, 'rb': Language.RUBY, 'swift': Language.SWIFT,
+    'kt': Language.KOTLIN, 'scala': Language.SCALA,
+    'html': Language.HTML, 'jsx': Language.JS, 'tsx': Language.TS,
 }
 
 class DocumentProcessor:
     """문서 처리를 담당하는 클래스"""
-    
-    def __init__(self):
-        """DocumentProcessor 초기화"""
-        # 지원하는 파일 타입들을 카테고리별로 정의
+    def __init__(self, collection_config=None):
         self.document_types = ['pdf', 'docx', 'doc']
         self.text_types = ['txt', 'md', 'markdown', 'rtf']
-        self.code_types = [
-            'py', 'js', 'ts', 'java', 'cpp', 'c', 'h', 'cs', 'go', 'rs', 
-            'php', 'rb', 'swift', 'kt', 'scala', 'dart', 'r', 'sql', 
-            'html', 'css', 'jsx', 'tsx', 'vue', 'svelte'
-        ]
-        self.config_types = [
-            'json', 'yaml', 'yml', 'xml', 'toml', 'ini', 'cfg', 'conf',
-            'properties', 'env'
-        ]
-        self.data_types = ['csv', 'tsv', 'xlsx', 'xls']
-        self.script_types = ['sh', 'bat', 'ps1', 'zsh', 'fish']
-        self.log_types = ['log']
-        self.web_types = ['htm', 'xhtml']
-        
-        # 모든 지원하는 타입들을 하나의 리스트로 통합
+        self.code_types = ['py','js','ts','java','cpp','c','h','cs','go','rs',
+                          'php','rb','swift','kt','scala','dart','r','sql',
+                          'html','css','jsx','tsx','vue','svelte']
+        self.config_types = ['json','yaml','yml','xml','toml','ini','cfg','conf','properties','env']
+        self.data_types   = ['csv','tsv','xlsx','xls']
+        self.script_types = ['sh','bat','ps1','zsh','fish']
+        self.log_types    = ['log']
+        self.web_types    = ['htm','xhtml']
+        self.image_types  = ['jpg','jpeg','png','gif','bmp','webp']
         self.supported_types = (
-            self.document_types + self.text_types + self.code_types + 
-            self.config_types + self.data_types + self.script_types + 
-            self.log_types + self.web_types
+            self.document_types + self.text_types + self.code_types +
+            self.config_types + self.data_types + self.script_types +
+            self.log_types + self.web_types + self.image_types
         )
+        self.collection_config = collection_config
         
-        # pandas가 없으면 Excel 파일 형식 제거
+        # ★ image_text_enabled 속성 초기화 (매우 중요!)
+        self.image_text_enabled = False
+        
         if not PANDAS_AVAILABLE:
-            self.supported_types = [t for t in self.supported_types if t not in ['xlsx', 'xls']]
-        
-        # 인코딩 시도 순서 (일반적인 순서대로)
-        self.encodings = ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr', 'latin-1', 'ascii']
-        
+            self.supported_types = [t for t in self.supported_types if t not in ['xlsx','xls']]
+        if not LANGCHAIN_OPENAI_AVAILABLE:
+            self.supported_types = [t for t in self.supported_types if t not in self.image_types]
+            logger.warning("langchain_openai not available. Image processing disabled.")
+        self.encodings = ['utf-8','utf-8-sig','cp949','euc-kr','latin-1','ascii']
         if not PDFMINER_AVAILABLE:
-            logger.warning("pdfminer not available. PDF processing will use fallback PyPDF2 method.")
-        if not PANDAS_AVAILABLE:
-            logger.warning("pandas not available. Excel file processing (.xlsx, .xls) will not be supported.")
-    
+            logger.warning("pdfminer not available. Using PyPDF2 fallback.")
+        if not PDF2IMAGE_AVAILABLE:
+            logger.warning("pdf2image not available. OCR disabled.")
+        self._load_image_text_config()
+
+    def _load_image_text_config(self):
+        """이미지-텍스트 변환 설정 로드 (OpenAI/vLLM healthcheck 포함)"""
+        try:
+            logger.info(f"initial collection_config: {self.collection_config}")
+
+            if not self.collection_config:
+                self.collection_config = {'provider':'no_model'}
+                self.image_text_enabled = False
+                logger.info("❌ Image-text conversion disabled (no_model)")
+                return
+
+            config_dict: Dict[str, Any] = {}
+            try:
+                p      = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', None)
+                u_api  = getattr(self.collection_config, 'IMAGE_TEXT_API_BASE_URL', None)
+                u_base = getattr(self.collection_config, 'IMAGE_TEXT_BASE_URL', None)
+                k      = getattr(self.collection_config, 'IMAGE_TEXT_API_KEY', None)
+                m      = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_NAME', None)
+                t      = getattr(self.collection_config, 'IMAGE_TEXT_TEMPERATURE', None)
+
+                config_dict['provider']    = (p.value.lower() if p else 'no_model')
+                if u_api and getattr(u_api, 'value', None):
+                    config_dict['base_url'] = u_api.value
+                elif u_base and getattr(u_base, 'value', None):
+                    config_dict['base_url'] = u_base.value
+                else:
+                    config_dict['base_url'] = 'https://api.openai.com/v1'
+                config_dict['api_key']     = (k.value if k else '')
+                config_dict['model']       = (m.value if m else 'gpt-4-vision-preview')
+                config_dict['temperature'] = (t.value if t else 0.7)
+                logger.info(f"Extracted config_dict: {config_dict}")
+            except Exception as attr_err:
+                logger.error(f"Error extracting config attributes: {attr_err}")
+                config_dict = {'provider':'no_model','base_url':'','api_key':'','model':'','temperature':0.7}
+
+            provider = config_dict['provider']
+            if provider in ('openai','vllm'):
+                try:
+                    import asyncio
+                    service = LLMService()
+                    coro = service.test_provider_connection(
+                        provider,
+                        {
+                            'api_key':    config_dict['api_key'],
+                            'base_url':   config_dict['base_url'],
+                            'model':      config_dict['model'],
+                            'model_name': config_dict['model']
+                        }
+                    )
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # 비동기 환경에서는 healthcheck를 나중에 실행
+                            task = loop.create_task(coro)
+                            task.add_done_callback(lambda t: self._apply_healthcheck(t.result(), config_dict))
+                            # 일단 활성화해놓고 healthcheck 결과를 기다림
+                            self.image_text_enabled = True
+                        else:
+                            result = loop.run_until_complete(coro)
+                            self._apply_healthcheck(result, config_dict)
+                    except Exception as hc_err:
+                        logger.error(f"Healthcheck error: {hc_err}")
+                        config_dict['provider'] = 'no_model'
+                        self.image_text_enabled = False
+                except ImportError:
+                    logger.warning("LLMService not available, enabling OCR without healthcheck")
+                    self.image_text_enabled = True
+            else:
+                self.image_text_enabled = False
+
+            self.collection_config = config_dict
+            logger.info(f"final collection_config: {self.collection_config}")
+            logger.info(f"Image-text enabled={self.image_text_enabled}, provider={config_dict['provider']}")
+        except Exception as e:
+            logger.error(f"_load_image_text_config fatal: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            self.collection_config = {'provider':'no_model'}
+            self.image_text_enabled = False
+
+    def _apply_healthcheck(self, result: Dict[str,Any], config_dict: Dict[str,Any]):
+        """헬스체크 결과 적용"""
+        if result.get('status') == 'success':
+            logger.info("✅ Healthcheck passed.")
+            self.image_text_enabled = True
+        else:
+            logger.warning("❌ Healthcheck failed, fallback to no_model")
+            config_dict['provider'] = 'no_model'
+            self.image_text_enabled = False
+
     def get_supported_types(self) -> List[str]:
         """지원하는 파일 형식 목록 반환"""
         return self.supported_types.copy()
@@ -114,6 +201,8 @@ class DocumentProcessor:
             return 'log'
         elif file_type in self.web_types:
             return 'web'
+        elif file_type in self.image_types:
+            return 'image'
         else:
             return 'unknown'
     
@@ -140,6 +229,77 @@ class DocumentProcessor:
         text = text.replace('\t', '    ')
         
         return text
+    
+    async def _convert_image_to_text(self, image_path: str) -> str:
+        """이미지를 텍스트로 변환 (설정된 프로바이더 사용)"""
+        if not self.image_text_enabled:
+            return "[이미지 파일: 이미지-텍스트 변환이 설정되지 않았습니다]"
+        
+        try:
+            # 이미지를 base64로 인코딩
+            with open(image_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            
+            # collection_config에서 프로바이더 정보 가져오기
+            if not self.collection_config:
+                return "[이미지 파일: 기본 텍스트 추출 모드에서는 이미지 변환을 지원하지 않습니다]"
+            
+            provider = self.collection_config.get('provider', 'openai').lower()
+            logger.info(f'Using image-text provider: {provider}')
+            
+            # 프로바이더별 LLM 클라이언트 생성
+            if provider == 'openai':
+                llm = ChatOpenAI(
+                    model=self.collection_config.get('model', 'gpt-4-vision-preview'),
+                    openai_api_key=self.collection_config.get('api_key'),
+                    base_url=self.collection_config.get('base_url', 'https://api.openai.com/v1'),
+                    temperature=self.collection_config.get('temperature', 0.7)
+                )
+            elif provider == 'vllm':
+                # vLLM의 경우 OpenAI 호환 API 사용
+                llm = ChatOpenAI(
+                    model=self.collection_config.get('model', 'Qwen/Qwen2.5-VL-7B-Instruct'),
+                    openai_api_key=self.collection_config.get('api_key', 'dummy'),  # vLLM은 보통 API 키가 필요없음
+                    base_url=self.collection_config.get('base_url'),
+                    temperature=self.collection_config.get('temperature', 0.7)
+                )
+            else:
+                logger.error(f"Unsupported image-text provider: {provider}")
+                return f"[이미지 파일: 지원하지 않는 프로바이더 - {provider}]"
+            
+            # OCR 프롬프트
+            prompt = """이 이미지를 정확한 텍스트로 변환해주세요. 다음 규칙을 철저히 지켜주세요:
+
+1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요
+2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
+3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
+4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
+5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
+
+만약 표가 있다면 다음과 같은 마크다운 형식으로 변환해주세요:
+| 항목 | 내용 |
+|------|------|
+| 데이터1 | 값1 |
+| 데이터2 | 값2 |
+
+텍스트만 출력하고, 추가 설명은 하지 마세요."""
+
+            # 이미지 메시지 생성
+            message = HumanMessage(
+                content=[
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]
+            )
+            
+            # 응답 생성
+            response = await llm.ainvoke([message])
+            logger.info(f"Successfully converted image to text using {provider}: {Path(image_path).name}")
+            return response.content
+            
+        except Exception as e:
+            logger.error(f"Error converting image to text {image_path}: {e}")
+            return f"[이미지 파일: 텍스트 변환 중 오류 발생 - {str(e)}]"
     
     async def extract_text_from_file(self, file_path: str, file_type: str = None) -> str:
         """파일에서 텍스트 추출
@@ -169,6 +329,10 @@ class DocumentProcessor:
         
         try:
             category = self.get_file_category(file_type)
+            
+            # 이미지 파일 처리
+            if category == 'image':
+                return await self._convert_image_to_text(file_path)
             
             # .doc 파일은 libreoffice로 .docx로 변환 후 파싱 (항상 변환 시도)
             if file_type == 'doc':
@@ -204,24 +368,57 @@ class DocumentProcessor:
             raise
     
     async def _extract_text_from_pdf(self, file_path: str) -> str:
-        """PDF 파일에서 텍스트 추출 (기본 pdfminer 사용)"""
+        """PDF 파일에서 텍스트 추출 (프로바이더에 따라 텍스트 추출 또는 OCR)"""
         try:
-            if PDFMINER_AVAILABLE:
-                logger.info(f"Using basic pdfminer for {file_path}")
-                text = extract_text(file_path)
-                # 추출된 텍스트 정리
-                cleaned_text = self.clean_text(text)
-                return cleaned_text
-            else:
-                # fallback to PyPDF2
+            # 프로바이더 확인 (올바른 키 사용)
+            provider = 'no_model'
+            if self.collection_config and isinstance(self.collection_config, dict):
+                provider = self.collection_config.get('provider', 'no_model').lower()
+            
+            logger.info(f"PDF processing with provider: {provider}")
+            
+            # no_model인 경우에만 기본 텍스트 추출
+            if provider == 'no_model':
+                logger.info("Using text extraction mode (no_model)")
+                
+                # 1단계: pdfminer 시도
+                if PDFMINER_AVAILABLE:
+                    logger.info(f"Using basic pdfminer for {file_path}")
+                    text = extract_text(file_path)
+                    cleaned_text = self.clean_text(text)
+                    if len(cleaned_text.strip()) > 100:
+                        logger.info(f"Text extracted via pdfminer: {len(cleaned_text)} chars")
+                        return cleaned_text
+                        
+                # 2단계: PyPDF2 fallback
                 logger.info(f"Using fallback PDF processing for {file_path}")
-                return await self._extract_text_from_pdf_fallback(file_path)
+                text = await self._extract_text_from_pdf_fallback(file_path)
+                logger.info(f"Text extracted via PyPDF2: {len(text)} chars")
+                return text  # no_model에서는 OCR로 넘어가지 않음
+            
+            else:
+                # openai, vllm 등 다른 프로바이더인 경우 무조건 OCR
+                logger.info(f"Using OCR mode with provider: {provider}")
+                return await self._extract_text_from_pdf_via_ocr(file_path)
                 
         except Exception as e:
-            logger.error(f"PDF processing failed, trying fallback: {e}")
-            # fallback to PyPDF2 if pdfminer fails
-            return await self._extract_text_from_pdf_fallback(file_path)
-    
+            logger.error(f"PDF processing failed: {e}")
+            
+            # 에러 발생시에도 프로바이더에 따라 처리
+            provider = 'no_model'
+            if self.collection_config and isinstance(self.collection_config, dict):
+                provider = self.collection_config.get('provider', 'no_model').lower()
+            
+            if provider == 'no_model':
+                # no_model인 경우 기본 fallback만 시도
+                try:
+                    return await self._extract_text_from_pdf_fallback(file_path)
+                except:
+                    return "[PDF 파일: 텍스트 추출 중 오류 발생]"
+            else:
+                # 다른 프로바이더인 경우 OCR 시도
+                return await self._extract_text_from_pdf_via_ocr(file_path)
+
     async def _extract_text_from_pdf_fallback(self, file_path: str) -> str:
         """PDF 파일에서 텍스트 추출 (PyPDF2 fallback)"""
         text = ""
@@ -238,6 +435,69 @@ class DocumentProcessor:
             logger.error(f"Error extracting text from PDF {file_path}: {e}")
             raise
     
+    async def _extract_text_from_pdf_via_ocr(self, file_path: str) -> str:
+        """PDF를 이미지로 변환 후 기존 OCR 메서드 사용"""
+        try:
+            # PDF2IMAGE가 필요
+            if not PDF2IMAGE_AVAILABLE:
+                logger.error("pdf2image not available for OCR processing")
+                return "[PDF 파일: pdf2image 라이브러리가 필요합니다]"
+            
+            # 이미지-텍스트 변환이 비활성화된 경우
+            if not self.image_text_enabled:
+                logger.warning("OCR is disabled, falling back to text extraction")
+                return await self._extract_text_from_pdf_fallback(file_path)
+            
+            import tempfile
+            import os
+            
+            logger.info(f"Converting PDF to images for OCR: {file_path}")
+            
+            # PDF를 이미지로 변환
+            images = convert_from_path(file_path, dpi=300)
+            
+            all_text = ""
+            temp_files = []
+            
+            try:
+                for i, image in enumerate(images):
+                    # 임시 이미지 파일 생성
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+                        image.save(temp_file.name, 'PNG')
+                        temp_files.append(temp_file.name)
+                        
+                        logger.info(f"Processing page {i+1}/{len(images)} via OCR")
+                        
+                        # 기존 OCR 메서드 사용
+                        page_text = await self._convert_image_to_text(temp_file.name)
+                        
+                        if not page_text.startswith("[이미지 파일:"):  # 오류 메시지가 아닌 경우
+                            all_text += f"\n=== 페이지 {i+1} (OCR) ===\n"
+                            all_text += page_text + "\n"
+                        else:
+                            logger.warning(f"OCR failed for page {i+1}: {page_text}")
+                            
+            finally:
+                # 임시 파일 정리
+                for temp_file in temp_files:
+                    try:
+                        os.unlink(temp_file)
+                    except:
+                        pass
+            
+            if all_text.strip():
+                logger.info(f"Successfully extracted text via OCR: {len(all_text)} chars")
+                return self.clean_text(all_text)
+            else:
+                logger.warning("OCR failed, falling back to text extraction")
+                return await self._extract_text_from_pdf_fallback(file_path)
+                
+        except Exception as e:
+            logger.error(f"OCR processing failed for {file_path}: {e}")
+            logger.warning("OCR failed, falling back to text extraction")
+            return await self._extract_text_from_pdf_fallback(file_path)
+
+    # 나머지 메서드들은 동일하므로 생략...
     async def _extract_text_from_docx(self, file_path: str) -> str:
         """DOCX 파일에서 텍스트 추출 (표, 이미지 포함)"""
         try:
@@ -495,10 +755,10 @@ class DocumentProcessor:
     
     def chunk_code_text(self, text: str, file_type: str, chunk_size: int = 1500, chunk_overlap: int = 300) -> List[str]:
         """코드 텍스트를 청크로 분할 (언어별 구문 구조를 고려한 분할)
-        
-        Args:
-            text: 분할할 코드 텍스트
-            file_type: 파일 형식
+            
+            Args:
+                text: 분할할 코드 텍스트
+                file_type: 파일 형식
             chunk_size: 청크 크기 (코드는 좀 더 큰 청크 사용)
             chunk_overlap: 청크 간 중복 크기
             
@@ -599,4 +859,4 @@ class DocumentProcessor:
                 'extension': 'unknown',
                 'category': 'unknown', 
                 'supported': 'false'
-            } 
+            }

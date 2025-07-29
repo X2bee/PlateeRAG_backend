@@ -14,8 +14,14 @@ from controller.retrievalController import router as retrievalRouter
 from controller.interactionController import router as interactionRouter
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
-from controller.vastController import router as vastRouter
 from controller.nodeApiController import router as nodeApiRouter, register_node_api_routes
+from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
+from controller.performanceController import router as performanceRouter
+from controller.embeddingController import router as embeddingRouter
+from controller.retrievalController import router as retrievalRouter
+from controller.interactionController import router as interactionRouter
+from controller.appController import router as appRouter
+from controller.authController import router as authRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from config.config_composer import config_composer
 from service.database import AppDatabaseManager
@@ -70,8 +76,8 @@ async def lifespan(app: FastAPI):
         # 4. RAG 서비스 초기화 (벡터 DB와 임베딩 제공자)
         try:
             logger.info("Initializing RAG services...")
-            rag_service = RAGService(configs["vectordb"], configs.get("openai"))
-
+            rag_service = RAGService(configs["vectordb"], configs["collection"], configs.get("openai"))
+            
             # 개별 서비스들을 app.state에 등록
             app.state.rag_service = rag_service
             app.state.vector_manager = rag_service.vector_manager
@@ -156,8 +162,8 @@ app.include_router(nodeStateRouter)
 app.include_router(performanceRouter)
 app.include_router(embeddingRouter)
 app.include_router(retrievalRouter)
+app.include_router(interactionRouter)
 app.include_router(appRouter)
-app.include_router(vastRouter)
 app.include_router(nodeApiRouter)
 
 # 기존 /app 엔드포인트들은 appController로 이동했으므로 여기서 제거
