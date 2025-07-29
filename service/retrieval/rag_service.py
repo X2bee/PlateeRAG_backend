@@ -22,7 +22,7 @@ logger = logging.getLogger("rag-service")
 class RAGService:
     """RAG 서비스의 핵심 비즈니스 로직을 담당하는 클래스"""
 
-    def __init__(self, vectordb_config, openai_config=None):
+    def __init__(self, vectordb_config, collection_config, openai_config=None):
         """RAGService 초기화
 
         Args:
@@ -31,7 +31,7 @@ class RAGService:
         """
         self.config = vectordb_config
         self.openai_config = openai_config
-        self.document_processor = DocumentProcessor()
+        self.document_processor = DocumentProcessor(collection_config)
         self.vector_manager = VectorManager(vectordb_config)
         self.embeddings_client = None
 

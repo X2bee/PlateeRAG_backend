@@ -1,6 +1,13 @@
 import os
 import asyncio
 from document_processor import DocumentProcessor
+from config.persistent_config import (
+    get_all_persistent_configs, 
+    refresh_all_configs, 
+    save_all_configs, 
+    export_config_summary,
+    PersistentConfig
+)
 
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))  # test 파일과 동일 폴더(data/)
 TEST_FILES = [
