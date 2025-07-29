@@ -202,101 +202,52 @@ class VastAIManager:
             return False
 
     def search_offers(self, custom_query: Optional[str] = None) -> List[Dict[str, Any]]:
-        """오퍼 검색 (다중 전략)"""
+        """오퍼 검색 (단순 직접 방식)"""
         logger.info("🔍 사용 가능한 인스턴스 검색 중...")
         
-        # 다중 검색 전략 정의
-        search_strategies = []
+        # 기본 명령어 구성 - 가장 단순한 형태
+        cmd = ["vastai", "search", "offers"]
         
-        if custom_query:
-            # 사용자 정의 쿼리가 있는 경우
-            search_strategies.append(("custom", custom_query))
+        # 검색 쿼리 결정
+        query = custom_query if custom_query else ""
+        
+        if query.strip():
+            # 쿼리를 개별 파라미터로 분리해서 추가
+            query_parts = query.strip().split()
+            cmd.extend(query_parts)
+            logger.info(f"🔍 검색 쿼리: {' '.join(query_parts)}")
         else:
-            # 기본 검색 전략들
-            search_strategies.append(("configured", self.config.search_query()))
+            logger.info("🔍 모든 오퍼 검색 (필터 없음)")
         
-        # fallback 전략들
-        search_strategies.extend([
-            ("basic_rentable", "rentable=True"),
-            ("minimal", ""),  # 필터 없음
-        ])
-        
-        for strategy_name, query in search_strategies:
-            logger.info(f"🔍 검색 전략 '{strategy_name}' 시도: {query}")
+        try:
+            logger.debug(f"실행할 명령어: {' '.join(cmd)}")
             
-            try:
-                # 명령어 구성
-                cmd = ["vastai", "search", "offers"]
+            # 명령어 실행 - JSON 파싱 비활성화로 raw 출력 받기
+            result = self.run_command(cmd, parse_json=False, timeout=30)
+            
+            if not result["success"]:
+                logger.error(f"검색 실행 실패: {result.get('error')}")
+                return []
+            
+            # 텍스트 응답을 직접 파싱
+            raw_output = result.get("data", "")
+            if not raw_output:
+                logger.warning("검색 결과가 비어있습니다")
+                return []
+            
+            # 텍스트 기반 파싱
+            offers = self._parse_text_offers(raw_output)
+            
+            if offers:
+                logger.info(f"✅ 검색 성공: {len(offers)}개 인스턴스 발견")
+                return offers
+            else:
+                logger.warning("파싱된 오퍼가 없습니다")
+                return []
                 
-                if query.strip():
-                    # 쿼리가 있는 경우만 추가
-                    cmd.append(query)
-                
-                # 출력 형식 지정 (raw 또는 기본)
-                if strategy_name in ["basic_rentable", "minimal"]:
-                    # fallback 전략에서는 --raw 사용하지 않음
-                    pass
-                else:
-                    cmd.extend(["--raw"])
-                
-                # 정렬 옵션 추가 시도
-                if strategy_name != "minimal":
-                    try:
-                        cmd.extend(["--order", "dph_total+"])
-                    except:
-                        pass
-                
-                logger.debug(f"실행할 명령어: {' '.join(cmd)}")
-                
-                # 명령어 실행
-                result = self.run_command(cmd, parse_json=True)
-                
-                if not result["success"]:
-                    logger.warning(f"검색 전략 '{strategy_name}' 실행 실패: {result.get('error')}")
-                    continue
-                
-                offers_data = result["data"]
-                
-                # 다양한 응답 형식 처리
-                if isinstance(offers_data, str):
-                    # 에러 메시지 확인
-                    if "error" in offers_data.lower() or "failed" in offers_data.lower():
-                        logger.warning(f"검색 전략 '{strategy_name}' 실패: {offers_data[:200]}")
-                        continue
-                    
-                    # JSON 파싱 시도
-                    try:
-                        offers_data = json.loads(offers_data)
-                    except json.JSONDecodeError:
-                        # Python literal 파싱 시도
-                        try:
-                            import ast
-                            offers_data = ast.literal_eval(offers_data)
-                        except:
-                            logger.warning(f"검색 전략 '{strategy_name}' 파싱 실패")
-                            continue
-                
-                # 결과 검증 및 정규화
-                if isinstance(offers_data, list) and len(offers_data) > 0:
-                    valid_offers = []
-                    for offer in offers_data:
-                        if isinstance(offer, dict) and 'id' in offer:
-                            # 필수 필드 보장
-                            normalized_offer = self._normalize_offer(offer)
-                            valid_offers.append(normalized_offer)
-                    
-                    if valid_offers:
-                        logger.info(f"✅ 검색 전략 '{strategy_name}' 성공: {len(valid_offers)}개 인스턴스 발견")
-                        return valid_offers
-                
-                logger.warning(f"검색 전략 '{strategy_name}'에서 유효한 결과를 찾지 못함")
-                
-            except Exception as e:
-                logger.warning(f"검색 전략 '{strategy_name}' 실행 실패: {e}")
-                continue
-        
-        logger.error("❌ 모든 검색 전략이 실패했습니다.")
-        return []
+        except Exception as e:
+            logger.error(f"검색 실행 중 오류: {e}")
+            return []
 
     def _normalize_offer(self, offer: Dict[str, Any]) -> Dict[str, Any]:
         """오퍼 데이터 정규화"""
@@ -337,27 +288,99 @@ class VastAIManager:
         return []
 
     def _parse_text_offers(self, text: str) -> List[Dict[str, Any]]:
-        """텍스트 형태의 오퍼 파싱"""
+        """텍스트 형태의 오퍼 파싱 (개선된 버전)"""
         offers = []
         lines = text.strip().split('\n')
         
+        # 다양한 출력 형식 처리
+        logger.debug(f"파싱할 텍스트: {text[:200]}...")
+        
         for line in lines:
-            if 'ID' in line and 'GPU' in line:
-                # 헤더 라인 건너뛰기
+            line = line.strip()
+            if not line:
+                continue
+                
+            # 헤더나 에러 메시지 건너뛰기
+            if any(word in line.upper() for word in ['ID', 'GPU', 'ERROR', 'FAILED', 'COMMAND']):
                 continue
             
-            # 간단한 정규표현식으로 ID와 가격 추출
-            match = re.search(r'(\d+)\s+.*?\$(\d+\.?\d*)', line)
-            if match:
-                offer_id = match.group(1)
-                price = float(match.group(2))
-                
-                offers.append({
-                    "id": offer_id,
-                    "dph_total": price,
-                    "gpu_name": "Unknown",
-                    "num_gpus": 1
-                })
+            # 기본 파싱: ID 가격 GPU 정보 추출
+            # 예시: "123456  RTX4090  24GB  $1.50/hr  Available"
+            offer_data = self._extract_offer_info(line)
+            if offer_data:
+                offers.append(offer_data)
+        
+        # 파싱 결과가 없으면 더 간단한 방식 시도
+        if not offers:
+            logger.debug("기본 파싱 실패, 간단한 파싱 시도")
+            offers = self._simple_parse_offers(text)
+        
+        return offers
+    
+    def _extract_offer_info(self, line: str) -> Optional[Dict[str, Any]]:
+        """단일 라인에서 오퍼 정보 추출"""
+        try:
+            # 다양한 패턴 시도
+            patterns = [
+                # 패턴 1: ID GPU RAM 가격
+                r'(\d+)\s+([A-Z0-9_]+)\s+(\d+(?:\.\d+)?)\s*GB?\s+\$(\d+\.?\d*)',
+                # 패턴 2: ID 가격 (단순)
+                r'(\d+).*?\$(\d+\.?\d*)',
+                # 패턴 3: ID 정보들 가격
+                r'(\d+)\s+.*?\$(\d+\.?\d*)'
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    groups = match.groups()
+                    offer_id = groups[0]
+                    
+                    if len(groups) >= 4:  # 풀 패턴
+                        gpu_name = groups[1]
+                        gpu_ram = float(groups[2])
+                        price = float(groups[3])
+                    else:  # 간단한 패턴
+                        gpu_name = "Unknown"
+                        gpu_ram = 0
+                        price = float(groups[1])
+                    
+                    return {
+                        "id": offer_id,
+                        "gpu_name": gpu_name,
+                        "gpu_ram": gpu_ram,
+                        "dph_total": price,
+                        "num_gpus": 1,
+                        "rentable": True,
+                        "verified": False
+                    }
+        except (ValueError, IndexError) as e:
+            logger.debug(f"라인 파싱 실패: {line[:50]}... - {e}")
+        
+        return None
+    
+    def _simple_parse_offers(self, text: str) -> List[Dict[str, Any]]:
+        """매우 간단한 대안 파싱"""
+        offers = []
+        
+        # 숫자로 시작하는 라인 찾기
+        lines = text.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if re.match(r'^\d+', line):
+                # 첫 번째 숫자를 ID로 사용
+                match = re.match(r'^(\d+)', line)
+                if match:
+                    offer_id = match.group(1)
+                    offers.append({
+                        "id": offer_id,
+                        "gpu_name": "Unknown",
+                        "gpu_ram": 0,
+                        "dph_total": 1.0,  # 기본 가격
+                        "num_gpus": 1,
+                        "rentable": True,
+                        "verified": False
+                    })
         
         return offers
 
@@ -419,6 +442,13 @@ class VastAIManager:
             f"-e VLLM_HOST_IP={vllm_host}",
             f"-e VLLM_PORT={vllm_port}",
             f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
+            f"-e VLLM_MODEL_NAME={self.config.vllm_model_name()}",
+            f"-e VLLM_MAX_MODEL_LEN={self.config.vllm_max_model_len()}",
+            f"-e VLLM_GPU_MEMORY_UTILIZATION={self.config.vllm_gpu_memory_utilization()}",
+            f"-e VLLM_PIPELINE_PARALLEL_SIZE={self.config.vllm_pipeline_parallel_size()}",
+            f"-e VLLM_TENSOR_PARALLEL_SIZE={self.config.vllm_tensor_parallel_size()}",
+            f"-e VLLM_DTYPE={self.config.vllm_dtype()}",
+            f"-e VLLM_TOOL_CALL_PARSER={self.config.vllm_tool_call_parser()}",
         ])
         
         # 환경 변수 문자열로 결합
@@ -497,11 +527,31 @@ class VastAIManager:
             # 간단한 버전으로 재시도
             logger.info("기본 인스턴스 생성 실패, 간단한 버전으로 재시도")
             
+            # 필수 환경변수만 포함한 간단한 버전
+            vllm_host = self.config.vllm_host_ip()
+            vllm_port = self.config.vllm_port()
+            vllm_controller_port = self.config.vllm_controller_port()
+            
+            env_params = [
+                f"-e VLLM_HOST_IP={vllm_host}",
+                f"-e VLLM_PORT={vllm_port}",
+                f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
+                f"-e VLLM_MODEL_NAME={self.config.vllm_model_name()}",
+                f"-e VLLM_MAX_MODEL_LEN={self.config.vllm_max_model_len()}",
+                f"-e VLLM_GPU_MEMORY_UTILIZATION={self.config.vllm_gpu_memory_utilization()}",
+                f"-e VLLM_PIPELINE_PARALLEL_SIZE={self.config.vllm_pipeline_parallel_size()}",
+                f"-e VLLM_TENSOR_PARALLEL_SIZE={self.config.vllm_tensor_parallel_size()}",
+                f"-e VLLM_DTYPE={self.config.vllm_dtype()}",
+                f"-e VLLM_TOOL_CALL_PARSER={self.config.vllm_tool_call_parser()}",
+            ]
+            env_string = " ".join(env_params).strip()
+            
             cmd = [
                 "vastai", "create", "instance",
                 str(offer_id),
                 "--image", self.config.image_name(),
-                "--disk", str(self.config.disk_size())
+                "--disk", str(self.config.disk_size()),
+                "--env", env_string
             ]
             
             result = self.run_command(cmd, parse_json=False)

@@ -1,63 +1,204 @@
 """
-Vast 컨트롤러
+VastAI 인스턴스 관리 컨트롤러
 
-Vast 관련 API 엔드포인트를 제공합니다.
+VastAI 클라우드 GPU 인스턴스의 검색, 생성, 관리 및 모니터링을 위한 RESTful API
 """
 
-from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request, BackgroundTasks, Query
+from pydantic import BaseModel, Field
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
+from enum import Enum
+import json
 
 from config.config_composer import ConfigComposer
 from service.vast.vast_service import VastService, auto_run_vllm
 from service.database.connection import AppDatabaseManager
 
-router = APIRouter(prefix="/api/vast", tags=["vast"])
+router = APIRouter(prefix="/api/vast", tags=["vastAI"])
 logger = logging.getLogger("vast-controller")
 
-# Request 모델들
+# ========== Enums ==========
+class SortBy(str, Enum):
+    price = "price"
+    gpu_ram = "gpu_ram"
+    num_gpus = "num_gpus"
+
+class VLLMDtype(str, Enum):
+    auto = "auto"
+    half = "half"
+    float16 = "float16"
+    bfloat16 = "bfloat16"
+    float = "float"
+    float32 = "float32"
+
+class ToolCallParser(str, Enum):
+    hermes = "hermes"
+    mistral = "mistral"
+    none = "none"
+
+# ========== Request Models ==========
+class OfferSearchRequest(BaseModel):
+    """GPU 오퍼 검색 요청"""
+    gpu_name: Optional[str] = Field(None, description="GPU 모델명", example="RTX4090")
+    max_price: Optional[float] = Field(None, description="최대 시간당 가격 ($)", example=2.0, ge=0)
+    min_gpu_ram: Optional[int] = Field(None, description="최소 GPU RAM (GB)", example=16, ge=1)
+    num_gpus: Optional[int] = Field(None, description="GPU 개수", example=1, ge=1)
+    rentable: Optional[bool] = Field(None, description="렌트 가능 여부", example=True)
+    sort_by: SortBy = Field(SortBy.price, description="정렬 기준")
+    limit: Optional[int] = Field(20, description="결과 제한 개수", example=10, ge=1, le=100)
+
+class VLLMConfigRequest(BaseModel):
+    """VLLM 설정 요청"""
+    # 모델 설정
+    vllm_model_name: str = Field("Qwen/Qwen3-1.7B", description="사용할 모델명", example="Qwen/Qwen3-1.7B")
+    vllm_max_model_len: int = Field(4096, description="최대 모델 길이", example=2048, ge=512, le=32768)
+    
+    # 네트워크 설정
+    vllm_host_ip: str = Field("0.0.0.0", description="호스트 IP", example="0.0.0.0")
+    vllm_port: int = Field(11479, description="VLLM 서비스 포트", example=12434, ge=1024, le=65535)
+    vllm_controller_port: int = Field(11480, description="VLLM 컨트롤러 포트", example=12435, ge=1024, le=65535)
+    
+    # 성능 설정  
+    vllm_gpu_memory_utilization: float = Field(0.9, description="GPU 메모리 사용률", example=0.5, ge=0.1, le=1.0)
+    vllm_pipeline_parallel_size: int = Field(1, description="파이프라인 병렬 크기", example=1, ge=1)
+    vllm_tensor_parallel_size: int = Field(1, description="텐서 병렬 크기", example=1, ge=1)
+    
+    # 데이터 타입 및 고급 설정
+    vllm_dtype: VLLMDtype = Field(VLLMDtype.auto, description="데이터 타입")
+    vllm_tool_call_parser: Optional[ToolCallParser] = Field(None, description="도구 호출 파서")
+    vllm_trust_remote_code: bool = Field(True, description="원격 코드 신뢰 여부")
+    vllm_enforce_eager: bool = Field(False, description="즉시 실행 강제 여부")
+    vllm_max_num_seqs: Optional[int] = Field(None, description="최대 시퀀스 수", ge=1)
+    vllm_block_size: int = Field(16, description="블록 크기", example=16, ge=1)
+    vllm_swap_space: int = Field(4, description="스왑 공간 (GiB)", example=4, ge=0)
+    vllm_disable_log_stats: bool = Field(False, description="로그 통계 비활성화")
+
 class CreateInstanceRequest(BaseModel):
-    offer_id: Optional[str] = None
-    auto_destroy: Optional[bool] = None
+    """인스턴스 생성 요청"""
+    offer_id: Optional[str] = Field(None, description="특정 오퍼 ID (없으면 자동 선택)", example="12345")
+    template_name: Optional[str] = Field(None, description="사용할 템플릿 이름 (budget, high_performance, research)", example="budget")
+    auto_destroy: Optional[bool] = Field(None, description="자동 삭제 여부", example=False)
+    vllm_config: Optional[VLLMConfigRequest] = Field(None, description="VLLM 설정 (선택사항)")
 
-class DestroyInstanceRequest(BaseModel):
-    instance_id: str
+class SetupVLLMRequest(BaseModel):
+    """VLLM 설정 및 실행 요청"""
+    script_directory: str = Field("/home/vllm-script", description="스크립트 디렉토리 경로")
+    hf_token: Optional[str] = Field(None, description="HuggingFace 토큰", example="hf_xxxxx")
+    main_script: str = Field("main.py", description="메인 스크립트 파일명")
+    log_file: str = Field("/tmp/vllm.log", description="로그 파일 경로")
+    install_requirements: bool = Field(True, description="requirements.txt 설치 여부")
+    vllm_config: VLLMConfigRequest = Field(..., description="VLLM 설정")
+    additional_env_vars: Optional[Dict[str, str]] = Field(None, description="추가 환경변수")
 
-class UpdateConfigRequest(BaseModel):
-    config_updates: Dict[str, Any]
+class ExecuteCommandRequest(BaseModel):
+    """명령어 실행 요청"""
+    command: str = Field(..., description="실행할 명령어", example="ps aux | grep python")
+    working_directory: Optional[str] = Field(None, description="작업 디렉토리", example="/home/vllm-script")
+    environment_vars: Optional[Dict[str, str]] = Field(None, description="환경변수")
+    background: bool = Field(False, description="백그라운드 실행 여부")
+    timeout: Optional[int] = Field(300, description="타임아웃 (초)", ge=1, le=3600)
 
-# Response 모델들
+# ========== Response Models ==========
+class OfferInfo(BaseModel):
+    """GPU 오퍼 정보"""
+    id: str = Field(..., description="오퍼 ID")
+    gpu_name: str = Field(..., description="GPU 모델명")
+    num_gpus: int = Field(..., description="GPU 개수")
+    gpu_ram: float = Field(..., description="GPU RAM (GB)")
+    dph_total: float = Field(..., description="시간당 총 가격 ($)")
+    rentable: bool = Field(..., description="렌트 가능 여부")
+    public_ipaddr: Optional[str] = Field(None, description="공개 IP 주소")
+
+class OfferSearchResponse(BaseModel):
+    """GPU 오퍼 검색 응답"""
+    offers: List[OfferInfo] = Field(..., description="검색된 오퍼 목록")
+    total: int = Field(..., description="전체 오퍼 수")
+    filtered_count: int = Field(..., description="필터링된 오퍼 수")
+    search_query: Optional[str] = Field(None, description="사용된 검색 쿼리")
+    sort_info: Dict[str, str] = Field(..., description="정렬 정보")
+
 class InstanceStatusResponse(BaseModel):
-    instance_id: str
-    status: str
-    public_ip: Optional[str] = None
-    urls: Dict[str, str] = {}
-    port_mappings: Dict[str, Any] = {}
+    """인스턴스 상태 응답"""
+    instance_id: str = Field(..., description="인스턴스 ID")
+    status: str = Field(..., description="인스턴스 상태")
+    public_ip: Optional[str] = Field(None, description="공개 IP")
+    urls: Dict[str, str] = Field(default_factory=dict, description="접근 URL들")
+    port_mappings: Dict[str, Any] = Field(default_factory=dict, description="포트 매핑")
+    gpu_info: Optional[Dict[str, Any]] = Field(None, description="GPU 정보")
+    cost_per_hour: Optional[float] = Field(None, description="시간당 비용")
+    uptime: Optional[str] = Field(None, description="가동 시간")
+    vllm_status: Optional[Dict[str, Any]] = Field(None, description="VLLM 상태")
 
 class InstanceListResponse(BaseModel):
-    instances: List[Dict[str, Any]]
-    total: int
+    """인스턴스 목록 응답"""
+    instances: List[Dict[str, Any]] = Field(..., description="인스턴스 목록")
+    total: int = Field(..., description="총 인스턴스 수")
 
+class CommandExecutionResponse(BaseModel):
+    """명령어 실행 응답"""
+    success: bool = Field(..., description="실행 성공 여부")
+    instance_id: str = Field(..., description="인스턴스 ID")
+    command: str = Field(..., description="실행된 명령어")
+    stdout: str = Field(..., description="표준 출력")
+    stderr: str = Field(..., description="표준 에러")
+    background: bool = Field(..., description="백그라운드 실행 여부")
+    error: Optional[str] = Field(None, description="에러 메시지")
+
+# ========== Helper Functions ==========
 def get_vast_service() -> VastService:
     """VastService 인스턴스 생성"""
     try:
         config_composer = ConfigComposer()
-        vast_config = config_composer.vast_config
-        
-        # 데이터베이스 매니저 가져오기
-        db_manager = None
-        if hasattr(config_composer, 'database_manager'):
-            db_manager = config_composer.database_manager
-        
+        vast_config = config_composer.vast
+        db_manager = getattr(config_composer, 'database_manager', None)
         return VastService(vast_config, db_manager)
     except Exception as e:
         logger.error(f"VastService 초기화 실패: {e}")
         raise HTTPException(status_code=500, detail="VastService 초기화 실패")
 
-@router.get("/health", summary="Vast 서비스 상태 확인")
+def generate_vllm_env_vars(config: VLLMConfigRequest, hf_token: Optional[str] = None) -> Dict[str, str]:
+    """VLLM 환경변수 생성"""
+    env_vars = {
+        "VLLM_MODEL_NAME": config.vllm_model_name,
+        "VLLM_HOST_IP": config.vllm_host_ip,
+        "VLLM_PORT": str(config.vllm_port),
+        "VLLM_CONTROLLER_PORT": str(config.vllm_controller_port),
+        "VLLM_MAX_MODEL_LEN": str(config.vllm_max_model_len),
+        "VLLM_GPU_MEMORY_UTILIZATION": str(config.vllm_gpu_memory_utilization),
+        "VLLM_PIPELINE_PARALLEL_SIZE": str(config.vllm_pipeline_parallel_size),
+        "VLLM_TENSOR_PARALLEL_SIZE": str(config.vllm_tensor_parallel_size),
+        "VLLM_DTYPE": config.vllm_dtype,
+        "VLLM_TRUST_REMOTE_CODE": str(config.vllm_trust_remote_code).lower(),
+        "VLLM_ENFORCE_EAGER": str(config.vllm_enforce_eager).lower(),
+        "VLLM_BLOCK_SIZE": str(config.vllm_block_size),
+        "VLLM_SWAP_SPACE": str(config.vllm_swap_space),
+        "VLLM_DISABLE_LOG_STATS": str(config.vllm_disable_log_stats).lower()
+    }
+    
+    if config.vllm_tool_call_parser:
+        env_vars["VLLM_TOOL_CALL_PARSER"] = config.vllm_tool_call_parser
+    if config.vllm_max_num_seqs:
+        env_vars["VLLM_MAX_NUM_SEQS"] = str(config.vllm_max_num_seqs)
+    if hf_token:
+        env_vars.update({
+            "HUGGING_FACE_HUB_TOKEN": hf_token,
+            "HF_HUB_TOKEN": hf_token
+        })
+    
+    return env_vars
+
+# ========== API Endpoints ==========
+
+@router.get("/health", 
+    summary="서비스 상태 확인",
+    description="VastAI 서비스의 상태와 연결을 확인합니다.",
+    response_description="서비스 상태 정보",
+    responses={
+        200: {"description": "서비스 정상"},
+        503: {"description": "서비스 사용 불가"}
+    })
 async def health_check():
-    """Vast 서비스 상태 확인"""
     try:
         service = get_vast_service()
         return {
@@ -69,111 +210,109 @@ async def health_check():
         logger.error(f"Health check 실패: {e}")
         raise HTTPException(status_code=503, detail="서비스 사용 불가")
 
-@router.get("/config", summary="Vast 설정 조회")
-async def get_config():
-    """현재 Vast 설정 조회"""
-    try:
-        config_composer = ConfigComposer()
-        vast_config = config_composer.vast_config
-        
-        return {
-            "image_name": vast_config.image_name(),
-            "max_price": vast_config.max_price(),
-            "disk_size": vast_config.disk_size(),
-            "min_gpu_ram": vast_config.min_gpu_ram(),
-            "search_query": vast_config.search_query(),
-            "debug": vast_config.debug(),
-            "auto_destroy": vast_config.auto_destroy(),
-            "api_key_configured": bool(vast_config.vast_api_key()),
-            "hf_token_configured": bool(vast_config.hf_token())
-        }
-    except Exception as e:
-        logger.error(f"설정 조회 실패: {e}")
-        raise HTTPException(status_code=500, detail="설정 조회 실패")
-
-@router.post("/config", summary="Vast 설정 업데이트")
-async def update_config(request: UpdateConfigRequest):
-    """Vast 설정 업데이트"""
-    try:
-        config_composer = ConfigComposer()
-        vast_config = config_composer.vast_config
-        
-        # 설정 업데이트
-        for key, value in request.config_updates.items():
-            if hasattr(vast_config, key):
-                # 실제 설정 업데이트 로직은 config에 따라 구현
-                logger.info(f"설정 업데이트 요청: {key} = {value}")
-        
-        return {
-            "success": True,
-            "message": "설정이 업데이트되었습니다",
-            "updated_keys": list(request.config_updates.keys())
-        }
-    except Exception as e:
-        logger.error(f"설정 업데이트 실패: {e}")
-        raise HTTPException(status_code=500, detail="설정 업데이트 실패")
-
-@router.get("/offers", summary="사용 가능한 오퍼 검색")
-async def search_offers():
-    """사용 가능한 VastAI 오퍼 검색"""
+@router.post("/search-offers",
+    summary="GPU 오퍼 검색",
+    description="사용 가능한 VastAI GPU 오퍼를 검색하고 필터링합니다. 가격, GPU 사양, 가용성 등으로 필터링 가능합니다.",
+    response_model=OfferSearchResponse,
+    responses={
+        400: {"description": "API 키 설정 오류"},
+        500: {"description": "검색 실패"}
+    })
+async def search_offers(request: OfferSearchRequest) -> OfferSearchResponse:
     try:
         service = get_vast_service()
         
-        # API 키 설정
         if not service.vast_manager.setup_api_key():
             raise HTTPException(status_code=400, detail="API 키가 설정되지 않았거나 잘못되었습니다")
         
-        # 오퍼 검색
-        offers = service.vast_manager.search_offers()
+        # 검색 쿼리 구성
+        query_parts = []
+        if request.gpu_name:
+            query_parts.append(f"gpu_name={request.gpu_name}")
+        if request.max_price:
+            query_parts.append(f"dph_total<={request.max_price}")
+        if request.min_gpu_ram:
+            query_parts.append(f"gpu_ram>={request.min_gpu_ram}")
+        if request.num_gpus:
+            query_parts.append(f"num_gpus={request.num_gpus}")
+        if request.rentable is not None:
+            query_parts.append(f"rentable={str(request.rentable).lower()}")
+        
+        search_query = " ".join(query_parts) if query_parts else None
+        offers = service.vast_manager.search_offers(search_query)
         
         if not offers:
-            return {
-                "offers": [],
-                "total": 0,
-                "message": "사용 가능한 오퍼가 없습니다"
-            }
+            return OfferSearchResponse(
+                offers=[],
+                total=0,
+                filtered_count=0,
+                search_query=search_query,
+                sort_info={"sort_by": request.sort_by, "order": "ascending"}
+            )
         
-        # 가격순 정렬
-        sorted_offers = sorted(offers, key=lambda x: x.get("dph_total", 999))
+        # 정렬 및 제한
+        sort_key_map = {"price": "dph_total", "gpu_ram": "gpu_ram", "num_gpus": "num_gpus"}
+        sort_key = sort_key_map.get(request.sort_by, "dph_total")
+        sorted_offers = sorted(offers, key=lambda x: x.get(sort_key, 999))
+        limited_offers = sorted_offers[:request.limit] if request.limit else sorted_offers
         
-        return {
-            "offers": sorted_offers,
-            "total": len(sorted_offers),
-            "max_price_filter": service.config.max_price()
-        }
+        return OfferSearchResponse(
+            offers=[OfferInfo(**offer) for offer in limited_offers],
+            total=len(offers),
+            filtered_count=len(limited_offers),
+            search_query=search_query,
+            sort_info={"sort_by": request.sort_by, "sort_key": sort_key, "order": "ascending"}
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"오퍼 검색 실패: {e}")
         raise HTTPException(status_code=500, detail="오퍼 검색 실패")
 
-@router.post("/instances", summary="새 인스턴스 생성")
+@router.post("/instances",
+    summary="인스턴스 생성",
+    description="새로운 VastAI 인스턴스를 생성합니다. 템플릿 사용(budget, high_performance, research) 또는 커스텀 설정 가능합니다.",
+    response_model=Dict[str, Any],
+    responses={
+        400: {"description": "잘못된 요청 (템플릿 없음, 인스턴스 생성 실패 등)"},
+        500: {"description": "서버 오류"}
+    })
 async def create_instance(request: CreateInstanceRequest, background_tasks: BackgroundTasks):
-    """새 VastAI 인스턴스 생성"""
     try:
         service = get_vast_service()
         
-        # 설정 임시 업데이트 (요청에서 제공된 경우)
-        if request.auto_destroy is not None:
-            # 설정 업데이트 로직 (임시)
-            pass
+        # 템플릿 적용
+        if request.template_name:
+            if request.template_name not in service.templates:
+                available_templates = list(service.templates.keys())
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"템플릿 '{request.template_name}'을 찾을 수 없습니다. 사용 가능한 템플릿: {available_templates}"
+                )
+            service.apply_template(request.template_name)
         
-        if request.offer_id:
-            # 특정 오퍼로 인스턴스 생성
-            instance_id = service.create_vllm_instance(request.offer_id)
-        else:
-            # 자동 오퍼 선택 후 인스턴스 생성
-            instance_id = service.create_vllm_instance()
+        # VLLM 설정 적용
+        if request.vllm_config:
+            for key, value in request.vllm_config.dict().items():
+                if hasattr(service.config, key):
+                    setattr(service.config, key, value)
+        
+        # 인스턴스 생성
+        instance_id = service.create_vllm_instance(
+            offer_id=request.offer_id,
+            template_name=request.template_name
+        )
         
         if not instance_id:
             raise HTTPException(status_code=400, detail="인스턴스 생성 실패")
         
-        # 백그라운드에서 인스턴스 설정
+        # 백그라운드 설정
         background_tasks.add_task(service.wait_and_setup_instance, instance_id)
         
         return {
             "success": True,
             "instance_id": instance_id,
+            "template_name": request.template_name,
             "message": "인스턴스가 생성되었습니다. 설정이 백그라운드에서 진행됩니다.",
             "status": "creating"
         }
@@ -183,144 +322,208 @@ async def create_instance(request: CreateInstanceRequest, background_tasks: Back
         logger.error(f"인스턴스 생성 실패: {e}")
         raise HTTPException(status_code=500, detail="인스턴스 생성 실패")
 
-@router.post("/instances/auto-run", summary="vLLM 자동 실행")
-async def auto_run_instance():
-    """end-to-end vLLM 자동 실행"""
+@router.post("/instances/{instance_id}/setup-vllm",
+    summary="VLLM 설정 및 실행",
+    description="인스턴스에 VLLM을 설정하고 실행합니다. requirements.txt 설치부터 환경변수 설정, 스크립트 실행까지 자동화됩니다.",
+    response_model=Dict[str, Any])
+async def setup_vllm(instance_id: str, request: SetupVLLMRequest):
     try:
-        config_composer = ConfigComposer()
-        vast_config = config_composer.vast_config
+        service = get_vast_service()
+        results = []
         
-        db_manager = None
-        if hasattr(config_composer, 'database_manager'):
-            db_manager = config_composer.database_manager
+        # 1. 디렉토리 확인
+        logger.info(f"📁 디렉토리 확인: {request.script_directory}")
+        check_result = service.vast_manager.execute_ssh_command(
+            instance_id, f"ls -la {request.script_directory}"
+        )
+        results.append({"step": "directory_check", "result": check_result})
         
-        # auto_run_vllm 실행
-        result = auto_run_vllm(vast_config, db_manager)
+        if not check_result.get("success"):
+            return {
+                "success": False,
+                "error": f"디렉토리 {request.script_directory}를 찾을 수 없습니다",
+                "results": results
+            }
         
-        if not result["success"]:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"자동 실행 실패: {result.get('error', 'Unknown error')}"
+        # 2. requirements.txt 설치
+        if request.install_requirements:
+            logger.info("📦 requirements.txt 확인 및 설치")
+            req_check = service.vast_manager.execute_ssh_command(
+                instance_id, f"ls {request.script_directory}/requirements.txt 2>/dev/null || echo 'no requirements.txt'"
             )
+            
+            if "requirements.txt" in req_check.get("stdout", "") and "no requirements.txt" not in req_check.get("stdout", ""):
+                install_result = service.vast_manager.execute_ssh_command(
+                    instance_id, f"cd {request.script_directory} && pip3 install -r requirements.txt"
+                )
+                results.append({"step": "install_requirements", "result": install_result})
+        
+        # 3. 환경변수 설정 및 실행
+        env_vars = generate_vllm_env_vars(request.vllm_config, request.hf_token)
+        if request.additional_env_vars:
+            env_vars.update(request.additional_env_vars)
+        
+        env_exports = [f"export {key}={value}" for key, value in env_vars.items()]
+        env_cmd = " && ".join(env_exports)
+        
+        main_py_cmd = f"""cd {request.script_directory} && \\
+{env_cmd} && \\
+nohup python3 {request.main_script} > {request.log_file} 2>&1 &"""
+        
+        main_result = service.vast_manager.execute_ssh_command(instance_id, main_py_cmd)
+        results.append({"step": "execute_main", "command": main_py_cmd, "result": main_result})
+        
+        # 4. 프로세스 확인
+        import time
+        time.sleep(2)
+        process_check = service.vast_manager.execute_ssh_command(
+            instance_id, f"ps aux | grep {request.main_script} | grep -v grep"
+        )
+        results.append({"step": "process_check", "result": process_check})
         
         return {
             "success": True,
-            "message": "vLLM이 성공적으로 실행되었습니다",
-            "result": result
+            "instance_id": instance_id,
+            "message": "VLLM 설정 및 실행 완료",
+            "config": {
+                "script_directory": request.script_directory,
+                "main_script": request.main_script,
+                "log_file": request.log_file,
+                "environment_vars": env_vars
+            },
+            "results": results
         }
-    except HTTPException:
-        raise
+        
     except Exception as e:
-        logger.error(f"자동 실행 실패: {e}")
-        raise HTTPException(status_code=500, detail="자동 실행 실패")
+        logger.error(f"VLLM 설정 실패: {e}")
+        raise HTTPException(status_code=500, detail="VLLM 설정 실패")
 
-@router.get("/instances", summary="인스턴스 목록 조회")
-async def list_instances() -> InstanceListResponse:
-    """모든 인스턴스 목록 조회"""
+@router.post("/instances/{instance_id}/execute",
+    summary="명령어 실행",
+    description="인스턴스에서 SSH를 통해 명령어를 실행합니다. 백그라운드 실행과 환경변수 설정을 지원합니다.",
+    response_model=CommandExecutionResponse)
+async def execute_command(instance_id: str, request: ExecuteCommandRequest) -> CommandExecutionResponse:
+    try:
+        service = get_vast_service()
+        
+        # 명령어 구성
+        commands = []
+        if request.working_directory:
+            commands.append(f"cd {request.working_directory}")
+        
+        if request.environment_vars:
+            env_exports = [f"export {key}={value}" for key, value in request.environment_vars.items()]
+            commands.extend(env_exports)
+        
+        commands.append(request.command)
+        
+        final_command = " && ".join(commands)
+        if request.background:
+            final_command = f"nohup bash -c '{final_command}' > /tmp/command_output.log 2>&1 &"
+        
+        result = service.vast_manager.execute_ssh_command(instance_id, final_command)
+        
+        return CommandExecutionResponse(
+            success=result.get("success", False),
+            instance_id=instance_id,
+            command=request.command,
+            stdout=result.get("stdout", ""),
+            stderr=result.get("stderr", ""),
+            background=request.background,
+            error=result.get("error")
+        )
+    except Exception as e:
+        logger.error(f"명령어 실행 실패: {e}")
+        raise HTTPException(status_code=500, detail="명령어 실행 실패")
+
+@router.get("/instances",
+    summary="인스턴스 목록 조회",
+    description="모든 인스턴스의 목록을 조회합니다. 상태별 필터링과 정렬을 지원합니다.",
+    response_model=InstanceListResponse)
+async def list_instances(
+    status_filter: Optional[str] = Query(None, description="상태별 필터링"),
+    include_destroyed: bool = Query(False, description="삭제된 인스턴스 포함"),
+    sort_by: str = Query("created_at", description="정렬 기준")
+) -> InstanceListResponse:
     try:
         service = get_vast_service()
         instances = service.list_instances()
         
-        return InstanceListResponse(
-            instances=instances,
-            total=len(instances)
-        )
+        # DB 정보와 매칭
+        if service.db_manager:
+            from service.database.models.vast import VastInstance
+            db_instances = service.db_manager.select(VastInstance)
+            
+            for instance in instances:
+                instance_id = instance.get("id")
+                db_match = next((db_inst for db_inst in db_instances 
+                               if db_inst.instance_id == instance_id), None)
+                
+                if db_match:
+                    instance.update({
+                        "db_status": db_match.status,
+                        "cost_per_hour": db_match.cost_per_hour,
+                        "gpu_info": db_match.get_gpu_info_dict(),
+                        "template_name": db_match.template_name,
+                        "created_at": db_match.created_at,
+                        "updated_at": db_match.updated_at
+                    })
+        
+        # 필터링
+        if status_filter:
+            instances = [inst for inst in instances 
+                        if inst.get("actual_status") == status_filter or 
+                           inst.get("db_status") == status_filter]
+        
+        if not include_destroyed:
+            instances = [inst for inst in instances 
+                        if inst.get("actual_status") != "exited"]
+        
+        # 정렬
+        if sort_by == "created_at":
+            instances.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        elif sort_by == "cost":
+            instances.sort(key=lambda x: x.get("cost_per_hour", 0))
+        
+        return InstanceListResponse(instances=instances, total=len(instances))
     except Exception as e:
         logger.error(f"인스턴스 목록 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="인스턴스 목록 조회 실패")
 
-@router.get("/instances/{instance_id}", summary="인스턴스 상태 조회")
+@router.get("/instances/{instance_id}",
+    summary="인스턴스 상태 조회",
+    description="특정 인스턴스의 상세 상태 정보를 조회합니다. DB 정보, vLLM 상태, 비용 정보 등을 포함합니다.",
+    response_model=InstanceStatusResponse,
+    responses={500: {"description": "상태 조회 실패"}})
 async def get_instance_status(instance_id: str) -> InstanceStatusResponse:
-    """특정 인스턴스의 상태 조회"""
     try:
         service = get_vast_service()
-        status_info = service.get_instance_status_info(instance_id)
+        enhanced_status = service.get_enhanced_instance_status(instance_id)
         
         return InstanceStatusResponse(
             instance_id=instance_id,
-            status=status_info.get("status", "unknown"),
-            public_ip=status_info.get("port_mappings", {}).get("public_ip"),
-            urls=status_info.get("urls", {}),
-            port_mappings=status_info.get("port_mappings", {})
+            status=enhanced_status.get("basic_status", {}).get("status", "unknown"),
+            public_ip=enhanced_status.get("basic_status", {}).get("public_ip"),
+            urls=enhanced_status.get("basic_status", {}).get("urls", {}),
+            port_mappings=enhanced_status.get("basic_status", {}).get("port_mappings", {}),
+            gpu_info=enhanced_status.get("db_info", {}).get("gpu_info"),
+            cost_per_hour=enhanced_status.get("db_info", {}).get("cost_per_hour"),
+            uptime=enhanced_status.get("db_info", {}).get("uptime"),
+            vllm_status=enhanced_status.get("vllm_status")
         )
     except Exception as e:
         logger.error(f"인스턴스 상태 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="인스턴스 상태 조회 실패")
 
-@router.post("/instances/{instance_id}/setup", summary="인스턴스 설정")
-async def setup_instance(instance_id: str, background_tasks: BackgroundTasks):
-    """인스턴스 설정 (HF 로그인 및 vLLM 실행)"""
-    try:
-        service = get_vast_service()
-        
-        # 백그라운드에서 설정 실행
-        background_tasks.add_task(service.wait_and_setup_instance, instance_id)
-        
-        return {
-            "success": True,
-            "message": "인스턴스 설정이 백그라운드에서 시작되었습니다",
-            "instance_id": instance_id
-        }
-    except Exception as e:
-        logger.error(f"인스턴스 설정 실패: {e}")
-        raise HTTPException(status_code=500, detail="인스턴스 설정 실패")
-
-@router.get("/instances/{instance_id}/logs", summary="인스턴스 로그 조회")
-async def get_instance_logs(instance_id: str):
-    """인스턴스의 vLLM 로그 조회"""
-    try:
-        service = get_vast_service()
-        vllm_status = service.vast_manager.check_vllm_status(instance_id)
-        
-        return {
-            "instance_id": instance_id,
-            "logs": vllm_status.get("log_output", ""),
-            "process_info": vllm_status.get("process_info", ""),
-            "log_available": vllm_status.get("log_success", False)
-        }
-    except Exception as e:
-        logger.error(f"로그 조회 실패: {e}")
-        raise HTTPException(status_code=500, detail="로그 조회 실패")
-
-@router.get("/instances/{instance_id}/ports", summary="포트 매핑 조회")
-async def get_port_mappings(instance_id: str):
-    """인스턴스의 포트 매핑 정보 조회"""
-    try:
-        service = get_vast_service()
-        port_info = service.vast_manager.get_port_mappings(instance_id)
-        
-        return {
-            "instance_id": instance_id,
-            "port_mappings": port_info.get("mappings", {}),
-            "public_ip": port_info.get("public_ip"),
-            "urls": service._generate_access_urls(port_info)
-        }
-    except Exception as e:
-        logger.error(f"포트 매핑 조회 실패: {e}")
-        raise HTTPException(status_code=500, detail="포트 매핑 조회 실패")
-
-@router.post("/instances/{instance_id}/execute", summary="SSH 명령 실행")
-async def execute_ssh_command(instance_id: str, command: str):
-    """인스턴스에서 SSH 명령 실행"""
-    try:
-        service = get_vast_service()
-        result = service.vast_manager.execute_ssh_command(instance_id, command)
-        
-        return {
-            "instance_id": instance_id,
-            "command": command,
-            "success": result.get("success", False),
-            "stdout": result.get("stdout", ""),
-            "stderr": result.get("stderr", ""),
-            "error": result.get("error")
-        }
-    except Exception as e:
-        logger.error(f"SSH 명령 실행 실패: {e}")
-        raise HTTPException(status_code=500, detail="SSH 명령 실행 실패")
-
-@router.delete("/instances/{instance_id}", summary="인스턴스 삭제")
+@router.delete("/instances/{instance_id}",
+    summary="인스턴스 삭제",
+    description="지정된 인스턴스를 삭제합니다.",
+    response_model=Dict[str, Any],
+    responses={
+        400: {"description": "인스턴스 삭제 실패"},
+        500: {"description": "서버 오류"}
+    })
 async def destroy_instance(instance_id: str):
-    """인스턴스 삭제"""
     try:
         service = get_vast_service()
         success = service.destroy_instance(instance_id)
@@ -339,31 +542,71 @@ async def destroy_instance(instance_id: str):
         logger.error(f"인스턴스 삭제 실패: {e}")
         raise HTTPException(status_code=500, detail="인스턴스 삭제 실패")
 
-@router.get("/instances/{instance_id}/history", summary="인스턴스 실행 히스토리")
-async def get_instance_history(instance_id: str):
-    """인스턴스의 실행 히스토리 조회"""
+@router.get("/instances/{instance_id}/logs",
+    summary="로그 조회",
+    description="인스턴스의 로그 파일을 조회합니다.",
+    response_model=Dict[str, Any])
+async def get_logs(instance_id: str, log_file: str = "/tmp/vllm.log", lines: int = Query(50, ge=1, le=1000)):
     try:
         service = get_vast_service()
         
-        if not service.db_manager:
-            return {
-                "instance_id": instance_id,
-                "history": [],
-                "message": "히스토리 저장이 비활성화되어 있습니다"
-            }
+        # 보안을 위한 경로 제한
+        allowed_paths = ["/tmp/", "/var/log/", "/home/vllm-script/"]
+        if not any(log_file.startswith(path) for path in allowed_paths):
+            log_file = f"/tmp/{log_file}"
         
-        from service.database.models.vast import VastExecutionLog
-        conditions = {"instance_id": instance_id}
-        logs = service.db_manager.select(VastExecutionLog, conditions=conditions)
-        
-        history = [log.to_dict() for log in logs] if logs else []
+        cmd = f"tail -{lines} {log_file} 2>/dev/null || echo 'Log file not found'"
+        result = service.vast_manager.execute_ssh_command(instance_id, cmd)
         
         return {
             "instance_id": instance_id,
-            "history": history,
-            "total": len(history)
+            "log_file": log_file,
+            "lines_requested": lines,
+            "content": result.get("stdout", ""),
+            "error": result.get("stderr", ""),
+            "success": result.get("success", False)
         }
     except Exception as e:
-        logger.error(f"히스토리 조회 실패: {e}")
-        raise HTTPException(status_code=500, detail="히스토리 조회 실패")
+        logger.error(f"로그 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="로그 조회 실패")
+
+@router.get("/instances/{instance_id}/processes",
+    summary="프로세스 상태 조회",
+    description="인스턴스에서 실행 중인 프로세스를 조회합니다.",
+    response_model=Dict[str, Any])
+async def get_processes(instance_id: str, process_name: Optional[str] = Query(None, description="특정 프로세스 이름")):
+    try:
+        service = get_vast_service()
+        
+        if process_name:
+            cmd = f"ps aux | grep {process_name} | grep -v grep"
+        else:
+            cmd = "ps aux | grep python | grep -v grep"
+        
+        result = service.vast_manager.execute_ssh_command(instance_id, cmd)
+        
+        processes = []
+        if result.get("success") and result.get("stdout"):
+            lines = result["stdout"].strip().split('\n')
+            for line in lines:
+                if line.strip():
+                    parts = line.split()
+                    if len(parts) >= 11:
+                        processes.append({
+                            "user": parts[0],
+                            "pid": parts[1],
+                            "cpu": parts[2],
+                            "mem": parts[3],
+                            "command": " ".join(parts[10:])
+                        })
+        
+        return {
+            "instance_id": instance_id,
+            "process_name": process_name,
+            "processes": processes,
+            "total_processes": len(processes)
+        }
+    except Exception as e:
+        logger.error(f"프로세스 상태 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="프로세스 상태 조회 실패")
 

@@ -23,6 +23,7 @@ class VastInstance(BaseModel):
         self.cost_per_hour: Optional[float] = kwargs.get('cost_per_hour')
         self.gpu_info: Optional[str] = kwargs.get('gpu_info')  # JSON string
         self.auto_destroy: Optional[bool] = kwargs.get('auto_destroy', False)
+        self.template_name: Optional[str] = kwargs.get('template_name')  # 사용된 템플릿 이름
         self.destroyed_at: Optional[datetime] = kwargs.get('destroyed_at')
 
     def get_table_name(self) -> str:
@@ -42,6 +43,7 @@ class VastInstance(BaseModel):
             "cost_per_hour": "REAL",
             "gpu_info": "TEXT",  # JSON
             "auto_destroy": "BOOLEAN DEFAULT 0",
+            "template_name": "TEXT",  # 사용된 템플릿 이름
             "destroyed_at": "DATETIME",
             "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
             "updated_at": "DATETIME DEFAULT CURRENT_TIMESTAMP"
@@ -85,6 +87,7 @@ class VastExecutionLog(BaseModel):
         self.error_message: Optional[str] = kwargs.get('error_message')
         self.execution_time: Optional[float] = kwargs.get('execution_time')
         self.success: Optional[bool] = kwargs.get('success', True)
+        self.metadata: Optional[str] = kwargs.get('metadata')  # JSON string for additional data
 
     def get_table_name(self) -> str:
         return "vast_execution_logs"
@@ -99,6 +102,20 @@ class VastExecutionLog(BaseModel):
             "error_message": "TEXT",
             "execution_time": "REAL",
             "success": "BOOLEAN DEFAULT 1",
+            "metadata": "TEXT",  # JSON
             "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
             "updated_at": "DATETIME DEFAULT CURRENT_TIMESTAMP"
         }
+
+    def get_metadata_dict(self) -> Dict[str, Any]:
+        """메타데이터를 딕셔너리로 반환"""
+        if self.metadata:
+            try:
+                return json.loads(self.metadata)
+            except json.JSONDecodeError:
+                return {}
+        return {}
+
+    def set_metadata(self, metadata: Dict[str, Any]):
+        """메타데이터를 JSON 문자열로 저장"""
+        self.metadata = json.dumps(metadata)

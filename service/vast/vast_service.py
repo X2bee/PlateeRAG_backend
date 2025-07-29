@@ -7,6 +7,8 @@ VastAI 인스턴스 관리를 위한 고수준 서비스 클래스입니다.
 import logging
 import asyncio
 import time
+import json
+import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
@@ -14,6 +16,28 @@ from service.vast.vast_manager import VastAIManager
 from service.database.models.vast import VastInstance, VastExecutionLog
 
 logger = logging.getLogger("vast-service")
+
+class InstanceTemplate:
+    """인스턴스 생성 템플릿"""
+    
+    def __init__(self, name: str, config: Dict[str, Any]):
+        self.name = name
+        self.config = config
+    
+    def apply_to_config(self, base_config, custom_overrides: Optional[Dict[str, Any]] = None):
+        """템플릿을 기본 설정에 적용"""
+        # 템플릿 설정 적용
+        for key, value in self.config.items():
+            if hasattr(base_config, key):
+                setattr(base_config, key, value)
+        
+        # 사용자 정의 오버라이드 적용
+        if custom_overrides:
+            for key, value in custom_overrides.items():
+                if hasattr(base_config, key):
+                    setattr(base_config, key, value)
+        
+        return base_config
 
 class VastService:
     """VastAI 서비스 클래스"""
@@ -28,43 +52,142 @@ class VastService:
         self.config = config
         self.db_manager = db_manager
         self.vast_manager = VastAIManager(config, db_manager)
+        self.templates = self._load_templates()
+
+    def _load_templates(self) -> Dict[str, InstanceTemplate]:
+        """인스턴스 템플릿 로드"""
+        templates = {}
+        
+        # 기본 템플릿들
+        templates["default_vllm"] = InstanceTemplate("default_vllm", {
+            "vllm_model_name": "Qwen/Qwen2.5-Coder-32B-Instruct",
+            "vllm_max_model_len": 4096,
+            "vllm_gpu_memory_utilization": 0.9,
+            "vllm_pipeline_parallel_size": 1,
+            "vllm_tensor_parallel_size": 1
+        })
+        
+        templates["high_performance"] = InstanceTemplate("high_performance", {
+            "vllm_model_name": "Qwen/Qwen2.5-Coder-32B-Instruct",
+            "vllm_max_model_len": 8192,
+            "vllm_gpu_memory_utilization": 0.95,
+            "vllm_pipeline_parallel_size": 2,
+            "vllm_tensor_parallel_size": 2,
+            "min_gpu_ram": 24,
+            "max_price": 2.0
+        })
+        
+        templates["budget"] = InstanceTemplate("budget", {
+            "vllm_model_name": "Qwen/Qwen2.5-Coder-7B-Instruct", 
+            "vllm_max_model_len": 2048,
+            "vllm_gpu_memory_utilization": 0.8,
+            "min_gpu_ram": 8,
+            "max_price": 0.5
+        })
+        
+        # 파일에서 사용자 정의 템플릿 로드
+        try:
+            template_dir = "constants/instance_templates"
+            if os.path.exists(template_dir):
+                for filename in os.listdir(template_dir):
+                    if filename.endswith('.json'):
+                        template_path = os.path.join(template_dir, filename)
+                        with open(template_path, 'r', encoding='utf-8') as f:
+                            template_data = json.load(f)
+                            template_name = template_data.get('name', filename.replace('.json', ''))
+                            template_config = template_data.get('config', {})
+                            templates[template_name] = InstanceTemplate(template_name, template_config)
+        except Exception as e:
+            logger.warning(f"사용자 정의 템플릿 로드 실패: {e}")
+        
+        return templates
+
+    def get_available_templates(self) -> List[Dict[str, Any]]:
+        """사용 가능한 템플릿 목록 반환"""
+        return [
+            {
+                "name": template.name,
+                "config": template.config
+            }
+            for template in self.templates.values()
+        ]
+
+    def apply_template(self, template_name: str, custom_config: Optional[Dict[str, Any]] = None):
+        """템플릿을 현재 설정에 적용"""
+        if template_name not in self.templates:
+            raise ValueError(f"템플릿 '{template_name}'을 찾을 수 없습니다")
+        
+        template = self.templates[template_name]
+        template.apply_to_config(self.config, custom_config)
+        logger.info(f"템플릿 '{template_name}' 적용 완료")
 
     def _log_execution(self, instance_id: str, operation: str, command: str, 
                       result: str, success: bool, execution_time: float = 0.0,
-                      error_message: str = None):
-        """실행 로그 저장"""
+                      error_message: str = None, metadata: Optional[Dict[str, Any]] = None):
+        """실행 로그 저장 (향상된 버전)"""
         if not self.db_manager:
             return
 
         try:
-            log = VastExecutionLog(
-                instance_id=instance_id,
-                operation=operation,
-                command=command,
-                result=result,
-                success=success,
-                execution_time=execution_time,
-                error_message=error_message
-            )
+            log_data = {
+                "instance_id": instance_id,
+                "operation": operation,
+                "command": command,
+                "result": result,
+                "success": success,
+                "execution_time": execution_time,
+                "error_message": error_message
+            }
+            
+            # 메타데이터가 있으면 JSON으로 저장
+            if metadata:
+                log_data["metadata"] = json.dumps(metadata)
+            
+            log = VastExecutionLog(**log_data)
             self.db_manager.insert(log)
         except Exception as e:
             logger.warning(f"실행 로그 저장 실패: {e}")
 
     def _save_instance(self, instance_data: Dict[str, Any]) -> bool:
-        """인스턴스 정보 저장"""
+        """인스턴스 정보 저장 (향상된 버전)"""
         if not self.db_manager:
             return True
 
         try:
+            # 기본 필드 검증
+            required_fields = ["instance_id"]
+            for field in required_fields:
+                if field not in instance_data:
+                    logger.error(f"필수 필드 '{field}'가 누락되었습니다")
+                    return False
+            
+            # JSON 필드 처리
+            if "gpu_info" in instance_data and isinstance(instance_data["gpu_info"], dict):
+                instance_data["gpu_info"] = json.dumps(instance_data["gpu_info"])
+            
+            if "port_mappings" in instance_data and isinstance(instance_data["port_mappings"], dict):
+                instance_data["port_mappings"] = json.dumps(instance_data["port_mappings"])
+            
+            # 생성 시간 설정
+            instance_data["created_at"] = datetime.now()
+            instance_data["updated_at"] = datetime.now()
+            
             instance = VastInstance(**instance_data)
             result = self.db_manager.insert(instance)
-            return result is not None
+            
+            if result:
+                logger.info(f"인스턴스 정보 저장 완료: {instance_data['instance_id']}")
+                return True
+            else:
+                logger.error("인스턴스 정보 저장 실패")
+                return False
+                
         except Exception as e:
             logger.error(f"인스턴스 정보 저장 실패: {e}")
             return False
 
     def _update_instance(self, instance_id: str, updates: Dict[str, Any]) -> bool:
-        """인스턴스 정보 업데이트"""
+        """인스턴스 정보 업데이트 (향상된 버전)"""
         if not self.db_manager:
             return True
 
@@ -74,13 +197,30 @@ class VastService:
             existing = self.db_manager.select(VastInstance, conditions=conditions)
             
             if existing:
+                instance = existing[0]
+                
+                # JSON 필드 처리
+                if "gpu_info" in updates and isinstance(updates["gpu_info"], dict):
+                    updates["gpu_info"] = json.dumps(updates["gpu_info"])
+                
+                if "port_mappings" in updates and isinstance(updates["port_mappings"], dict):
+                    updates["port_mappings"] = json.dumps(updates["port_mappings"])
+                
                 # 업데이트 수행
                 for key, value in updates.items():
-                    setattr(existing[0], key, value)
-                existing[0].updated_at = datetime.now()
+                    if hasattr(instance, key):
+                        setattr(instance, key, value)
                 
-                result = self.db_manager.update(existing[0])
-                return result is not None
+                instance.updated_at = datetime.now()
+                
+                result = self.db_manager.update(instance)
+                
+                if result:
+                    logger.info(f"인스턴스 정보 업데이트 완료: {instance_id}")
+                    return True
+                else:
+                    logger.error(f"인스턴스 정보 업데이트 실패: {instance_id}")
+                    return False
             else:
                 logger.warning(f"업데이트할 인스턴스를 찾을 수 없음: {instance_id}")
                 return False
@@ -88,6 +228,61 @@ class VastService:
         except Exception as e:
             logger.error(f"인스턴스 정보 업데이트 실패: {e}")
             return False
+
+    def get_instance_from_db(self, instance_id: str) -> Optional[VastInstance]:
+        """DB에서 인스턴스 정보 조회"""
+        if not self.db_manager:
+            return None
+        
+        try:
+            conditions = {"instance_id": instance_id}
+            instances = self.db_manager.select(VastInstance, conditions=conditions)
+            return instances[0] if instances else None
+        except Exception as e:
+            logger.error(f"DB 인스턴스 조회 실패: {e}")
+            return None
+
+    def get_enhanced_instance_status(self, instance_id: str) -> Dict[str, Any]:
+        """향상된 인스턴스 상태 정보 반환"""
+        try:
+            # 기본 상태 정보
+            status_info = self.get_instance_status_info(instance_id)
+            
+            # DB에서 추가 정보
+            db_instance = self.get_instance_from_db(instance_id)
+            
+            # vLLM 상태
+            vllm_status = None
+            try:
+                vllm_status = self.vast_manager.check_vllm_status(instance_id)
+            except Exception as e:
+                logger.warning(f"vLLM 상태 확인 실패: {e}")
+            
+            # 통합 상태 정보 구성
+            enhanced_status = {
+                "instance_id": instance_id,
+                "basic_status": status_info,
+                "vllm_status": vllm_status,
+                "db_info": {}
+            }
+            
+            if db_instance:
+                enhanced_status["db_info"] = {
+                    "status": db_instance.status,
+                    "cost_per_hour": db_instance.cost_per_hour,
+                    "gpu_info": db_instance.get_gpu_info_dict(),
+                    "port_mappings": db_instance.get_port_mappings_dict(),
+                    "auto_destroy": db_instance.auto_destroy,
+                    "created_at": db_instance.created_at,
+                    "updated_at": db_instance.updated_at,
+                    "uptime": str(datetime.now() - db_instance.created_at) if db_instance.created_at else None
+                }
+            
+            return enhanced_status
+            
+        except Exception as e:
+            logger.error(f"향상된 인스턴스 상태 조회 실패: {e}")
+            return {"error": str(e)}
 
     def search_and_select_offer(self) -> Optional[Dict[str, Any]]:
         """오퍼 검색 및 선택"""
@@ -151,18 +346,20 @@ class VastService:
         logger.info(f"오퍼 선택 완료: {selected_offer.get('id')} (${selected_offer.get('dph_total')}/h)")
         return selected_offer
 
-    def create_vllm_instance(self, offer_id: str = None) -> Optional[str]:
-        """vLLM 인스턴스 생성"""
+    def create_vllm_instance(self, offer_id: str = None, template_name: str = None) -> Optional[str]:
+        """vLLM 인스턴스 생성 (템플릿 지원)"""
         logger.info("vLLM 인스턴스 생성 시작")
         
         start_time = time.time()
         
         # 오퍼 선택 (제공되지 않은 경우)
+        selected_offer = None
         if not offer_id:
             offer = self.search_and_select_offer()
             if not offer:
                 return None
             offer_id = offer.get('id')
+            selected_offer = offer
         
         # 인스턴스 생성
         instance_id = self.vast_manager.create_instance_fallback(offer_id)
@@ -175,18 +372,39 @@ class VastService:
                 result="",
                 success=False,
                 execution_time=time.time() - start_time,
-                error_message="인스턴스 생성 실패"
+                error_message="인스턴스 생성 실패",
+                metadata={
+                    "offer_id": offer_id,
+                    "template_name": template_name
+                }
             )
             return None
 
-        # 인스턴스 정보 저장
+        # 인스턴스 정보 저장 (향상된 버전)
         instance_data = {
             "instance_id": instance_id,
             "offer_id": offer_id,
             "image_name": self.config.image_name(),
             "status": "creating",
-            "auto_destroy": self.config.auto_destroy()
+            "auto_destroy": self.config.auto_destroy(),
+            "start_command": self._generate_start_command()
         }
+        
+        # 템플릿 정보 추가
+        if template_name:
+            instance_data["template_name"] = template_name
+        
+        # 선택된 오퍼 정보 추가
+        if selected_offer:
+            gpu_info = {
+                "gpu_name": selected_offer.get("gpu_name"),
+                "num_gpus": selected_offer.get("num_gpus", 1),
+                "gpu_ram": selected_offer.get("gpu_ram")
+            }
+            instance_data.update({
+                "gpu_info": gpu_info,
+                "cost_per_hour": selected_offer.get("dph_total")
+            })
         
         self._save_instance(instance_data)
         
@@ -195,13 +413,23 @@ class VastService:
             instance_id=instance_id,
             operation="create_instance",
             command=f"vastai create instance {offer_id}",
-            result=f"Instance created: {instance_id}",
+            result=f"Instance created successfully: {instance_id}",
             success=True,
-            execution_time=execution_time
+            execution_time=execution_time,
+            metadata={
+                "offer_id": offer_id,
+                "template_name": template_name,
+                "gpu_info": instance_data.get("gpu_info"),
+                "cost_per_hour": instance_data.get("cost_per_hour")
+            }
         )
 
-        logger.info(f"인스턴스 생성 완료: {instance_id}")
+        logger.info(f"vLLM 인스턴스 생성 완료: {instance_id}")
         return instance_id
+
+    def _generate_start_command(self) -> str:
+        """시작 명령어 생성"""
+        return f"vllm serve {self.config.vllm_model_name()} --host {self.config.vllm_host_ip()} --port {self.config.vllm_port()}"
 
     def wait_and_setup_instance(self, instance_id: str) -> bool:
         """인스턴스 실행 대기 및 설정"""
