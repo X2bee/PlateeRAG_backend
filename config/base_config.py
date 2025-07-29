@@ -17,6 +17,13 @@ class BaseConfig(ABC):
     def __init__(self):
         self.configs: Dict[str, PersistentConfig] = {}
         self.logger = logging.getLogger(f"config-{self.__class__.__name__.lower()}")
+        
+        # 설정 자동 초기화
+        try:
+            self.initialize()
+        except Exception as e:
+            self.logger.error(f"Failed to initialize config: {e}")
+            raise
     
     @abstractmethod
     def initialize(self) -> Dict[str, PersistentConfig]:
@@ -90,6 +97,14 @@ class BaseConfig(ABC):
         self.configs[env_name] = config
         return config
     
+    def __getitem__(self, key: str) -> PersistentConfig:
+        """
+        설정에 딕셔너리 형태로 접근할 수 있도록 지원
+        """
+        if key in self.configs:
+            return self.configs[key]
+        raise KeyError(f"Configuration '{key}' not found in {self.__class__.__name__}")
+
     def get_config_summary(self) -> Dict[str, Any]:
         """
         이 설정 클래스의 요약 정보 반환
