@@ -9,6 +9,7 @@ from service.database.models.persistent_config_model import PersistentConfigMode
 from service.database.models.executor import ExecutionIO, ExecutionMeta
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.vectordb import VectorDB
+from service.database.models.vast import VastInstance, VastExecutionLog
 
 # 사용 가능한 모델들
 __all__ = [
@@ -17,7 +18,8 @@ __all__ = [
     'WorkflowExecution', 'NodeExecution', 'SystemMetrics', 'NodePerformance',
     'PersistentConfigModel',
     'ExecutionIO', 'ExecutionMeta', 'WorkflowMeta',
-    'VectorDB'
+    'VectorDB',
+    'VastInstance', 'VastExecutionLog'
 ]
 
 # 애플리케이션에서 사용할 모델 목록
@@ -31,5 +33,7 @@ APPLICATION_MODELS = [
     NodePerformance,
     ExecutionIO, ExecutionMeta,
     WorkflowMeta,
-    VectorDB
+    VectorDB,
+    VastInstance,
+    VastExecutionLog
 ]
