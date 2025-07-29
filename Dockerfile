@@ -19,4 +19,7 @@ RUN uv sync
 
 RUN uv add -r requirements.txt
 
+RUN uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('Qwen/Qwen3-Embedding-0.6B')"
+
+
 COPY . .

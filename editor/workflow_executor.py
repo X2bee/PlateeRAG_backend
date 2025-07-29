@@ -1,7 +1,8 @@
 from collections import deque
+import inspect
 import logging
 import json
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Generator, List, Optional
 from editor.node_composer import NODE_CLASS_REGISTRY, run_discovery
 from service.monitoring.performance_logger import PerformanceLogger
 
@@ -53,19 +54,18 @@ class WorkflowExecutor:
 
         return sorted_nodes
 
-    def execute_workflow(self) -> Dict[str, Any]:
+    def execute_workflow(self) -> Generator[Any, None, None]:
         """워크플로우를 실행하고 최종 결과물을 반환합니다."""
         self._build_graph()
         execution_order: List[str] = self._topological_sort()
 
         node_outputs: Dict[str, Dict[str, Any]] = {}
         start_node_data: Optional[Dict[str, Any]] = None
-        end_node_data: Optional[Dict[str, Any]] = None
 
         print("--- 워크플로우 실행 시작 ---")
         print(f"실행 순서: {' -> '.join(execution_order)}")
 
-        execution_final_outputs: Optional[Any] = None
+        streaming_output_started = False
 
         for node_id in execution_order:
             node_info: Dict[str, Any] = self.nodes[node_id]
@@ -125,10 +125,13 @@ class WorkflowExecutor:
                 ) as perf_logger:
 
                     result = instance.execute(**kwargs)
+                    is_generator = inspect.isgenerator(result)
 
                     # 노드 실행 완료 후 로그 기록
-                    perf_logger.log(input_data=kwargs, output_data=result)
-                    logger.info(" -> 완료. 결과: %s", str(result)[:100] + "..." if len(str(result)) > 100 else str(result))
+                    log_output = "<streaming_output>" if is_generator else result
+                    perf_logger.log(input_data=kwargs, output_data=log_output)
+                    logger.info(" -> 완료. 결과: %s", str(log_output)[:100] + "..." if len(str(log_output)) > 100 else str(log_output))
+
 
             except Exception as e:
                 logger.error("Error executing node %s: %s", node_id, str(e), exc_info=True)
@@ -148,24 +151,23 @@ class WorkflowExecutor:
                 }
                 print(f" -> startnode 데이터 수집: {start_node_data}")
 
-            elif function_id == 'endnode':
-                # endnode의 경우 출력 데이터 기록 및 ExecutionIO 저장
-                end_node_data = {
-                    'node_id': node_id,
-                    'node_name': node_info['data']['nodeName'],
-                    'inputs': kwargs,
-                    'result': result
-                }
-
-                # ExecutionIO에 저장할 데이터 준비
+            if function_id == 'endnode':
+                is_generator = inspect.isgenerator(result)
+                
+                end_node_result_for_db = "<streaming_output>" if is_generator else result
+                end_node_data = {'node_id': node_id, 'node_name': node_info['data']['nodeName'], 'inputs': kwargs, 'result': end_node_result_for_db}
                 input_data_for_db = start_node_data if start_node_data else {}
-                output_data_for_db = end_node_data
-
-                # ExecutionIO 저장
-                self._save_execution_io(input_data_for_db, output_data_for_db)
-
-                execution_final_outputs = result
-                print(f" -> endnode 완료 및 ExecutionIO 저장. 최종 출력: {execution_final_outputs}")
+                self._save_execution_io(input_data_for_db, end_node_data)
+                
+                if is_generator:
+                    print(f" -> endnode 스트리밍 출력 시작.")
+                    streaming_output_started = True
+                    yield from result
+                    print("\n--- 워크플로우 스트리밍 실행 완료 ---")
+                    return
+                else:
+                    print(f" -> endnode 완료. 최종 출력: {result}")
+                    node_outputs[node_id] = {'result': result}
 
             # 일반 노드 처리
             if function_id != 'endnode':
@@ -179,30 +181,51 @@ class WorkflowExecutor:
 
                 output_port_id: str = node_info['data']['outputs'][0]['id']
                 node_outputs[node_id] = {output_port_id: result}
-
                 print(f" -> 출력: {node_outputs[node_id]}")
 
-        if execution_final_outputs is not None:
+        if not streaming_output_started:
             print("\n--- 워크플로우 실행 완료 ---")
-            print("최종 출력:", execution_final_outputs)
-            return execution_final_outputs
-
-        else:
-            print("\n--- 워크플로우 실행 완료 ---")
-            print("최종 출력이 정의되지 않았습니다. 모든 노드의 중간 결과물을 반환합니다.")
-            print("노드 출력 데이터:")
-            return node_outputs
+            final_output = None
+            for node_id, output_data in node_outputs.items():
+                if self.nodes[node_id]['data']['functionId'] == 'endnode':
+                    final_output = output_data.get('result')
+                    break
+            
+            if final_output is not None:
+                print("최종 출력:", final_output)
+                yield final_output
+            else:
+                print("최종 출력이 정의되지 않았습니다. 모든 노드의 중간 결과물을 반환합니다.")
+                yield node_outputs
 
     def _save_execution_io(self, input_data: Dict[str, Any], output_data: Dict[str, Any]) -> None:
         """워크플로우의 입출력 데이터를 ExecutionIO 모델을 통해 DB에 저장합니다."""
         if not self.db_manager:
             logger.warning("DB manager가 없어 ExecutionIO 데이터를 저장할 수 없습니다.")
             return
+        
+        def safe_json_dumps(data: Any) -> str:
+            """순환 참조 및 미지원 타입을 처리하여 안전하게 JSON으로 직렬화하는 함수"""
+            def default_encoder(o: Any) -> Any:
+                if isinstance(o, (bytes, bytearray)):
+                    return o.decode('utf-8', errors='ignore')
+                if inspect.isgenerator(o):
+                    return "<generator_output>"
+                try:
+                    return str(o)
+                except Exception:
+                    return f"<unserializable: {type(o).__name__}>"
+            try:
+                return json.dumps(data, ensure_ascii=False, default=default_encoder)
+            except TypeError:
+                return json.dumps({"error": "unserializable data"}, ensure_ascii=False)
+
 
         try:
             # JSON 형태로 변환하여 저장
-            input_json = json.dumps(input_data, ensure_ascii=False)
-            output_json = json.dumps(output_data, ensure_ascii=False)
+            input_json = safe_json_dumps(input_data)
+            output_json = safe_json_dumps(output_data)
+            
             insert_data = ExecutionIO(
                 user_id=self.user_id,
                 interaction_id=self.interaction_id,

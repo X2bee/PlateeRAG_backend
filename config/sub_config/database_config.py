@@ -20,7 +20,7 @@ class DatabaseConfig(BaseConfig):
         self.POSTGRES_HOST = self.create_persistent_config(
             env_name="POSTGRES_HOST",
             config_path="database.postgres.host",
-            default_value="0.0.0.0"
+            default_value="host.docker.internal"
         )
         
         self.POSTGRES_PORT = self.create_persistent_config(
@@ -39,13 +39,13 @@ class DatabaseConfig(BaseConfig):
         self.POSTGRES_USER = self.create_persistent_config(
             env_name="POSTGRES_USER",
             config_path="database.postgres.user",
-            default_value="Unset"
+            default_value="ailab"
         )
         
         self.POSTGRES_PASSWORD = self.create_persistent_config(
             env_name="POSTGRES_PASSWORD",
             config_path="database.postgres.password",
-            default_value="Unset"
+            default_value="ailab123"
         )
         
         # SQLite 설정

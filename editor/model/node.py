@@ -7,6 +7,7 @@ class Port(TypedDict):
     type: str
     required: bool = False
     multi: Optional[bool] = False
+    stream: Optional[bool] = False
 
 class Parameter(TypedDict):
     """노드가 사용할 파라미터의 구조를 정의합니다."""
