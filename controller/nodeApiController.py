@@ -11,7 +11,7 @@ import json
 import inspect
 from editor.node_composer import get_node_api_registry, get_node_class_registry
 
-router = APIRouter(prefix="/api", tags=["Node API"])
+router = APIRouter(prefix="/api/editor", tags=["Node API"])
 
 # Pydantic 모델 정의
 class ApiCallRequest(BaseModel):
