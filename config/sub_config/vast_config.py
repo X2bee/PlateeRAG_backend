@@ -261,20 +261,20 @@ class VastConfig(BaseConfig):
         vllm_host = self.vllm_host_ip()
         vllm_port = self.vllm_port()
         vllm_controller_port = self.vllm_controller_port()
-        
+
         # 기본 onstart 명령어 (HF 로그인 제거)
         base_cmd = f"""
-        sleep 30 && 
-        cd /home/vllm-script && 
-        export VLLM_HOST_IP={vllm_host} && 
-        export VLLM_PORT={vllm_port} && 
-        export VLLM_CONTROLLER_PORT={vllm_controller_port} && 
+        sleep 30 &&
+        cd /home/vllm-script &&
+        export VLLM_HOST_IP={vllm_host} &&
+        export VLLM_PORT={vllm_port} &&
+        export VLLM_CONTROLLER_PORT={vllm_controller_port} &&
         nohup python3 /home/vllm-script/main.py > /tmp/vllm.log 2>&1 &
         """.strip().replace('\n', ' ')
-        
+
         # 사용자 정의 스크립트가 있으면 추가
         custom_script = self.onstart_script()
         if custom_script:
             return f"{base_cmd} && {custom_script}"
-        
+
         return base_cmd

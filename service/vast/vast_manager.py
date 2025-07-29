@@ -43,22 +43,22 @@ class VastAIManager:
             명령 실행 결과
         """
         timeout = timeout or self.timeout
-        
+
         try:
             if self.config.debug():
                 logger.debug(f"실행 명령: {' '.join(cmd)}")
-            
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout
             )
-            
+
             if self.config.debug():
                 logger.debug(f"stdout: {result.stdout}")
                 logger.debug(f"stderr: {result.stderr}")
-            
+
             if result.returncode != 0:
                 error_msg = f"명령 실행 실패: {result.stderr}"
                 logger.error(error_msg)
@@ -68,9 +68,9 @@ class VastAIManager:
                     "stdout": result.stdout,
                     "stderr": result.stderr
                 }
-            
+
             output = result.stdout.strip()
-            
+
             if parse_json and output:
                 try:
                     data = json.loads(output)
@@ -78,9 +78,9 @@ class VastAIManager:
                 except json.JSONDecodeError:
                     # JSON 파싱 실패 시 텍스트로 반환
                     return {"success": True, "data": output}
-            
+
             return {"success": True, "data": output}
-            
+
         except subprocess.TimeoutExpired:
             logger.error(f"명령 타임아웃: {' '.join(cmd)}")
             return {"success": False, "error": "Command timeout"}
@@ -91,19 +91,19 @@ class VastAIManager:
     def setup_api_key(self) -> bool:
         """API 키 설정 및 확인"""
         api_key = self.config.vast_api_key()
-        
+
         # API 키 없이도 일부 기능이 동작하도록 허용
         if not api_key or api_key == "your_api_key_here":
             logger.warning("⚠️ API 키가 설정되지 않았습니다.")
             logger.info("Vast.ai 웹사이트 (https://cloud.vast.ai/)에서 계정을 생성하고 API 키를 발급받아 주세요.")
             logger.info("발급받은 후 다음 명령어로 설정하세요: vastai set api-key YOUR_API_KEY")
             return self._handle_missing_api_key()
-        
+
         try:
             # API 키 설정
             result = self._run_command_without_api_key(["vastai", "set", "api-key", api_key])
             logger.info("✅ API 키가 설정되었습니다.")
-            
+
             # API 키 검증
             try:
                 test_result = self._run_command_without_api_key(["vastai", "show", "user"], capture_json=True)
@@ -117,7 +117,7 @@ class VastAIManager:
             except Exception as e:
                 logger.warning(f"API 키 검증 실패: {e}")
                 return False
-                
+
         except Exception as e:
             logger.warning(f"API 키 설정 실패: {e}")
             return False
@@ -127,21 +127,21 @@ class VastAIManager:
         try:
             logger.debug(f"명령어 실행: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
+
             if result.returncode != 0:
                 raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{result.stderr}")
-            
+
             output = result.stdout.strip()
-            
+
             if capture_json and output:
                 try:
                     return json.loads(output)
                 except json.JSONDecodeError:
                     logger.debug(f"JSON 파싱 실패, 텍스트로 반환: {output[:100]}...")
                     return output
-            
+
             return output
-            
+
         except subprocess.TimeoutExpired:
             raise TimeoutError("명령어 실행 시간 초과")
 
@@ -150,10 +150,10 @@ class VastAIManager:
         try:
             # 저장된 API 키 확인
             result = self._run_command_without_api_key(["vastai", "show", "api-keys"], capture_json=True)
-            
+
             # API 키 목록 확인 및 선택
             api_keys = []
-            
+
             # 응답 형식에 따른 처리
             if isinstance(result, dict) and 'apikeys' in result:
                 api_keys = result['apikeys']
@@ -170,18 +170,18 @@ class VastAIManager:
                         api_keys = parsed
                 except:
                     logger.debug("API 키 목록 파싱 실패")
-            
+
             # 유효한 API 키 필터링
             valid_keys = []
             for key_info in api_keys:
                 if key_info.get('deleted_at') is None and key_info.get('key') is not None:
                     valid_keys.append(key_info)
-            
+
             if valid_keys:
                 # 우선순위: key_type이 'api'인 키 > 'primary' 키 > 나머지
                 api_type_keys = [k for k in valid_keys if k.get('key_type') == 'api']
                 primary_keys = [k for k in valid_keys if k.get('key_type') == 'primary']
-                
+
                 selected_key = None
                 if api_type_keys:
                     selected_key = api_type_keys[0]
@@ -189,28 +189,28 @@ class VastAIManager:
                     selected_key = primary_keys[0]
                 elif valid_keys:
                     selected_key = valid_keys[0]
-                
+
                 if selected_key:
                     logger.info(f"기존 API 키를 선택했습니다. (ID: {selected_key['id']}, 유형: {selected_key.get('key_type', 'unknown')})")
                     return True
-            
+
             logger.info("사용 가능한 API 키를 찾을 수 없습니다. 새로운 API 키 생성이 필요합니다.")
             return False
-            
+
         except Exception as e:
             logger.info(f"API 키 확인 중 오류 발생: {e}")
             return False
 
     def search_offers(self, custom_query: Optional[str] = None) -> List[Dict[str, Any]]:
-        """오퍼 검색 (단순 직접 방식)"""
+        """오퍼 검색 (JSON 형식으로 개선)"""
         logger.info("🔍 사용 가능한 인스턴스 검색 중...")
-        
-        # 기본 명령어 구성 - 가장 단순한 형태
-        cmd = ["vastai", "search", "offers"]
-        
+
+        # 기본 명령어 구성 - --raw 옵션으로 JSON 출력 받기
+        cmd = ["vastai", "search", "offers", "--raw"]
+
         # 검색 쿼리 결정
         query = custom_query if custom_query else ""
-        
+
         if query.strip():
             # 쿼리를 개별 파라미터로 분리해서 추가
             query_parts = query.strip().split()
@@ -218,36 +218,61 @@ class VastAIManager:
             logger.info(f"🔍 검색 쿼리: {' '.join(query_parts)}")
         else:
             logger.info("🔍 모든 오퍼 검색 (필터 없음)")
-        
+
         try:
             logger.debug(f"실행할 명령어: {' '.join(cmd)}")
-            
-            # 명령어 실행 - JSON 파싱 비활성화로 raw 출력 받기
-            result = self.run_command(cmd, parse_json=False, timeout=30)
-            
+
+            # 명령어 실행 - JSON 파싱 활성화
+            result = self.run_command(cmd, parse_json=True, timeout=30)
+
             if not result["success"]:
                 logger.error(f"검색 실행 실패: {result.get('error')}")
                 return []
-            
-            # 텍스트 응답을 직접 파싱
-            raw_output = result.get("data", "")
-            if not raw_output:
+
+            # JSON 응답 처리
+            data = result.get("data", [])
+            if not data:
                 logger.warning("검색 결과가 비어있습니다")
                 return []
-            
-            # 텍스트 기반 파싱
-            offers = self._parse_text_offers(raw_output)
-            
-            if offers:
+
+            # JSON 데이터를 직접 사용 (이미 올바른 형식)
+            if isinstance(data, list):
+                offers = []
+                for offer in data:
+                    # 필요한 필드들을 정규화
+                    normalized_offer = {
+                        "id": str(offer.get("id", "")),
+                        "gpu_name": offer.get("gpu_name", "Unknown"),
+                        "gpu_ram": float(offer.get("gpu_ram", 0)),
+                        "dph_total": float(offer.get("dph_total", 0)),  # dph_total 필드를 직접 사용
+                        "num_gpus": int(offer.get("num_gpus", 1)),
+                        "rentable": offer.get("rentable", True),
+                        "verified": offer.get("verified", False),
+                        "public_ipaddr": offer.get("public_ipaddr"),
+                        "reliability": offer.get("reliability", 0.0),
+                        "score": offer.get("score", 0.0),
+                        "geolocation": offer.get("geolocation", "Unknown"),
+                        "cpu_cores": offer.get("cpu_cores", 1),
+                        "ram": offer.get("cpu_ram", 1),
+                        "disk_space": offer.get("disk_space", 10),
+                        "inet_down": offer.get("inet_down", 100),
+                        "inet_up": offer.get("inet_up", 100),
+                        "cuda_max_good": offer.get("cuda_vers", "11.0"),
+                        "hostname": offer.get("hostname", "unknown-host")
+                    }
+                    offers.append(normalized_offer)
+
                 logger.info(f"✅ 검색 성공: {len(offers)}개 인스턴스 발견")
                 return offers
             else:
-                logger.warning("파싱된 오퍼가 없습니다")
+                logger.warning("예상치 못한 데이터 형식")
                 return []
-                
+
         except Exception as e:
             logger.error(f"검색 실행 중 오류: {e}")
-            return []
+            # 백업으로 텍스트 파싱 시도
+            logger.info("백업 방식으로 텍스트 파싱 시도...")
+            return self._fallback_search_offers(custom_query)
 
     def _normalize_offer(self, offer: Dict[str, Any]) -> Dict[str, Any]:
         """오퍼 데이터 정규화"""
@@ -270,12 +295,12 @@ class VastAIManager:
             'geolocation': offer.get('geolocation', 'Unknown'),
             'hostname': offer.get('hostname', 'unknown-host'),
         }
-        
+
         # 추가 필드들도 보존
         for key, value in offer.items():
             if key not in normalized:
                 normalized[key] = value
-        
+
         return normalized
 
     def _parse_offers(self, data) -> List[Dict[str, Any]]:
@@ -291,32 +316,32 @@ class VastAIManager:
         """텍스트 형태의 오퍼 파싱 (개선된 버전)"""
         offers = []
         lines = text.strip().split('\n')
-        
+
         # 다양한 출력 형식 처리
         logger.debug(f"파싱할 텍스트: {text[:200]}...")
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
+
             # 헤더나 에러 메시지 건너뛰기
             if any(word in line.upper() for word in ['ID', 'GPU', 'ERROR', 'FAILED', 'COMMAND']):
                 continue
-            
+
             # 기본 파싱: ID 가격 GPU 정보 추출
             # 예시: "123456  RTX4090  24GB  $1.50/hr  Available"
             offer_data = self._extract_offer_info(line)
             if offer_data:
                 offers.append(offer_data)
-        
+
         # 파싱 결과가 없으면 더 간단한 방식 시도
         if not offers:
             logger.debug("기본 파싱 실패, 간단한 파싱 시도")
             offers = self._simple_parse_offers(text)
-        
+
         return offers
-    
+
     def _extract_offer_info(self, line: str) -> Optional[Dict[str, Any]]:
         """단일 라인에서 오퍼 정보 추출"""
         try:
@@ -329,13 +354,13 @@ class VastAIManager:
                 # 패턴 3: ID 정보들 가격
                 r'(\d+)\s+.*?\$(\d+\.?\d*)'
             ]
-            
+
             for pattern in patterns:
                 match = re.search(pattern, line, re.IGNORECASE)
                 if match:
                     groups = match.groups()
                     offer_id = groups[0]
-                    
+
                     if len(groups) >= 4:  # 풀 패턴
                         gpu_name = groups[1]
                         gpu_ram = float(groups[2])
@@ -344,7 +369,7 @@ class VastAIManager:
                         gpu_name = "Unknown"
                         gpu_ram = 0
                         price = float(groups[1])
-                    
+
                     return {
                         "id": offer_id,
                         "gpu_name": gpu_name,
@@ -356,82 +381,200 @@ class VastAIManager:
                     }
         except (ValueError, IndexError) as e:
             logger.debug(f"라인 파싱 실패: {line[:50]}... - {e}")
-        
+
         return None
-    
+
+    def _fallback_search_offers(self, custom_query: Optional[str] = None) -> List[Dict[str, Any]]:
+        """백업용 텍스트 파싱 방식 검색"""
+        logger.info("🔄 백업 방식으로 텍스트 파싱 시도 중...")
+
+        # 기본 명령어 구성 - raw 옵션 없이
+        cmd = ["vastai", "search", "offers"]
+
+        # 검색 쿼리 결정
+        query = custom_query if custom_query else ""
+
+        if query.strip():
+            query_parts = query.strip().split()
+            cmd.extend(query_parts)
+
+        try:
+            # 명령어 실행 - JSON 파싱 비활성화로 raw 출력 받기
+            result = self.run_command(cmd, parse_json=False, timeout=30)
+
+            if not result["success"]:
+                logger.error(f"백업 검색 실행 실패: {result.get('error')}")
+                return []
+
+            # 텍스트 응답을 직접 파싱
+            raw_output = result.get("data", "")
+            if not raw_output:
+                logger.warning("백업 검색 결과가 비어있습니다")
+                return []
+
+            # 텍스트 기반 파싱
+            offers = self._parse_text_offers(raw_output)
+
+            if offers:
+                logger.info(f"✅ 백업 검색 성공: {len(offers)}개 인스턴스 발견")
+                return offers
+            else:
+                logger.warning("백업 파싱된 오퍼가 없습니다")
+                return []
+
+        except Exception as e:
+            logger.error(f"백업 검색 실행 중 오류: {e}")
+            return []
+
     def _simple_parse_offers(self, text: str) -> List[Dict[str, Any]]:
-        """매우 간단한 대안 파싱"""
+        """개선된 간단한 대안 파싱 (실제 가격 파싱 포함)"""
         offers = []
-        
+
         # 숫자로 시작하는 라인 찾기
         lines = text.strip().split('\n')
         for line in lines:
             line = line.strip()
             if re.match(r'^\d+', line):
-                # 첫 번째 숫자를 ID로 사용
-                match = re.match(r'^(\d+)', line)
-                if match:
-                    offer_id = match.group(1)
-                    offers.append({
-                        "id": offer_id,
-                        "gpu_name": "Unknown",
-                        "gpu_ram": 0,
-                        "dph_total": 1.0,  # 기본 가격
-                        "num_gpus": 1,
-                        "rentable": True,
-                        "verified": False
-                    })
-        
+                # 기본 정보 추출
+                offer_data = {
+                    "id": "",
+                    "gpu_name": "Unknown",
+                    "gpu_ram": 0,
+                    "dph_total": 1.0,  # 기본값
+                    "num_gpus": 1,
+                    "rentable": True,
+                    "verified": False
+                }
+
+                # ID 추출
+                id_match = re.match(r'^(\d+)', line)
+                if id_match:
+                    offer_data["id"] = id_match.group(1)
+
+                # 가격 추출 - 다양한 패턴 시도
+                price_patterns = [
+                    r'\$(\d+\.?\d*)',  # $1.50 형태
+                    r'(\d+\.?\d*)\s*\$/h',  # 1.50 $/h 형태
+                    r'(\d+\.?\d*)\s*USD',  # 1.50 USD 형태
+                    r'(\d+\.?\d*)\s*dph',  # 1.50 dph 형태
+                ]
+
+                for pattern in price_patterns:
+                    price_match = re.search(pattern, line, re.IGNORECASE)
+                    if price_match:
+                        try:
+                            price = float(price_match.group(1))
+                            offer_data["dph_total"] = price
+                            break
+                        except ValueError:
+                            continue
+
+                # GPU 이름 추출
+                gpu_patterns = [
+                    r'(RTX\s*\d+\w*)',  # RTX4090, RTX 3090 등
+                    r'(GTX\s*\d+\w*)',  # GTX1080 등
+                    r'(Tesla\s*\w+)',   # Tesla V100 등
+                    r'(A\d+\w*)',       # A100, A6000 등
+                    r'(V\d+\w*)',       # V100 등
+                ]
+
+                for pattern in gpu_patterns:
+                    gpu_match = re.search(pattern, line, re.IGNORECASE)
+                    if gpu_match:
+                        offer_data["gpu_name"] = gpu_match.group(1).replace(' ', '')
+                        break
+
+                # GPU RAM 추출
+                ram_patterns = [
+                    r'(\d+)\s*GB',  # 24GB 형태
+                    r'(\d+)\s*G',   # 24G 형태
+                ]
+
+                for pattern in ram_patterns:
+                    ram_match = re.search(pattern, line, re.IGNORECASE)
+                    if ram_match:
+                        try:
+                            ram = float(ram_match.group(1))
+                            offer_data["gpu_ram"] = ram
+                            break
+                        except ValueError:
+                            continue
+
+                # GPU 개수 추출
+                gpu_count_patterns = [
+                    r'(\d+)x\s*' + offer_data["gpu_name"],  # 2x RTX4090
+                    r'(\d+)\s*GPUs?',  # 2 GPU
+                ]
+
+                for pattern in gpu_count_patterns:
+                    count_match = re.search(pattern, line, re.IGNORECASE)
+                    if count_match:
+                        try:
+                            count = int(count_match.group(1))
+                            offer_data["num_gpus"] = count
+                            break
+                        except ValueError:
+                            continue
+
+                offers.append(offer_data)
+
+        if offers:
+            logger.info(f"📋 간단 파싱으로 {len(offers)}개 오퍼 추출 완료")
+            for i, offer in enumerate(offers[:3]):  # 처음 3개만 로그 출력
+                logger.debug(f"  오퍼 {i+1}: ID={offer['id']}, GPU={offer['gpu_name']}, RAM={offer['gpu_ram']}GB, 가격=${offer['dph_total']}/h")
+
+        return offers
+
         return offers
 
     def select_offer(self, offers: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """오퍼 선택 (중간 가격대)"""
         if not offers:
             return None
-        
+
         # 가격순 정렬
         sorted_offers = sorted(offers, key=lambda x: x.get("dph_total", 999))
-        
+
         # 가격 필터링
         max_price = self.config.max_price()
         filtered_offers = [o for o in sorted_offers if o.get("dph_total", 999) <= max_price]
-        
+
         if not filtered_offers:
             logger.warning(f"최대 가격 ${max_price}/h 이하의 오퍼가 없습니다")
             return None
-        
+
         # 중간 가격대 선택
         mid_index = len(filtered_offers) // 2
         selected = filtered_offers[mid_index]
-        
+
         logger.info(f"선택된 오퍼: ID={selected.get('id')}, 가격=${selected.get('dph_total')}/h")
         return selected
 
     def create_instance(self, offer_id: str) -> Optional[str]:
         """인스턴스 생성 (개선된 버전)"""
         logger.info(f"📦 인스턴스를 생성 중... (Offer ID: {offer_id})")
-        
+
         image_name = self.config.image_name()
         disk_size = self.config.disk_size()
         default_ports = self.config.default_ports()
-        
+
         # 기본 명령어 구성
         cmd = ["vastai", "create", "instance", str(offer_id)]
         cmd.extend(["--image", image_name])
         cmd.extend(["--disk", str(disk_size)])
-        
+
         # 포트 설정 (간소화된 버전)
         ports_to_expose = sorted(default_ports)
         env_params = []
-        
+
         for port in ports_to_expose:
             env_params.append(f"-p {port}:{port}")
-        
+
         # 환경변수 설정
         vllm_host = self.config.vllm_host_ip()
         vllm_port = self.config.vllm_port()
         vllm_controller_port = self.config.vllm_controller_port()
-        
+
         env_params.extend([
             "-e OPEN_BUTTON_PORT=1111",
             "-e OPEN_BUTTON_TOKEN=1",
@@ -450,30 +593,30 @@ class VastAIManager:
             f"-e VLLM_DTYPE={self.config.vllm_dtype()}",
             f"-e VLLM_TOOL_CALL_PARSER={self.config.vllm_tool_call_parser()}",
         ])
-        
+
         # 환경 변수 문자열로 결합
         env_string = " ".join(env_params).strip()
         cmd.extend(["--env", env_string])
-        
+
         # onstart 명령어
         onstart_cmd = self.config.generate_onstart_command()
         cmd.extend(["--onstart-cmd", onstart_cmd])
-        
+
         # 기본 옵션들
         cmd.append("--jupyter")
         cmd.append("--ssh")
         cmd.append("--direct")
-        
+
         logger.debug(f"실행할 명령어: {' '.join(cmd)}")
-        
+
         try:
             result = self.run_command(cmd, parse_json=False)
-            
+
             if result["success"]:
                 # 인스턴스 ID 추출
                 output = result["data"]
                 instance_id = self._extract_instance_id_from_output(output)
-                
+
                 if instance_id:
                     logger.info(f"✅ 인스턴스 생성 성공: ID = {instance_id}")
                     return instance_id
@@ -482,10 +625,10 @@ class VastAIManager:
                     logger.info(f"CLI 출력: {output}")
             else:
                 logger.error(f"❌ 인스턴스 생성 실패: {result.get('error')}")
-                
+
         except Exception as e:
             logger.error(f"❌ 인스턴스 생성 중 오류: {e}")
-        
+
         return None
 
     def _extract_instance_id_from_output(self, output: str) -> Optional[str]:
@@ -496,7 +639,7 @@ class VastAIManager:
                 val = output.get(key)
                 if val is not None and str(val).isdigit():
                     return str(val)
-        
+
         if isinstance(output, str):
             # 문자열 응답에서 패턴 매칭으로 ID 추출
             patterns = [
@@ -505,33 +648,33 @@ class VastAIManager:
                 r"new[_\s]*instance[_\s]*id[\"':\s]*(\d+)",
                 r"id[\"':\s]*(\d+)"
             ]
-            
+
             for pattern in patterns:
                 match = re.search(pattern, output, re.IGNORECASE)
                 if match:
                     return match.group(1)
-            
+
             # 6자리 이상의 숫자 ID 찾기
             numeric_ids = re.findall(r"\b\d{6,}\b", output)
             if numeric_ids:
                 return max(numeric_ids, key=int)
-        
+
         return None
 
     def create_instance_fallback(self, offer_id: str) -> Optional[str]:
         """인스턴스 생성 (fallback 전략)"""
         # 기본 생성 시도
         instance_id = self.create_instance(offer_id)
-        
+
         if not instance_id:
             # 간단한 버전으로 재시도
             logger.info("기본 인스턴스 생성 실패, 간단한 버전으로 재시도")
-            
+
             # 필수 환경변수만 포함한 간단한 버전
             vllm_host = self.config.vllm_host_ip()
             vllm_port = self.config.vllm_port()
             vllm_controller_port = self.config.vllm_controller_port()
-            
+
             env_params = [
                 f"-e VLLM_HOST_IP={vllm_host}",
                 f"-e VLLM_PORT={vllm_port}",
@@ -545,7 +688,7 @@ class VastAIManager:
                 f"-e VLLM_TOOL_CALL_PARSER={self.config.vllm_tool_call_parser()}",
             ]
             env_string = " ".join(env_params).strip()
-            
+
             cmd = [
                 "vastai", "create", "instance",
                 str(offer_id),
@@ -553,9 +696,9 @@ class VastAIManager:
                 "--disk", str(self.config.disk_size()),
                 "--env", env_string
             ]
-            
+
             result = self.run_command(cmd, parse_json=False)
-            
+
             if result["success"]:
                 output = result["data"]
                 match = re.search(r'(\d+)', output)
@@ -563,28 +706,28 @@ class VastAIManager:
                     instance_id = match.group(1)
                     logger.info(f"fallback 인스턴스 생성 성공: {instance_id}")
                     return instance_id
-        
+
         return instance_id
 
     def wait_for_running(self, instance_id: str, max_wait: int = 300) -> bool:
         """인스턴스 실행 상태 대기"""
         logger.info(f"인스턴스 {instance_id} 실행 대기 중...")
-        
+
         start_time = time.time()
-        
+
         while time.time() - start_time < max_wait:
             status = self.get_instance_status(instance_id)
-            
+
             if status == "running":
                 logger.info(f"인스턴스 {instance_id} 실행 중")
                 return True
             elif status == "failed":
                 logger.error(f"인스턴스 {instance_id} 실행 실패")
                 return False
-            
+
             logger.info(f"현재 상태: {status}, 대기 중...")
             time.sleep(10)
-        
+
         logger.error(f"인스턴스 {instance_id} 실행 대기 타임아웃")
         return False
 
@@ -596,15 +739,15 @@ class VastAIManager:
             ("json", ["vastai", "show", "instance", instance_id]),
             ("list", ["vastai", "show", "instances"])
         ]
-        
+
         for strategy_name, cmd in strategies:
             result = self.run_command(cmd, parse_json=True)
-            
+
             if result["success"] and result["data"]:
                 status = self._extract_status(result["data"], instance_id, strategy_name)
                 if status:
                     return status
-        
+
         return "unknown"
 
     def _extract_status(self, data, instance_id: str, strategy: str) -> Optional[str]:
@@ -614,27 +757,27 @@ class VastAIManager:
                 for instance in data:
                     if str(instance.get("id")) == str(instance_id):
                         return instance.get("actual_status", "unknown")
-            
+
             elif strategy == "json" and isinstance(data, dict):
                 return data.get("actual_status", "unknown")
-            
+
             elif strategy == "list" and isinstance(data, list):
                 for instance in data:
                     if str(instance.get("id")) == str(instance_id):
                         return instance.get("actual_status", "unknown")
-            
+
         except Exception as e:
             logger.debug(f"상태 추출 오류 ({strategy}): {e}")
-        
+
         return None
 
     def get_instance_info(self, instance_id: str) -> Optional[Dict[str, Any]]:
         """인스턴스 상세 정보 조회"""
         result = self.run_command(["vastai", "show", "instance", instance_id], parse_json=True)
-        
+
         if result["success"] and result["data"]:
             return result["data"]
-        
+
         return None
 
     def execute_ssh_command(self, instance_id: str, command: str, stream: bool = False) -> Dict[str, Any]:
@@ -644,7 +787,7 @@ class VastAIManager:
         try:
             ssh_info = self.get_ssh_info(instance_id)
             user, host, port, key_path = self._parse_ssh_url(ssh_info)
-            
+
             if not all([user, host]):
                 return {"success": False, "error": "SSH URL 파싱 실패, 명령어 실행 불가"}
 
@@ -655,7 +798,7 @@ class VastAIManager:
                 "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "ConnectTimeout=30",
             ]
-            
+
             if key_path:
                 ssh_base.extend(["-i", key_path])
 
@@ -671,7 +814,7 @@ class VastAIManager:
                     return {"success": True, "stdout": result["data"], "stderr": ""}
                 else:
                     return {"success": False, "error": result["error"], "stdout": "", "stderr": result["error"]}
-                
+
         except Exception as e:
             # SSH 연결 실패 구분하여 처리
             error_msg = str(e).lower()
@@ -686,7 +829,7 @@ class VastAIManager:
         """ssh-url 명령 결과에서 (user, host, port, key_path) 추출"""
         import shlex
         import urllib.parse
-        
+
         if ssh_cmd.startswith("ssh://"):
             parsed = urllib.parse.urlparse(ssh_cmd)
             user = parsed.username
@@ -699,7 +842,7 @@ class VastAIManager:
         user = host = key_path = None
         port = 22
         i = 0
-        
+
         while i < len(parts):
             token = parts[i]
             if token == "ssh":
@@ -713,7 +856,7 @@ class VastAIManager:
                 key_path = parts[i + 1]
                 i += 2
                 continue
-            
+
             # user@host 패턴 찾기
             m = re.match(r"([^@]+)@([\w.\-]+)(?::(\d+))?", token)
             if m:
@@ -722,13 +865,13 @@ class VastAIManager:
                 if m.group(3):
                     port = int(m.group(3))
             i += 1
-            
+
         return user, host, port, key_path
 
     def get_ssh_info(self, instance_id: str) -> str:
         """SSH 연결 정보 조회"""
         cmd = ["vastai", "ssh-url", str(instance_id)]
-        
+
         try:
             result = self.run_command(cmd, parse_json=False)
             if result["success"]:
@@ -751,15 +894,15 @@ class VastAIManager:
                 stderr=subprocess.PIPE,
                 text=True
             )
-            
+
             stdout, stderr = process.communicate()
-            
+
             return {
                 "success": process.returncode == 0,
                 "stdout": stdout,
                 "stderr": stderr
             }
-            
+
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -814,10 +957,10 @@ class VastAIManager:
         info = self.get_instance_info(instance_id)
         if not info:
             return {}
-        
+
         mappings = {}
         public_ip = info.get("public_ipaddr")
-        
+
         # 포트 정보 추출
         if "ports" in info:
             for port_info in info["ports"]:
@@ -828,7 +971,7 @@ class VastAIManager:
                         "external_port": external,
                         "url": f"http://{public_ip}:{external}" if public_ip else None
                     }
-        
+
         return {"mappings": mappings, "public_ip": public_ip}
 
     def _get_port_mappings_from_raw_info(self, instance_id: str) -> Dict[int, Tuple[str, int]]:
@@ -838,27 +981,27 @@ class VastAIManager:
         try:
             # get_instance_info를 통해 --raw 정보 가져오기
             raw_info = self.get_instance_info(instance_id)
-            
+
             if not raw_info or not isinstance(raw_info, dict):
                 logger.warning("❌ 인스턴스 정보를 가져올 수 없습니다.")
                 return {}
-            
+
             logger.info(f"🔍 Raw info keys: {list(raw_info.keys())}")
-            
+
             mapping: Dict[int, Tuple[str, int]] = {}
             public_ip = raw_info.get("public_ipaddr", "unknown")
-            
+
             # 1. ports 필드에서 포트 매핑 정보 추출
             ports_data = raw_info.get("ports", {})
-            
+
             if isinstance(ports_data, dict) and ports_data:
                 logger.info(f"📊 포트 데이터 발견: {ports_data}")
-                
+
                 for port_key, port_bindings in ports_data.items():
                     try:
                         # 포트 키에서 컨테이너 포트 추출 ("1111/tcp" -> 1111)
                         container_port = int(port_key.split('/')[0])
-                        
+
                         # 포트 바인딩 정보 처리
                         if isinstance(port_bindings, list) and len(port_bindings) > 0:
                             # [{"HostIp": "0.0.0.0", "HostPort": "11346"}] 형태
@@ -866,70 +1009,70 @@ class VastAIManager:
                             if isinstance(first_binding, dict):
                                 host_port = int(first_binding.get("HostPort", "0"))
                                 host_ip = first_binding.get("HostIp", "0.0.0.0")
-                                
+
                                 # 실제 공인 IP 사용
                                 external_ip = public_ip if public_ip != "unknown" else host_ip
-                                
+
                                 if container_port > 0 and host_port > 0:
                                     mapping[container_port] = (external_ip, host_port)
                                     logger.info(f"   ✅ 매핑 추가: {container_port} -> {external_ip}:{host_port}")
-                                    
+
                         elif isinstance(port_bindings, str):
                             # "149.7.4.12:18773" 형태
                             if ":" in port_bindings:
                                 ip, port = port_bindings.split(":")
                                 mapping[container_port] = (ip, int(port))
                                 logger.info(f"   ✅ 매핑 추가: {container_port} -> {ip}:{port}")
-                                
+
                     except (ValueError, TypeError, KeyError) as e:
                         logger.debug(f"포트 정보 파싱 실패: {port_key}={port_bindings}, 에러: {e}")
                         continue
-            
+
             # 2. 다른 포트 관련 필드들도 확인
             port_fields_to_check = [
                 "port_bindings", "port_map", "port_mappings", "exposed_ports"
             ]
-            
+
             for field_name in port_fields_to_check:
                 if field_name in raw_info and not mapping:
                     field_data = raw_info[field_name]
                     logger.info(f"🔍 {field_name} 필드 확인: {field_data}")
-                    
+
                     if isinstance(field_data, dict):
                         for key, value in field_data.items():
                             try:
                                 container_port = int(key.split('/')[0]) if '/' in str(key) else int(key)
-                                
+
                                 if isinstance(value, list) and len(value) > 0:
                                     binding = value[0]
                                     if isinstance(binding, dict):
                                         host_port = int(binding.get("HostPort", "0"))
                                         external_ip = public_ip if public_ip != "unknown" else "0.0.0.0"
-                                        
+
                                         if container_port > 0 and host_port > 0:
                                             mapping[container_port] = (external_ip, host_port)
                                             logger.info(f"   ✅ {field_name}에서 매핑 추가: {container_port} -> {external_ip}:{host_port}")
-                                            
+
                             except (ValueError, TypeError, KeyError) as e:
                                 logger.debug(f"{field_name} 파싱 실패: {key}={value}, 에러: {e}")
                                 continue
-            
+
             # 3. 포트 매핑이 없는 경우 SSH 포트라도 추출 시도
             if not mapping:
                 ssh_host = raw_info.get("ssh_host")
                 ssh_port = raw_info.get("ssh_port", 22)
-                
+
                 if ssh_host and ssh_port:
                     mapping[22] = (ssh_host, int(ssh_port))
                     logger.info(f"   ✅ SSH 포트 매핑 추가: 22 -> {ssh_host}:{ssh_port}")
-            
+
             if mapping:
                 logger.info(f"✅ --raw 방식으로 {len(mapping)}개 포트 매핑 성공")
                 return mapping
             else:
                 logger.warning("⚠️ --raw 방식으로 포트 매핑을 찾을 수 없음")
                 return {}
-                
+
         except Exception as e:
             logger.warning(f"❌ --raw 방식 포트 매핑 수집 실패: {e}")
             return {}
@@ -938,10 +1081,10 @@ class VastAIManager:
         """vast show instances --raw에서 포트 매핑 추출"""
         try:
             result = self.run_command(["vastai", "show", "instances", "--raw"], parse_json=True)
-            
+
             if not result["success"] or not result["data"]:
                 return {}
-                
+
             instances_data = result["data"]
             if isinstance(instances_data, str):
                 # 문자열 응답을 JSON으로 파싱 시도
@@ -950,9 +1093,9 @@ class VastAIManager:
                 except json.JSONDecodeError:
                     logger.warning("❌ JSON 파싱 실패")
                     return self._parse_string_response_for_ports(instances_data, instance_id)
-            
+
             mapping: Dict[int, Tuple[str, int]] = {}
-            
+
             # 응답은 인스턴스 배열
             if isinstance(instances_data, list):
                 # 해당 인스턴스 찾기
@@ -961,57 +1104,57 @@ class VastAIManager:
                     if str(inst.get("id")) == str(instance_id):
                         target_instance = inst
                         break
-                
+
                 if target_instance:
                     logger.info(f"✅ 인스턴스 찾음 (ID: {target_instance.get('id')})")
-                    
+
                     # 공인 IP 가져오기
                     public_ip = target_instance.get("public_ipaddr", "unknown")
-                    
+
                     # 포트 정보 파싱
                     ports_dict = target_instance.get("ports", {})
-                    
+
                     for port_key, port_mappings in ports_dict.items():
                         try:
                             container_port = int(port_key.split('/')[0])
-                            
+
                             if port_mappings and len(port_mappings) > 0:
                                 host_port = int(port_mappings[0].get("HostPort", "0"))
-                                
+
                                 if container_port > 0 and host_port > 0:
                                     mapping[container_port] = (public_ip, host_port)
                                     logger.info(f"   ✅ 매핑 추가: {container_port} -> {public_ip}:{host_port}")
-                                    
+
                         except (ValueError, TypeError, KeyError) as e:
                             logger.debug(f"포트 정보 파싱 실패: {port_key}={port_mappings}, 에러: {e}")
                             continue
-                    
+
                     return mapping
-                        
+
         except Exception as e:
             logger.warning(f"instances 목록 방식 실패: {e}")
-        
+
         return {}
 
     def _get_port_mappings_from_text_parsing(self, instance_id: str) -> Dict[int, Tuple[str, int]]:
         """텍스트 파싱을 통한 포트 매핑 수집"""
         mapping: Dict[int, Tuple[str, int]] = {}
-        
+
         try:
             # 일반 show instance 명령어 시도
             result = self.run_command(["vastai", "show", "instance", str(instance_id)], parse_json=False)
-            
+
             if result["success"]:
                 output = result["data"]
-                
+
                 # 포트 패턴 매칭
                 patterns = [
                     # 패턴 1: IP:PORT -> CONTAINER_PORT/tcp
                     re.compile(r"(?P<ip>\d+\.\d+\.\d+\.\d+):(?P<host_port>\d+)\s*->\s*(?P<container_port>\d+)/tcp"),
-                    # 패턴 2: PORT -> IP:HOST_PORT  
+                    # 패턴 2: PORT -> IP:HOST_PORT
                     re.compile(r"(?P<container_port>\d+)\s*->\s*(?P<ip>\d+\.\d+\.\d+\.\d+):(?P<host_port>\d+)"),
                 ]
-                
+
                 for pattern in patterns:
                     for line in output.splitlines():
                         match = pattern.search(line)
@@ -1024,27 +1167,27 @@ class VastAIManager:
                                 logger.info(f"   패턴 매칭: {container_port} -> {ip}:{host_port}")
                             except Exception as e:
                                 logger.debug(f"패턴 매칭 실패: {line}, 에러: {e}")
-            
+
             # show instances로도 시도
             if not mapping:
                 instances_result = self.run_command(["vastai", "show", "instances"], parse_json=False)
                 if instances_result["success"]:
                     return self._parse_string_response_for_ports(instances_result["data"], instance_id)
-        
+
         except Exception as e:
             logger.warning(f"텍스트 파싱 실패: {e}")
-        
+
         return mapping
 
     def _parse_string_response_for_ports(self, response_str: str, instance_id: str) -> Dict[int, Tuple[str, int]]:
         """문자열 응답에서 포트 매핑 정보 추출"""
         logger.info(f"🔍 문자열 응답에서 포트 정보 추출 시도 (인스턴스 ID: {instance_id})")
-        
+
         mapping: Dict[int, Tuple[str, int]] = {}
-        
+
         try:
             lines = response_str.strip().split('\n')
-            
+
             # 인스턴스 ID가 포함된 라인 찾기
             instance_line = None
             for line in lines:
@@ -1052,72 +1195,72 @@ class VastAIManager:
                     instance_line = line
                     logger.info(f"🔍 인스턴스 라인 발견: {line}")
                     break
-            
+
             if not instance_line:
                 logger.warning(f"⚠️ 인스턴스 ID {instance_id}가 포함된 라인을 찾을 수 없음")
                 return mapping
-            
+
             # 라인에서 IP:PORT 패턴 찾기
             ip_port_pattern = re.compile(r'(\d+\.\d+\.\d+\.\d+):(\d+)')
             matches = ip_port_pattern.findall(instance_line)
-            
+
             logger.info(f"🔍 발견된 IP:PORT 패턴: {matches}")
-            
+
             for ip, port_str in matches:
                 try:
                     external_port = int(port_str)
-                    
+
                     # 포트 번호로 컨테이너 포트 추정
                     container_port = self._estimate_container_port(external_port)
-                    
+
                     if container_port:
                         mapping[container_port] = (ip, external_port)
                         logger.info(f"   ✅ 매핑 추가: {container_port} -> {ip}:{external_port}")
                     else:
                         logger.debug(f"   ❓ 컨테이너 포트 추정 불가: {external_port}")
-                        
+
                 except ValueError as e:
                     logger.debug(f"포트 파싱 실패: {port_str}, 에러: {e}")
                     continue
-            
+
             if mapping:
                 logger.info(f"✅ 문자열 파싱으로 {len(mapping)}개 포트 매핑 성공")
             else:
                 logger.warning("⚠️ 문자열에서 포트 매핑 정보를 찾을 수 없음")
-                
+
         except Exception as e:
             logger.warning(f"❌ 문자열 파싱 중 오류: {e}")
-        
+
         return mapping
 
     def _estimate_container_port(self, external_port: int) -> Optional[int]:
         """외부 포트 번호를 통해 컨테이너 포트 추정"""
         port_suffix = str(external_port)[-3:]  # 마지막 3자리
-        
+
         port_mapping = {
             "111": 1111,    # xxxxx1111 -> 1111
-            "080": 8080,    # xxxxx8080 -> 8080  
+            "080": 8080,    # xxxxx8080 -> 8080
             "006": 6006,    # xxxxx6006 -> 6006
             "384": 8384,    # xxxxx8384 -> 8384
             "479": 11479,   # xxxxx1479 -> 11479
             "480": 11480,   # xxxxx1480 -> 11480
         }
-        
+
         if port_suffix in port_mapping:
             return port_mapping[port_suffix]
         elif external_port == 22:  # SSH
             return 22
-        
+
         return None
 
     def _extract_port_info(self, instance_data: Dict[str, Any]) -> Dict[str, Any]:
         """인스턴스 데이터에서 포트 정보 추출"""
         mappings = {}
         public_ip = instance_data.get("public_ipaddr")
-        
+
         # 다양한 포트 필드 확인
         port_fields = ["ports", "port_mappings", "exposed_ports"]
-        
+
         for field in port_fields:
             if field in instance_data:
                 port_data = instance_data[field]
@@ -1137,16 +1280,16 @@ class VastAIManager:
                                     "external_port": external,
                                     "url": f"http://{public_ip}:{external}" if public_ip else None
                                 }
-        
+
         return {"mappings": mappings, "public_ip": public_ip}
 
     def _get_port_mappings_from_ssh(self, instance_id: str, command: str) -> Dict[str, Any]:
         """SSH를 통해 포트 매핑 수집"""
         result = self.execute_ssh_command(instance_id, command)
-        
+
         if not result["success"]:
             return {}
-        
+
         # netstat/ss 출력 파싱
         mappings = {}
         for line in result["stdout"].split('\n'):
@@ -1156,7 +1299,7 @@ class VastAIManager:
                     mappings["8000"] = {"external_port": "8000", "url": None}
                 if ':22' in line:
                     mappings["22"] = {"external_port": "22", "url": None}
-        
+
         return {"mappings": mappings, "public_ip": None}
 
     def _get_port_mappings_from_api(self, instance_id: str) -> Dict[str, Any]:
@@ -1178,105 +1321,105 @@ class VastAIManager:
         """포트 매핑 정보를 보기 좋게 출력"""
         port_info = self.get_port_mappings(instance_id)
         port_mappings = port_info.get("mappings", {})
-        
+
         if not port_mappings:
             logger.warning("포트 매핑 정보를 가져올 수 없습니다.")
             return port_info
-        
+
         # 포트별 서비스 이름 매핑
         port_services = {
             1111: "Instance Portal",
             6006: "Tensorboard",
             8080: "Jupyter",
-            8384: "Syncthing", 
+            8384: "Syncthing",
             11479: "vLLM Main",
             11480: "vLLM Controller",
             22: "SSH",
             72299: "Custom Service"
         }
-        
+
         logger.info("\n🌐 포트 매핑 정보:")
         logger.info("=" * 50)
-        
+
         # 포트 번호 순으로 정렬하여 출력
         for container_port in sorted(port_mappings.keys()):
             external_ip, external_port = port_mappings[container_port]
             service_name = port_services.get(container_port, "Unknown Service")
-            
+
             logger.info(f"   {container_port:5d} ({service_name:16s}) → {external_ip}:{external_port}")
-        
+
         logger.info("=" * 50)
-        
+
         # 주요 서비스 URL 생성
         main_services = []
         if 1111 in port_mappings:
             ip, port = port_mappings[1111]
             main_services.append(f"🏠 Instance Portal: http://{ip}:{port}")
-        
+
         if 8080 in port_mappings:
             ip, port = port_mappings[8080]
             main_services.append(f"📓 Jupyter: http://{ip}:{port}")
-        
+
         if 11479 in port_mappings:
             ip, port = port_mappings[11479]
             main_services.append(f"🤖 vLLM Main: http://{ip}:{port}")
-        
+
         if 11480 in port_mappings:
             ip, port = port_mappings[11480]
             main_services.append(f"🎛️ vLLM Controller: http://{ip}:{port}")
-        
+
         if 6006 in port_mappings:
             ip, port = port_mappings[6006]
             main_services.append(f"📊 Tensorboard: http://{ip}:{port}")
-        
+
         if main_services:
             logger.info("\n🔗 주요 서비스 URL:")
             for service in main_services:
                 logger.info(f"   {service}")
-        
+
         return port_info
 
     def destroy_instance(self, instance_id: str) -> bool:
         """인스턴스 삭제"""
         logger.info(f"인스턴스 {instance_id} 삭제 중...")
-        
+
         result = self.run_command(["vastai", "destroy", "instance", instance_id], parse_json=False)
-        
+
         if result["success"]:
             # 삭제 확인
             time.sleep(5)
             status = self.get_instance_status(instance_id)
-            
+
             if status in ["destroyed", "unknown"]:
                 logger.info(f"인스턴스 {instance_id} 삭제 완료")
                 return True
             else:
                 logger.warning(f"인스턴스 {instance_id} 삭제 확인 실패, 현재 상태: {status}")
                 return False
-        
+
         logger.error(f"인스턴스 {instance_id} 삭제 실패: {result.get('error')}")
         return False
 
     def setup_and_run_vllm(self, instance_id: str) -> bool:
         """vLLM 설정 및 실행 (HF 로그인 제거)"""
         logger.info("vLLM 설정 및 실행 중...")
-        
+
         # vLLM 실행 명령
         commands = [
             "cd /home/vllm-script",
             "nohup python3 main.py > /tmp/vllm.log 2>&1 &"
         ]
-        
+
         for cmd in commands:
             result = self.execute_ssh_command(instance_id, cmd)
-            
+
             if not result["success"]:
                 logger.error(f"명령 실행 실패: {cmd}")
                 logger.error(f"오류: {result.get('error')}")
                 return False
-            
+
             logger.info(f"명령 완료: {cmd}")
-        
+
         logger.info("vLLM 실행 완료")
         return True
 
@@ -1284,13 +1427,13 @@ class VastAIManager:
         """vLLM 상태 확인"""
         # 로그 확인
         log_result = self.execute_ssh_command(instance_id, "tail -n 20 /tmp/vllm.log")
-        
+
         # 프로세스 확인
         process_result = self.execute_ssh_command(instance_id, "ps aux | grep python")
-        
+
         return {
             "log_output": log_result.get("stdout", ""),
             "process_info": process_result.get("stdout", ""),
             "log_success": log_result.get("success", False),
             "process_success": process_result.get("success", False)
-        } 
+        }
