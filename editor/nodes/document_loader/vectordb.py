@@ -3,6 +3,9 @@ import logging
 from typing import Optional, Dict, Any
 from editor.node_composer import Node
 from editor.utils.helper.service_helper import AppServiceManager
+from fastapi import Request
+from controller.controller_helper import extract_user_id_from_request
+from service.database.models.vectordb import VectorDB
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +27,6 @@ class QdrantNode(Node):
         },
     ]
 
-    def get_collection_options(self):
-        """컬렉션 옵션을 가져오는 함수"""
-        return getattr(self, '_collections_cache', [])
-
     parameters = [
         {
             "id": "collection_name",
@@ -35,7 +34,9 @@ class QdrantNode(Node):
             "type": "STR",
             "value": "Select Collection",
             "required": True,
-            "options": get_collection_options,
+            "is_api": True,
+            "api_name": "api_collection",
+            "options": [],
         },
         {
             "id": "top_k",
@@ -61,20 +62,17 @@ class QdrantNode(Node):
         }
     ]
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.rag_service = AppServiceManager.get_rag_service()
-        if not self.rag_service:
-            logger.error("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
-            raise RuntimeError("RAG 서비스가 초기화되지 않았습니다. 서버가 실행 중인지 확인하세요.")
-        self.vector_manager = self.rag_service.vector_manager
-
-        try:
-            collections = self.vector_manager.list_collections().get('collections', [])
-            self._collections_cache = [{"value": collection, "label": collection} for collection in collections]
-        except Exception as e:
-            logger.warning(f"초기 컬렉션 목록 로딩 실패: {e}")
-            self._collections_cache = []
+    def api_collection(self, request: Request) -> Dict[str, Any]:
+        user_id = extract_user_id_from_request(request)
+        db_service = request.app.state.app_db
+        collections = db_service.find_by_condition(
+            VectorDB,
+            {
+            "user_id": user_id
+            },
+            limit=1000,
+        )
+        return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
     def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.2) -> Dict[str, Any]:
         """
@@ -87,6 +85,8 @@ class QdrantNode(Node):
         Returns:
             RAG 컨텍스트 딕셔너리 (rag_service와 파라미터 포함)
         """
+        rag_service = AppServiceManager.get_rag_service()
+
         try:
             if not collection_name:
                 logger.error("컬렉션 이름이 제공되지 않았습니다.")
@@ -99,7 +99,7 @@ class QdrantNode(Node):
 
             logger.info(f"RAG 컨텍스트 설정: collection='{collection_name}', top_k={top_k}, score_threshold={score_threshold}")
 
-            if not self.rag_service:
+            if not rag_service:
                 logger.warning("RAG 서비스를 사용할 수 없습니다.")
                 return {
                     "error": "RAG 서비스를 사용할 수 없습니다.",
@@ -109,7 +109,7 @@ class QdrantNode(Node):
                 }
 
             rag_context = {
-                "rag_service": self.rag_service,
+                "rag_service": rag_service,
                 "search_params": {
                     "collection_name": collection_name,
                     "top_k": top_k,
