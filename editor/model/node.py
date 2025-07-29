@@ -21,6 +21,8 @@ class Parameter(TypedDict):
     min: Optional[float] = None
     max: Optional[float] = None
     options: Optional[Union[List[dict[str, Any]], Callable]] = None
+    is_api: bool = False  # API 호출 여부
+    api_name: Optional[str] = None  # API 호출 시 사용할 이름
 
 
 class NodeSpec(TypedDict):

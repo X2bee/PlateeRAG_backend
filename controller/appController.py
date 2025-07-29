@@ -22,7 +22,9 @@ def get_rag_service(request: Request) -> RAGService:
     if config_composer:
         vectordb_config = config_composer.get_config_by_category_name("vectordb")
         openai_config = config_composer.get_config_by_category_name("openai")
-        return RAGService(vectordb_config, openai_config)
+        collection_config = config_composer.get_config_by_category_name("collection")
+
+        return RAGService(vectordb_config, collection_config, openai_config)
     else:
         raise HTTPException(status_code=500, detail="Configuration not available")
 
