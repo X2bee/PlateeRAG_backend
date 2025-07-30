@@ -735,7 +735,7 @@ class VastAIManager:
         """인스턴스 상태 확인"""
         # 3단계 파싱 시도
         strategies = [
-            ("raw", ["vastai", "show", "instance", "--raw"]),
+            ("raw", ["vastai", "show", "instance", instance_id, "--raw"]),
             ("json", ["vastai", "show", "instance", instance_id]),
             ("list", ["vastai", "show", "instances"])
         ]
@@ -753,10 +753,16 @@ class VastAIManager:
     def _extract_status(self, data, instance_id: str, strategy: str) -> Optional[str]:
         """데이터에서 상태 추출"""
         try:
-            if strategy == "raw" and isinstance(data, list):
-                for instance in data:
-                    if str(instance.get("id")) == str(instance_id):
-                        return instance.get("actual_status", "unknown")
+            if strategy == "raw":
+                # --raw 옵션은 단일 딕셔너리를 반환
+                if isinstance(data, dict):
+                    if str(data.get("id")) == str(instance_id):
+                        return data.get("actual_status", "unknown")
+                # 리스트일 수도 있음 (예외 케이스)
+                elif isinstance(data, list):
+                    for instance in data:
+                        if str(instance.get("id")) == str(instance_id):
+                            return instance.get("actual_status", "unknown")
 
             elif strategy == "json" and isinstance(data, dict):
                 return data.get("actual_status", "unknown")
@@ -1406,7 +1412,7 @@ class VastAIManager:
 
         # vLLM 실행 명령
         commands = [
-            "cd /home/vllm-script",
+            "cd /vllm/vllm-script",
             "nohup python3 main.py > /tmp/vllm.log 2>&1 &"
         ]
 

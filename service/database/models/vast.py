@@ -31,22 +31,19 @@ class VastInstance(BaseModel):
 
     def get_schema(self) -> Dict[str, str]:
         return {
-            "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
-            "instance_id": "TEXT UNIQUE",
-            "offer_id": "TEXT",
-            "image_name": "TEXT",
-            "status": "TEXT DEFAULT 'creating'",
-            "public_ip": "TEXT",
+            "instance_id": "VARCHAR(255) UNIQUE",
+            "offer_id": "VARCHAR(255)",
+            "image_name": "VARCHAR(500)",
+            "status": "VARCHAR(50) DEFAULT 'creating'",
+            "public_ip": "VARCHAR(45)",
             "ssh_port": "INTEGER",
-            "port_mappings": "TEXT",  # JSON
+            "port_mappings": "TEXT",
             "start_command": "TEXT",
-            "cost_per_hour": "REAL",
-            "gpu_info": "TEXT",  # JSON
-            "auto_destroy": "BOOLEAN DEFAULT 0",
-            "template_name": "TEXT", 
-            "destroyed_at": "DATETIME",
-            "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
-            "updated_at": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+            "cost_per_hour": "DECIMAL(10,4)",
+            "gpu_info": "TEXT",
+            "auto_destroy": "BOOLEAN DEFAULT FALSE",
+            "template_name": "VARCHAR(100)",
+            "destroyed_at": "TIMESTAMP"
         }
 
     def get_port_mappings_dict(self) -> Dict[str, Any]:
@@ -94,17 +91,14 @@ class VastExecutionLog(BaseModel):
 
     def get_schema(self) -> Dict[str, str]:
         return {
-            "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
-            "instance_id": "TEXT",
-            "operation": "TEXT",
+            "instance_id": "VARCHAR(255)",
+            "operation": "VARCHAR(100)",
             "command": "TEXT",
             "result": "TEXT",
             "error_message": "TEXT",
-            "execution_time": "REAL",
-            "success": "BOOLEAN DEFAULT 1",
-            "metadata": "TEXT",  # JSON
-            "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
-            "updated_at": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+            "execution_time": "DECIMAL(10,3)",
+            "success": "BOOLEAN DEFAULT TRUE",
+            "metadata": "TEXT"
         }
 
     def get_metadata_dict(self) -> Dict[str, Any]:

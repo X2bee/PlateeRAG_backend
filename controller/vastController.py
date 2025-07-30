@@ -84,7 +84,7 @@ class CreateInstanceRequest(BaseModel):
 
 class SetupVLLMRequest(BaseModel):
     """VLLM 설정 및 실행 요청"""
-    script_directory: str = Field("/home/vllm-script", description="스크립트 디렉토리 경로")
+    script_directory: str = Field("/vllm/vllm-script", description="스크립트 디렉토리 경로")
     hf_hub_token: Optional[str] = Field(None, description="HuggingFace 토큰", example="hf_xxxxx")
     main_script: str = Field("main.py", description="메인 스크립트 파일명")
     log_file: str = Field("/tmp/vllm.log", description="로그 파일 경로")
@@ -95,7 +95,7 @@ class SetupVLLMRequest(BaseModel):
 class ExecuteCommandRequest(BaseModel):
     """명령어 실행 요청"""
     command: str = Field(..., description="실행할 명령어", example="ps aux | grep python")
-    working_directory: Optional[str] = Field(None, description="작업 디렉토리", example="/home/vllm-script")
+    working_directory: Optional[str] = Field(None, description="작업 디렉토리", example="/vllm/vllm-script")
     environment_vars: Optional[Dict[str, str]] = Field(None, description="환경변수")
     background: bool = Field(False, description="백그라운드 실행 여부")
     timeout: Optional[int] = Field(300, description="타임아웃 (초)", ge=1, le=3600)
@@ -292,19 +292,18 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
                 )
             service.apply_template(create_request.template_name)
 
-        # VLLM 설정 적용
         if create_request.vllm_config:
+            logger.info("VLLM 설정 적용")
             for key, value in create_request.vllm_config.dict().items():
                 # env_name을 통해 PersistentConfig 객체 찾기
-                env_name = f"VLLM_{key.upper()}" if key.startswith('vllm_') else key.upper()
+                env_name = f"VLLM_{key.upper()}" if not key.startswith('vllm_') else key.upper()
 
                 # all_configs에서 env_name으로 찾기
                 if hasattr(service.config, 'configs'):
                     for config_obj in service.config.configs.values():
                         if hasattr(config_obj, 'env_name') and config_obj.env_name == env_name:
                             config_obj.value = value
-                            logger.log("VLLM 설정 적용: %s = %s", key, value)
-                            break
+                            logger.info("VLLM 설정 적용: %s = %s", key, value)
 
         # 인스턴스 생성
         instance_id = service.create_vllm_instance(
@@ -561,7 +560,7 @@ async def get_logs(request: Request, instance_id: str, log_file: str = "/tmp/vll
         service = get_vast_service(request)
 
         # 보안을 위한 경로 제한
-        allowed_paths = ["/tmp/", "/var/log/", "/home/vllm-script/"]
+        allowed_paths = ["/tmp/", "/var/log/", "/vllm/vllm-script/"]
         if not any(log_file.startswith(path) for path in allowed_paths):
             log_file = f"/tmp/{log_file}"
 

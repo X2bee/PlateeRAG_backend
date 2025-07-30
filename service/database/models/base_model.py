@@ -128,8 +128,9 @@ class BaseModel(ABC):
         for col_name, col_type in all_columns.items():
             columns_def.append(f"{col_name} {col_type}")
 
+        columns_str = ',\n            '.join(columns_def)
         query = f"""CREATE TABLE IF NOT EXISTS {instance.get_table_name()} (
-            {',\n            '.join(columns_def)}
+            {columns_str}
         )"""
 
         return query.strip()

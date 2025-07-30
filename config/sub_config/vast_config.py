@@ -31,12 +31,12 @@ class VastConfig(BaseConfig):
         self.IMAGE_NAME = self.create_persistent_config(
             env_name="VAST_IMAGE_NAME",
             config_path="vast.image.name",
-            default_value="cocorof/polarops-vllm",
+            default_value="cocorof/vllm-openai-praque",
         )
         self.IMAGE_TAG = self.create_persistent_config(
             env_name="VAST_IMAGE_TAG",
             config_path="vast.image.tag",
-            default_value="1.0.1",
+            default_value="v0.10.0",
         )
 
         # ‣ 자원/가격 한계 ───────────────────────────────
