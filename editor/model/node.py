@@ -7,6 +7,7 @@ class Port(TypedDict):
     type: str
     required: bool = False
     multi: Optional[bool] = False
+    stream: Optional[bool] = False
 
 class Parameter(TypedDict):
     """노드가 사용할 파라미터의 구조를 정의합니다."""
@@ -20,6 +21,8 @@ class Parameter(TypedDict):
     min: Optional[float] = None
     max: Optional[float] = None
     options: Optional[Union[List[dict[str, Any]], Callable]] = None
+    is_api: bool = False  # API 호출 여부
+    api_name: Optional[str] = None  # API 호출 시 사용할 이름
 
 
 class NodeSpec(TypedDict):

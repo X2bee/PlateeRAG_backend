@@ -25,5 +25,5 @@ class InputStringNode(Node):
         },
     ]
 
-    def execute(self, input_str: int) -> int:
+    def execute(self, input_str: str) -> str:
         return input_str

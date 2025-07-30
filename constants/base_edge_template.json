@@ -1,0 +1,14 @@
+{
+    "id": "document_loaders_:tools-default_agents:tools-number",
+    "source": {
+        "nodeId": "",
+        "portId": "tools",
+        "portType": "output",
+        "type": "TOOL"
+    },
+    "target": {
+        "nodeId": "default_agents",
+        "portId": "tools",
+        "portType": "input"
+    }
+}
