@@ -14,7 +14,6 @@ from controller.retrievalController import router as retrievalRouter
 from controller.interactionController import router as interactionRouter
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
-from controller.evalController import router as evalRouter
 from controller.vastController import router as vastRouter
 from controller.nodeApiController import router as nodeApiRouter, register_node_api_routes
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
@@ -151,7 +150,6 @@ app.add_middleware(
 
 app.include_router(nodeRouter)
 app.include_router(authRouter)
-app.include_router(evalRouter)
 app.include_router(configRouter)
 app.include_router(workflowController)
 app.include_router(nodeStateRouter)
