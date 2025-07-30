@@ -474,7 +474,7 @@ async def list_instances(
         if service.db_manager:
             from service.database.models.vast import VastInstance
             db_instances = service.db_manager.find_all(VastInstance)
-            
+
             for db_inst in db_instances:
                 instance_id = str(db_inst.instance_id)
                 if instance_id not in my_active_instance_ids and db_inst.status not in ["destroyed", "deleted"]:
