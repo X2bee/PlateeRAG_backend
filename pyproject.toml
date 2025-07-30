@@ -3,7 +3,7 @@ name = "plateerag-backend"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12.11"
+requires-python = "==3.12"
 dependencies = [
     "aiofiles==24.1.0",
     "aiohappyeyeballs==2.6.1",
