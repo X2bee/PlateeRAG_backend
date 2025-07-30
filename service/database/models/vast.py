@@ -43,7 +43,7 @@ class VastInstance(BaseModel):
             "cost_per_hour": "REAL",
             "gpu_info": "TEXT",  # JSON
             "auto_destroy": "BOOLEAN DEFAULT 0",
-            "template_name": "TEXT",  # 사용된 템플릿 이름
+            "template_name": "TEXT", 
             "destroyed_at": "DATETIME",
             "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
             "updated_at": "DATETIME DEFAULT CURRENT_TIMESTAMP"

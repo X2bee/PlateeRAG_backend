@@ -96,17 +96,64 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
         else:
             config_obj.value = str(value)
 
+        # 1. DB에 저장
         config_obj.save()
+
+        # 2. app.state의 config도 업데이트 (메모리에서 실행 중인 설정들 동기화)
+        if hasattr(request.app.state, 'config') and request.app.state.config:
+            # config 카테고리별로 업데이트된 값 반영
+            for category_name, category_config in request.app.state.config.items():
+                if category_name != "all_configs" and hasattr(category_config, config_name):
+                    # 해당 카테고리의 설정 객체도 같은 값으로 업데이트
+                    setattr(category_config, config_name, config_obj)
+                    logger.info("Updated app.state config for category '%s': %s = %s",
+                              category_name, config_name, config_obj.value)
+
+            # all_configs도 업데이트
+            if "all_configs" in request.app.state.config:
+                request.app.state.config["all_configs"][config_name] = config_obj
+                logger.info("Updated app.state.all_configs: %s = %s", config_name, config_obj.value)
+
+        # 3. config_composer의 all_configs도 업데이트 (이미 참조로 연결되어 있지만 명시적으로)
+        config_composer.all_configs[config_name] = config_obj
+
+        # 4. 관련 서비스들에게 설정 변경 알림 (필요시 재초기화)
+        services_refreshed = []
+        try:
+            # RAG 관련 설정이 변경된 경우 RAG 서비스 갱신
+            if any(keyword in config_name.lower() for keyword in ['qdrant', 'vector', 'embedding', 'openai']):
+                if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
+                    # RAG 서비스의 설정 참조 갱신
+                    if 'vectordb' in request.app.state.config:
+                        request.app.state.rag_service.config = request.app.state.config['vectordb']
+                    if 'openai' in request.app.state.config:
+                        request.app.state.rag_service.openai_config = request.app.state.config['openai']
+                    services_refreshed.append("rag_service")
+                    logger.info("Refreshed RAG service configuration")
+
+                # 벡터 매니저 설정 갱신
+                if hasattr(request.app.state, 'vector_manager') and request.app.state.vector_manager:
+                    if 'vectordb' in request.app.state.config:
+                        request.app.state.vector_manager.config = request.app.state.config['vectordb']
+                    services_refreshed.append("vector_manager")
+                    logger.info("Refreshed vector manager configuration")
+
+        except (AttributeError, KeyError) as service_error:
+            logger.warning("Failed to refresh some services after config update: %s", service_error)
+
+        logger.info("Successfully updated config '%s': %s -> %s", config_name, old_value, config_obj.value)
 
         return {
             "message": f"Config '{config_name}' updated successfully",
             "old_value": old_value,
-            "new_value": config_obj.value
+            "new_value": config_obj.value,
+            "updated_in_memory": True,
+            "services_refreshed": services_refreshed
         }
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Config '{config_name}' not found")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Config '{config_name}' not found") from exc
     except (ValueError, TypeError) as e:
-        raise HTTPException(status_code=400, detail=f"Invalid value type: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid value type: {e}") from e
 
 @router.post("/config/persistent/refresh")
 async def refresh_persistent_configs(request: Request):
@@ -121,6 +168,46 @@ async def save_persistent_configs(request: Request):
     config_composer = get_config_composer(request)
     config_composer.save_all()
     return {"message": "All persistent configs saved successfully to database"}
+
+@router.post("/config/test-update")
+async def test_config_update_flow(request: Request):
+    """설정 업데이트 흐름 테스트용 API"""
+    try:
+        config_composer = get_config_composer(request)
+
+        # 현재 app.state 상태 확인
+        state_info = {
+            "has_config": hasattr(request.app.state, 'config'),
+            "has_config_composer": hasattr(request.app.state, 'config_composer'),
+            "has_rag_service": hasattr(request.app.state, 'rag_service'),
+            "has_vector_manager": hasattr(request.app.state, 'vector_manager'),
+            "config_categories": list(request.app.state.config.keys()) if hasattr(request.app.state, 'config') else [],
+            "all_configs_count": len(config_composer.all_configs)
+        }
+
+        # 설정 객체들의 메모리 주소 확인 (참조가 같은지 확인)
+        memory_refs = {}
+        if hasattr(request.app.state, 'config') and request.app.state.config:
+            for category_name, category_config in request.app.state.config.items():
+                if category_name != "all_configs":
+                    memory_refs[category_name] = {
+                        "app_state_id": id(category_config),
+                        "composer_id": id(config_composer.config_categories.get(category_name, None))
+                    }
+
+        return {
+            "message": "Config update flow test completed",
+            "app_state_info": state_info,
+            "memory_references": memory_refs,
+            "reference_consistency": all(
+                ref["app_state_id"] == ref["composer_id"]
+                for ref in memory_refs.values()
+                if ref["composer_id"] is not None
+            )
+        }
+    except Exception as e:
+        logger.error("Config test failed: %s", e)
+        return {"error": f"Config test failed: {e}"}
 
 @router.post("/config/models/list")
 async def get_models_list(request: Request):

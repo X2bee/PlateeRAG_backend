@@ -27,13 +27,6 @@ class VastConfig(BaseConfig):
             default_value="5bc0e602079ce2d0a54e2ba300f7cf4b6f802cd244af1d6a3d2dd6c05d8bf50e",
             file_path="vast_api_key.txt",
         )
-        self.HF_TOKEN = self.create_persistent_config(
-            env_name="HF_TOKEN",
-            config_path="vast.hf_token",
-            default_value="",
-            file_path="hf_token.txt",
-        )
-
         # ‣ 인스턴스 템플릿(컨테이너) ─────────────────────
         self.IMAGE_NAME = self.create_persistent_config(
             env_name="VAST_IMAGE_NAME",
@@ -186,8 +179,8 @@ class VastConfig(BaseConfig):
     def vast_api_key(self) -> str:
         return self.VAST_API_KEY.value
 
-    def hf_token(self) -> str:
-        return self.HF_TOKEN.value
+    def hf_hub_token(self) -> str:
+        return self.HUGGING_FACE_HUB_TOKEN.value
 
     # 숫자 / bool 변환
     def max_price(self) -> float:

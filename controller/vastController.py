@@ -77,6 +77,7 @@ class VLLMConfigRequest(BaseModel):
 class CreateInstanceRequest(BaseModel):
     """인스턴스 생성 요청"""
     offer_id: Optional[str] = Field(None, description="특정 오퍼 ID (없으면 자동 선택)", example="12345")
+    hf_hub_token: Optional[str] = Field(None, description="HuggingFace 토큰", example="hf_xxxxx")
     template_name: Optional[str] = Field(None, description="사용할 템플릿 이름 (budget, high_performance, research)", example="budget")
     auto_destroy: Optional[bool] = Field(None, description="자동 삭제 여부", example=False)
     vllm_config: Optional[VLLMConfigRequest] = Field(None, description="VLLM 설정 (선택사항)")
@@ -84,7 +85,7 @@ class CreateInstanceRequest(BaseModel):
 class SetupVLLMRequest(BaseModel):
     """VLLM 설정 및 실행 요청"""
     script_directory: str = Field("/home/vllm-script", description="스크립트 디렉토리 경로")
-    hf_token: Optional[str] = Field(None, description="HuggingFace 토큰", example="hf_xxxxx")
+    hf_hub_token: Optional[str] = Field(None, description="HuggingFace 토큰", example="hf_xxxxx")
     main_script: str = Field("main.py", description="메인 스크립트 파일명")
     log_file: str = Field("/tmp/vllm.log", description="로그 파일 경로")
     install_requirements: bool = Field(True, description="requirements.txt 설치 여부")
@@ -151,7 +152,7 @@ def get_vast_service(request: Request) -> VastService:
     try:
         config_composer = request.app.state.config_composer
         vast_config = config_composer.vast
-        db_manager = getattr(config_composer, 'database_manager', None)
+        db_manager = request.app.state.app_db
         return VastService(vast_config, db_manager)
     except Exception as e:
         logger.error(f"VastService 초기화 실패: {e}")
@@ -294,8 +295,16 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
         # VLLM 설정 적용
         if create_request.vllm_config:
             for key, value in create_request.vllm_config.dict().items():
-                if hasattr(service.config, key):
-                    setattr(service.config, key, value)
+                # env_name을 통해 PersistentConfig 객체 찾기
+                env_name = f"VLLM_{key.upper()}" if key.startswith('vllm_') else key.upper()
+
+                # all_configs에서 env_name으로 찾기
+                if hasattr(service.config, 'configs'):
+                    for config_obj in service.config.configs.values():
+                        if hasattr(config_obj, 'env_name') and config_obj.env_name == env_name:
+                            config_obj.value = value
+                            logger.log("VLLM 설정 적용: %s = %s", key, value)
+                            break
 
         # 인스턴스 생성
         instance_id = service.create_vllm_instance(
