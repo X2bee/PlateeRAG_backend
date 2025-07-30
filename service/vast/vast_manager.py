@@ -709,7 +709,7 @@ class VastAIManager:
 
         return instance_id
 
-    def wait_for_running(self, instance_id: str, max_wait: int = 300) -> bool:
+    def wait_for_running(self, instance_id: str, max_wait: int = 1500) -> bool:
         """인스턴스 실행 상태 대기"""
         logger.info(f"인스턴스 {instance_id} 실행 대기 중...")
 
@@ -782,9 +782,150 @@ class VastAIManager:
         result = self.run_command(["vastai", "show", "instance", instance_id], parse_json=True)
 
         if result["success"] and result["data"]:
-            return result["data"]
+            data = result["data"]
+
+            # JSON 딕셔너리가 반환된 경우
+            if isinstance(data, dict):
+                return data
+
+            # 문자열이 반환된 경우 (테이블 형식 출력)
+            elif isinstance(data, str):
+                logger.debug(f"인스턴스 정보가 텍스트 형식으로 반환됨: {data[:100]}...")
+                # 텍스트에서 기본 정보 추출 시도
+                parsed_info = self._parse_instance_info_from_text(data, instance_id)
+                return parsed_info if parsed_info else None
 
         return None
+
+    def _parse_instance_info_from_text(self, text: str, instance_id: str) -> Optional[Dict[str, Any]]:
+        """텍스트 형식의 인스턴스 정보에서 딕셔너리 추출"""
+        try:
+            lines = text.strip().split('\n')
+
+            # 인스턴스 ID가 포함된 라인 찾기
+            instance_line = None
+            for line in lines:
+                if str(instance_id) in line:
+                    instance_line = line
+                    break
+
+            if not instance_line:
+                logger.warning(f"인스턴스 ID {instance_id}가 포함된 라인을 찾을 수 없음")
+                return None
+
+            # 라인을 공백으로 분리하여 파싱
+            parts = instance_line.split()
+
+            if len(parts) < 8:
+                logger.warning(f"인스턴스 정보 파싱 실패: 충분한 필드가 없음")
+                return None
+
+            # 기본 정보 구조 생성
+            info = {
+                "id": instance_id,
+                "actual_status": parts[2] if len(parts) > 2 else "unknown",
+                "gpu_name": parts[4] if len(parts) > 4 else "Unknown",
+                "num_gpus": 1,  # 기본값
+                "cpu_cores": float(parts[5]) if len(parts) > 5 and parts[5].replace('.', '').isdigit() else 0,
+                "cpu_ram": float(parts[6]) if len(parts) > 6 and parts[6].replace('.', '').isdigit() else 0,
+                "dph_total": float(parts[9]) if len(parts) > 9 and parts[9].replace('.', '').isdigit() else 0,
+            }
+
+            # SSH 정보 추출
+            if len(parts) > 8:
+                ssh_addr = parts[7]
+                ssh_port = parts[8]
+
+                if ssh_addr and ssh_port.isdigit():
+                    info["ssh_host"] = ssh_addr
+                    info["ssh_port"] = int(ssh_port)
+                    info["public_ipaddr"] = ssh_addr  # SSH 주소를 공인 IP로 사용
+
+            # GPU 개수 파싱 (예: "2x" 형태)
+            if len(parts) > 3:
+                gpu_part = parts[3]
+                if 'x' in gpu_part:
+                    try:
+                        num_gpus = int(gpu_part.split('x')[0])
+                        info["num_gpus"] = num_gpus
+                    except ValueError:
+                        pass
+
+            logger.debug(f"텍스트에서 파싱된 인스턴스 정보: {info}")
+            return info
+
+        except Exception as e:
+            logger.warning(f"텍스트 인스턴스 정보 파싱 실패: {e}")
+            return None
+
+    def _parse_instances_from_text(self, text: str) -> List[Dict[str, Any]]:
+        """vastai show instances 텍스트 출력에서 인스턴스 목록 파싱"""
+        instances = []
+
+        try:
+            lines = text.strip().split('\n')
+
+            # 헤더 라인 찾기 (ID로 시작하는 라인)
+            header_line_idx = -1
+            for i, line in enumerate(lines):
+                if line.strip().startswith('ID') and 'Status' in line:
+                    header_line_idx = i
+                    break
+
+            if header_line_idx == -1:
+                logger.warning("인스턴스 목록에서 헤더를 찾을 수 없음")
+                return instances
+
+            # 헤더 다음 라인들 파싱
+            for line in lines[header_line_idx + 1:]:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # 라인을 공백으로 분리
+                parts = line.split()
+
+                if len(parts) < 8:  # 최소 필요한 필드 수
+                    continue
+
+                try:
+                    instance_info = {
+                        "id": parts[0],
+                        "machine": parts[1] if len(parts) > 1 else "",
+                        "actual_status": parts[2] if len(parts) > 2 else "unknown",
+                        "num_gpus": parts[3] if len(parts) > 3 else "1x",
+                        "gpu_name": parts[4] if len(parts) > 4 else "Unknown",
+                        "util": float(parts[5]) if len(parts) > 5 and parts[5].replace('.', '').isdigit() else 0.0,
+                        "cpu_cores": float(parts[6]) if len(parts) > 6 and parts[6].replace('.', '').isdigit() else 0,
+                        "cpu_ram": float(parts[7]) if len(parts) > 7 and parts[7].replace('.', '').isdigit() else 0,
+                        "storage": int(parts[8]) if len(parts) > 8 and parts[8].isdigit() else 0,
+                        "ssh_host": parts[9] if len(parts) > 9 else "",
+                        "ssh_port": int(parts[10]) if len(parts) > 10 and parts[10].isdigit() else 22,
+                        "dph_total": float(parts[11]) if len(parts) > 11 and parts[11].replace('.', '').isdigit() else 0.0,
+                    }
+
+                    # GPU 개수 파싱 (예: "2x" -> 2)
+                    if 'x' in instance_info["num_gpus"]:
+                        try:
+                            gpu_count = int(instance_info["num_gpus"].split('x')[0])
+                            instance_info["gpu_count"] = gpu_count
+                        except ValueError:
+                            instance_info["gpu_count"] = 1
+                    else:
+                        instance_info["gpu_count"] = 1
+
+                    instances.append(instance_info)
+
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"인스턴스 라인 파싱 실패: {line[:50]}... - {e}")
+                    continue
+
+            logger.info(f"텍스트에서 {len(instances)}개 인스턴스 파싱 완료")
+
+        except Exception as e:
+            logger.error(f"인스턴스 텍스트 파싱 중 오류: {e}")
+
+        return instances
 
     def execute_ssh_command(self, instance_id: str, command: str, stream: bool = False) -> Dict[str, Any]:
         """인스턴스에서 명령어 실행 (개선된 SSH 실행)"""

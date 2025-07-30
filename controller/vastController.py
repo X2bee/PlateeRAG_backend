@@ -456,37 +456,52 @@ async def list_instances(
 ) -> InstanceListResponse:
     try:
         service = get_vast_service(request)
-        instances = service.list_instances()
 
-        # DB 정보와 매칭
+        # VastAI에서 내가 현재 빌린 인스턴스 목록 조회
+        my_active_instance_ids = set()
+        try:
+            result = service.vast_manager.run_command(["vastai", "show", "instances"], parse_json=False)
+            if result["success"]:
+                vast_instances = service.vast_manager._parse_instances_from_text(result["data"])
+                for vast_inst in vast_instances:
+                    if isinstance(vast_inst, dict) and vast_inst.get("id"):
+                        my_active_instance_ids.add(str(vast_inst["id"]))
+        except Exception as e:
+            logger.warning(f"VastAI 인스턴스 목록 조회 중 오류: {e}")
+
+        # DB에서 VastAI에 없는 인스턴스들을 deleted로 업데이트
+        updated_count = 0
         if service.db_manager:
             from service.database.models.vast import VastInstance
-            db_instances = service.db_manager.select(VastInstance)
+            db_instances = service.db_manager.find_all(VastInstance)
+            
+            for db_inst in db_instances:
+                instance_id = str(db_inst.instance_id)
+                if instance_id not in my_active_instance_ids and db_inst.status not in ["destroyed", "deleted"]:
+                    logger.info(f"인스턴스 {instance_id}가 내 빌린 인스턴스 목록에서 발견되지 않음. 상태를 deleted로 업데이트")
+                    try:
+                        db_inst.status = "deleted"
+                        service.db_manager.update(db_inst)
+                        updated_count += 1
+                    except Exception as e:
+                        logger.error(f"인스턴스 {instance_id} 상태 업데이트 실패: {e}")
 
-            for instance in instances:
-                instance_id = instance.get("id")
-                db_match = next((db_inst for db_inst in db_instances
-                               if db_inst.instance_id == instance_id), None)
+        # 로그 출력
+        if updated_count > 0:
+            logger.info(f"총 {updated_count}개 인스턴스의 상태를 deleted로 업데이트했습니다")
 
-                if db_match:
-                    instance.update({
-                        "db_status": db_match.status,
-                        "cost_per_hour": db_match.cost_per_hour,
-                        "gpu_info": db_match.get_gpu_info_dict(),
-                        "template_name": db_match.template_name,
-                        "created_at": db_match.created_at,
-                        "updated_at": db_match.updated_at
-                    })
+        # DB에서 deleted가 아닌 인스턴스들만 가져오기
+        instances = service.list_instances()
 
         # 필터링
         if status_filter:
             instances = [inst for inst in instances
                         if inst.get("actual_status") == status_filter or
-                           inst.get("db_status") == status_filter]
+                           inst.get("status") == status_filter]
 
         if not include_destroyed:
             instances = [inst for inst in instances
-                        if inst.get("actual_status") != "exited"]
+                        if inst.get("actual_status") not in ["exited", "deleted"]]
 
         # 정렬
         if sort_by == "created_at":

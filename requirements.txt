@@ -13,7 +13,7 @@ distro==1.9.0
 fastapi==0.116.1
 filelock==3.18.0
 frozenlist==1.7.0
-fsspec==2025.7.0
+fsspec==2025.3.0
 greenlet==3.2.3
 grpcio==1.73.1
 h11==0.16.0
@@ -105,3 +105,4 @@ uvicorn==0.35.0
 yarl==1.20.1
 zstandard==0.23.0
 vastai==0.3.1
+datasets==4.0.0

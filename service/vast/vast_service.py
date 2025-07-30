@@ -465,7 +465,7 @@ class VastService:
 
         # 인스턴스 정보 수집
         instance_info = self.vast_manager.get_instance_info(instance_id)
-        if instance_info:
+        if instance_info and isinstance(instance_info, dict):
             updates = {
                 "public_ip": instance_info.get("public_ipaddr"),
                 "ssh_port": instance_info.get("ssh_port", 22)
