@@ -467,7 +467,6 @@ class VastService:
                 }
                 updates["gpu_info"] = gpu_info
 
-            # 추가 시스템 정보 저장
             if "cpu_name" in instance_info:
                 updates["cpu_name"] = instance_info.get("cpu_name")
             if "cpu_cores" in instance_info:
@@ -479,28 +478,12 @@ class VastService:
 
             self._update_instance(instance_id, updates)
 
-        # 포트 매핑 정보 수집 및 저장
         logger.info(f"인스턴스 {instance_id}의 포트 매핑 정보 수집 중...")
         port_update_success = self.update_instance_port_mappings(instance_id)
 
         if port_update_success:
-            # vLLM 설정 및 실행 (SSH 기반이 아닌 API 기반으로 추후 개선 예정)
-            if not self.vast_manager.setup_and_run_vllm(instance_id):
-                self._log_execution(
-                    instance_id=instance_id,
-                    operation="setup_vllm",
-                    command="setup and run vLLM",
-                    result="",
-                    success=False,
-                    execution_time=time.time() - start_time,
-                    error_message="vLLM 설정 및 실행 실패"
-                )
-                return False
-
-            # 최종 상태 업데이트
             self._update_instance(instance_id, {"status": "running_vllm"})
         else:
-            logger.warning(f"인스턴스 {instance_id}의 포트 매핑 정보 수집 실패")
             self._update_instance(instance_id, {"status": "running"})
 
         execution_time = time.time() - start_time
@@ -527,7 +510,7 @@ class VastService:
         if success:
             # 데이터베이스 업데이트
             self._update_instance(instance_id, {
-                "status": "destroyed",
+                "status": "deleted",
                 "destroyed_at": datetime.now()
             })
 

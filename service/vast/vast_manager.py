@@ -61,7 +61,14 @@ class VastAIManager:
 
             if result.returncode != 0:
                 error_msg = f"명령 실행 실패: {result.stderr}"
-                logger.error(error_msg)
+
+                # VastAI CLI의 특정 오류들을 더 자세히 분석
+                stderr_lower = result.stderr.lower()
+                if any(err in stderr_lower for err in ['nonetype', 'subscriptable', 'traceback']):
+                    logger.debug(f"VastAI CLI 내부 오류 감지: {result.stderr}")
+                else:
+                    logger.error(error_msg)
+
                 return {
                     "success": False,
                     "error": error_msg,
@@ -521,7 +528,6 @@ class VastAIManager:
         return selected
 
     def create_instance(self, offer_id: str) -> Optional[str]:
-        """인스턴스 생성 (개선된 버전)"""
         logger.info(f"📦 인스턴스를 생성 중... (Offer ID: {offer_id})")
 
         image_name = self.config.image_name()
@@ -630,8 +636,6 @@ class VastAIManager:
         return None
 
     def create_instance_fallback(self, offer_id: str) -> Optional[str]:
-        """인스턴스 생성 (fallback 전략)"""
-        # 기본 생성 시도
         instance_id = self.create_instance(offer_id)
 
         if not instance_id:
@@ -704,8 +708,6 @@ class VastAIManager:
         # 3단계 파싱 시도
         strategies = [
             ("raw", ["vastai", "show", "instance", instance_id, "--raw"]),
-            # ("json", ["vastai", "show", "instance", instance_id]),
-            # ("list", ["vastai", "show", "instances"])
         ]
 
         for strategy_name, cmd in strategies:
@@ -718,9 +720,19 @@ class VastAIManager:
                         return status
 
                 elif result["success"] == False:
+                    error_msg = result.get('error', '').lower()
+                    # VastAI CLI에서 삭제된 인스턴스 조회 시 발생하는 특정 오류들 처리
+                    if any(err in error_msg for err in ['nonetype', 'subscriptable', 'not found']):
+                        logger.debug(f"인스턴스 {instance_id}가 삭제된 것으로 보임: {error_msg}")
+                        return "destroyed"
                     logger.error(f"상태 조회 실패 ({strategy_name}): {result.get('error')}")
                     return "failed"
             except Exception as e:
+                error_msg = str(e).lower()
+                # VastAI CLI 내부 오류 시 삭제된 것으로 간주
+                if any(err in error_msg for err in ['nonetype', 'subscriptable', 'not found']):
+                    logger.debug(f"인스턴스 {instance_id}가 삭제된 것으로 보임 (예외): {e}")
+                    return "destroyed"
                 logger.debug(f"상태 조회 오류 ({strategy_name}): {e}")
                 return "failed"
 
@@ -901,111 +913,6 @@ class VastAIManager:
 
         return instances
 
-    def execute_ssh_command(self, instance_id: str, command: str, stream: bool = False) -> Dict[str, Any]:
-        """인스턴스에서 명령어 실행 (개선된 SSH 실행)"""
-        logger.info(f"🔧 명령어 실행 중(SSH): {command[:80]}...")
-
-        try:
-            ssh_info = self.get_ssh_info(instance_id)
-            user, host, port, key_path = self._parse_ssh_url(ssh_info)
-
-            if not all([user, host]):
-                return {"success": False, "error": "SSH URL 파싱 실패, 명령어 실행 불가"}
-
-            ssh_base = [
-                "ssh",
-                "-p", str(port),
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=30",
-            ]
-
-            if key_path:
-                ssh_base.extend(["-i", key_path])
-
-            ssh_base.append(f"{user}@{host}")
-            ssh_base.append(command)
-
-            if stream:
-                return self._execute_stream_command(ssh_base)
-            else:
-                result = self.run_command(ssh_base, parse_json=False)
-                if result["success"]:
-                    logger.debug("✅ 명령어 실행 완료(SSH)")
-                    return {"success": True, "stdout": result["data"], "stderr": ""}
-                else:
-                    return {"success": False, "error": result["error"], "stdout": "", "stderr": result["error"]}
-
-        except Exception as e:
-            # SSH 연결 실패 구분하여 처리
-            error_msg = str(e).lower()
-            if "connect failed" in error_msg or "connection refused" in error_msg:
-                logger.debug(f"SSH connection failed for instance {instance_id}: {e}")
-                return {"success": False, "error": f"SSH connection failed - instance may not be ready: {e}"}
-            else:
-                logger.error(f"❌ SSH 명령어 실행 실패: {e}")
-                return {"success": False, "error": str(e)}
-
-    def _parse_ssh_url(self, ssh_cmd: str) -> Tuple[Optional[str], Optional[str], int, Optional[str]]:
-        """ssh-url 명령 결과에서 (user, host, port, key_path) 추출"""
-        import shlex
-        import urllib.parse
-
-        if ssh_cmd.startswith("ssh://"):
-            parsed = urllib.parse.urlparse(ssh_cmd)
-            user = parsed.username
-            host = parsed.hostname
-            port = parsed.port or 22
-            key_path = None
-            return user, host, port, key_path
-
-        parts = shlex.split(ssh_cmd)
-        user = host = key_path = None
-        port = 22
-        i = 0
-
-        while i < len(parts):
-            token = parts[i]
-            if token == "ssh":
-                i += 1
-                continue
-            if token in ("-p", "--port") and i + 1 < len(parts):
-                port = int(parts[i + 1])
-                i += 2
-                continue
-            if token == "-i" and i + 1 < len(parts):
-                key_path = parts[i + 1]
-                i += 2
-                continue
-
-            # user@host 패턴 찾기
-            m = re.match(r"([^@]+)@([\w.\-]+)(?::(\d+))?", token)
-            if m:
-                user = m.group(1)
-                host = m.group(2)
-                if m.group(3):
-                    port = int(m.group(3))
-            i += 1
-
-        return user, host, port, key_path
-
-    def get_ssh_info(self, instance_id: str) -> str:
-        """SSH 연결 정보 조회"""
-        cmd = ["vastai", "ssh-url", str(instance_id)]
-
-        try:
-            result = self.run_command(cmd, parse_json=False)
-            if result["success"]:
-                ssh_url = result["data"].strip()
-                logger.info(f"🔐 SSH 연결 정보: {ssh_url}")
-                return ssh_url
-            else:
-                logger.error(f"❌ SSH 정보 조회 실패: {result['error']}")
-                raise RuntimeError(f"SSH 정보 조회 실패: {result['error']}")
-        except Exception as e:
-            logger.error(f"❌ SSH 정보 조회 실패: {e}")
-            raise
-
     def _execute_stream_command(self, cmd: List[str]) -> Dict[str, Any]:
         """스트리밍 명령 실행"""
         try:
@@ -1028,40 +935,14 @@ class VastAIManager:
             return {"success": False, "error": str(e)}
 
     def get_port_mappings(self, instance_id: str) -> Dict[str, Any]:
-        """인스턴스의 {컨테이너 포트: (외부 IP, 외부 포트)} 매핑 반환"""
         logger.info(f"🌐 포트 매핑 정보 조회 시작 (인스턴스 ID: {instance_id})")
-
-        # 1️⃣ 우선 방식: --raw 옵션을 활용한 정확한 정보 수집
         try:
-            logger.debug("1차 시도: --raw 옵션을 활용한 포트 매핑 수집")
             raw_mapping = self._get_port_mappings_from_raw_info(instance_id)
             if raw_mapping:
                 logger.info(f"✅ --raw 방식으로 {len(raw_mapping)}개 포트 매핑 성공")
                 return {"mappings": raw_mapping, "public_ip": self._extract_public_ip_from_mappings(raw_mapping)}
-            else:
-                logger.info("⚠️ --raw 방식에서 포트 매핑을 찾지 못함, 다른 방법 시도")
         except Exception as e:
             logger.warning(f"--raw 방식 실패: {e}")
-
-        # 2️⃣ 폴백 방식: vast show instances --raw 사용
-        try:
-            logger.debug("시도: vast show instances --raw 방식")
-            instances_mapping = self._get_port_mappings_from_instances_list(instance_id)
-            if instances_mapping:
-                logger.info(f"✅ instances 목록 방식으로 {len(instances_mapping)}개 포트 매핑 성공")
-                return {"mappings": instances_mapping, "public_ip": self._extract_public_ip_from_mappings(instances_mapping)}
-        except Exception as e:
-            logger.warning(f"instances 목록 방식 실패: {e}")
-
-        # 3️⃣ 텍스트 파싱 방식 (최후 폴백)
-        try:
-            logger.debug("최후 폴백: 텍스트 파싱 방식")
-            text_mapping = self._get_port_mappings_from_text_parsing(instance_id)
-            if text_mapping:
-                logger.info(f"✅ 텍스트 파싱으로 {len(text_mapping)}개 포트 매핑 성공")
-                return {"mappings": text_mapping, "public_ip": self._extract_public_ip_from_mappings(text_mapping)}
-        except Exception as e:
-            logger.warning(f"텍스트 파싱 실패: {e}")
 
         logger.error("❌ 포트 매핑 정보를 가져올 수 없습니다.")
         return {"mappings": {}, "public_ip": None}
@@ -1150,35 +1031,10 @@ class VastAIManager:
 
         return None
 
-    def _get_port_mappings_from_instance_info(self, instance_id: str) -> Dict[str, Any]:
-        """인스턴스 정보에서 포트 매핑 추출"""
-        info = self.get_instance_info(instance_id)
-        if not info:
-            return {}
-
-        mappings = {}
-        public_ip = self._extract_public_ip_from_instance_info(info)
-
-        # 포트 정보 추출
-        if "ports" in info:
-            for port_info in info["ports"]:
-                internal = port_info.get("internal_port")
-                external = port_info.get("external_port")
-                if internal and external:
-                    mappings[str(internal)] = {
-                        "external_port": external,
-                        "url": f"http://{public_ip}:{external}" if public_ip != "unknown" else None
-                    }
-
-        return {"mappings": mappings, "public_ip": public_ip}
-
     def _get_port_mappings_from_raw_info(self, instance_id: str) -> Dict[int, Tuple[str, int]]:
         try:
             # get_instance_info를 통해 --raw 정보 가져오기
             raw_info = self.get_instance_info(instance_id)
-
-            logger.info(f"🔍 인스턴스 정보 조회 완료*********************: {raw_info}")
-
             if not raw_info or not isinstance(raw_info, dict):
                 logger.warning("❌ 인스턴스 정보를 가져올 수 없습니다.")
                 return {}
@@ -1284,284 +1140,6 @@ class VastAIManager:
             logger.warning(f"❌ --raw 방식 포트 매핑 수집 실패: {e}")
             return {}
 
-    def _get_port_mappings_from_instances_list(self, instance_id: str) -> Dict[int, Tuple[str, int]]:
-        """vast show instances --raw에서 포트 매핑 추출"""
-        try:
-            result = self.run_command(["vastai", "show", "instances", "--raw"], parse_json=True)
-
-            if not result["success"] or not result["data"]:
-                return {}
-
-            instances_data = result["data"]
-            if isinstance(instances_data, str):
-                # 문자열 응답을 JSON으로 파싱 시도
-                try:
-                    instances_data = json.loads(instances_data)
-                except json.JSONDecodeError:
-                    logger.warning("❌ JSON 파싱 실패")
-                    return self._parse_string_response_for_ports(instances_data, instance_id)
-
-            mapping: Dict[int, Tuple[str, int]] = {}
-
-            # 응답은 인스턴스 배열
-            if isinstance(instances_data, list):
-                # 해당 인스턴스 찾기
-                target_instance = None
-                for inst in instances_data:
-                    if str(inst.get("id")) == str(instance_id):
-                        target_instance = inst
-                        break
-
-                if target_instance:
-                    logger.info(f"✅ 인스턴스 찾음 (ID: {target_instance.get('id')})")
-
-                    # 공인 IP 가져오기 (개선된 추출 로직 사용)
-                    public_ip = self._extract_public_ip_from_instance_info(target_instance)
-
-                    # 포트 정보 파싱
-                    ports_dict = target_instance.get("ports", {})
-
-                    for port_key, port_mappings in ports_dict.items():
-                        try:
-                            container_port = int(port_key.split('/')[0])
-
-                            if port_mappings and len(port_mappings) > 0:
-                                host_port = int(port_mappings[0].get("HostPort", "0"))
-
-                                if container_port > 0 and host_port > 0:
-                                    mapping[container_port] = (public_ip, host_port)
-                                    logger.info(f"   ✅ 매핑 추가: {container_port} -> {public_ip}:{host_port}")
-
-                        except (ValueError, TypeError, KeyError) as e:
-                            logger.debug(f"포트 정보 파싱 실패: {port_key}={port_mappings}, 에러: {e}")
-                            continue
-
-                    return mapping
-
-        except Exception as e:
-            logger.warning(f"instances 목록 방식 실패: {e}")
-
-        return {}
-
-    def _get_port_mappings_from_text_parsing(self, instance_id: str) -> Dict[int, Tuple[str, int]]:
-        """텍스트 파싱을 통한 포트 매핑 수집"""
-        mapping: Dict[int, Tuple[str, int]] = {}
-
-        try:
-            # 일반 show instance 명령어 시도
-            result = self.run_command(["vastai", "show", "instance", str(instance_id)], parse_json=False)
-
-            if result["success"]:
-                output = result["data"]
-
-                # 포트 패턴 매칭
-                patterns = [
-                    # 패턴 1: IP:PORT -> CONTAINER_PORT/tcp
-                    re.compile(r"(?P<ip>\d+\.\d+\.\d+\.\d+):(?P<host_port>\d+)\s*->\s*(?P<container_port>\d+)/tcp"),
-                    # 패턴 2: PORT -> IP:HOST_PORT
-                    re.compile(r"(?P<container_port>\d+)\s*->\s*(?P<ip>\d+\.\d+\.\d+\.\d+):(?P<host_port>\d+)"),
-                ]
-
-                for pattern in patterns:
-                    for line in output.splitlines():
-                        match = pattern.search(line)
-                        if match:
-                            try:
-                                ip = match.group("ip")
-                                host_port = int(match.group("host_port"))
-                                container_port = int(match.group("container_port"))
-                                mapping[container_port] = (ip, host_port)
-                                logger.info(f"   패턴 매칭: {container_port} -> {ip}:{host_port}")
-                            except Exception as e:
-                                logger.debug(f"패턴 매칭 실패: {line}, 에러: {e}")
-
-            # show instances로도 시도
-            if not mapping:
-                instances_result = self.run_command(["vastai", "show", "instances"], parse_json=False)
-                if instances_result["success"]:
-                    return self._parse_string_response_for_ports(instances_result["data"], instance_id)
-
-        except Exception as e:
-            logger.warning(f"텍스트 파싱 실패: {e}")
-
-        return mapping
-
-    def _parse_string_response_for_ports(self, response_str: str, instance_id: str) -> Dict[int, Tuple[str, int]]:
-        """문자열 응답에서 포트 매핑 정보 추출"""
-        logger.info(f"🔍 문자열 응답에서 포트 정보 추출 시도 (인스턴스 ID: {instance_id})")
-
-        mapping: Dict[int, Tuple[str, int]] = {}
-
-        try:
-            lines = response_str.strip().split('\n')
-
-            # 인스턴스 ID가 포함된 라인 찾기
-            instance_line = None
-            for line in lines:
-                if str(instance_id) in line:
-                    instance_line = line
-                    logger.info(f"🔍 인스턴스 라인 발견: {line}")
-                    break
-
-            if not instance_line:
-                logger.warning(f"⚠️ 인스턴스 ID {instance_id}가 포함된 라인을 찾을 수 없음")
-                return mapping
-
-            # 라인에서 IP:PORT 패턴 찾기
-            ip_port_pattern = re.compile(r'(\d+\.\d+\.\d+\.\d+):(\d+)')
-            matches = ip_port_pattern.findall(instance_line)
-
-            logger.info(f"🔍 발견된 IP:PORT 패턴: {matches}")
-
-            for ip, port_str in matches:
-                try:
-                    external_port = int(port_str)
-
-                    # 포트 번호로 컨테이너 포트 추정
-                    container_port = self._estimate_container_port(external_port)
-
-                    if container_port:
-                        mapping[container_port] = (ip, external_port)
-                        logger.info(f"   ✅ 매핑 추가: {container_port} -> {ip}:{external_port}")
-                    else:
-                        logger.debug(f"   ❓ 컨테이너 포트 추정 불가: {external_port}")
-
-                except ValueError as e:
-                    logger.debug(f"포트 파싱 실패: {port_str}, 에러: {e}")
-                    continue
-
-            if mapping:
-                logger.info(f"✅ 문자열 파싱으로 {len(mapping)}개 포트 매핑 성공")
-            else:
-                logger.warning("⚠️ 문자열에서 포트 매핑 정보를 찾을 수 없음")
-
-        except Exception as e:
-            logger.warning(f"❌ 문자열 파싱 중 오류: {e}")
-
-        return mapping
-
-    def _estimate_container_port(self, external_port: int) -> Optional[int]:
-        """외부 포트 번호를 통해 컨테이너 포트 추정"""
-        port_suffix = str(external_port)[-3:]  # 마지막 3자리
-
-        port_mapping = {
-            "111": 1111,    # xxxxx1111 -> 1111
-            "080": 8080,    # xxxxx8080 -> 8080
-            "006": 6006,    # xxxxx6006 -> 6006
-            "384": 8384,    # xxxxx8384 -> 8384
-            "2434": 12434,   # xxxxx2434 -> 12434
-            "2435": 12435,   # xxxxx2435 -> 12435
-        }
-
-        if port_suffix in port_mapping:
-            return port_mapping[port_suffix]
-        elif external_port == 22:  # SSH
-            return 22
-
-        return None
-
-    def _extract_port_info(self, instance_data: Dict[str, Any]) -> Dict[str, Any]:
-        """인스턴스 데이터에서 포트 정보 추출"""
-        mappings = {}
-        public_ip = instance_data.get("public_ipaddr")
-
-        # 다양한 포트 필드 확인
-        port_fields = ["ports", "port_mappings", "exposed_ports"]
-
-        for field in port_fields:
-            if field in instance_data:
-                port_data = instance_data[field]
-                if isinstance(port_data, dict):
-                    for internal, external in port_data.items():
-                        mappings[str(internal)] = {
-                            "external_port": external,
-                            "url": f"http://{public_ip}:{external}" if public_ip else None
-                        }
-                elif isinstance(port_data, list):
-                    for port_info in port_data:
-                        if isinstance(port_info, dict):
-                            internal = port_info.get("internal_port") or port_info.get("internal")
-                            external = port_info.get("external_port") or port_info.get("external")
-                            if internal and external:
-                                mappings[str(internal)] = {
-                                    "external_port": external,
-                                    "url": f"http://{public_ip}:{external}" if public_ip else None
-                                }
-
-        return {"mappings": mappings, "public_ip": public_ip}
-
-    def _get_default_port_mappings(self) -> Dict[str, Any]:
-        """기본 포트 매핑 반환"""
-        return {
-            "mappings": {
-                "8000": {"external_port": "8000", "url": None},
-                "22": {"external_port": "22", "url": None}
-            },
-            "public_ip": None
-        }
-
-    def display_port_mappings(self, instance_id: str) -> Dict[str, Any]:
-        """포트 매핑 정보를 보기 좋게 출력"""
-        port_info = self.get_port_mappings(instance_id)
-        port_mappings = port_info.get("mappings", {})
-
-        if not port_mappings:
-            logger.warning("포트 매핑 정보를 가져올 수 없습니다.")
-            return port_info
-
-        # 포트별 서비스 이름 매핑
-        port_services = {
-            1111: "Instance Portal",
-            6006: "Tensorboard",
-            8080: "Jupyter",
-            8384: "Syncthing",
-            12434: "vLLM Main",
-            12435: "vLLM Controller",
-            22: "SSH",
-            72299: "Custom Service"
-        }
-
-        logger.info("\n🌐 포트 매핑 정보:")
-        logger.info("=" * 50)
-
-        # 포트 번호 순으로 정렬하여 출력
-        for container_port in sorted(port_mappings.keys()):
-            external_ip, external_port = port_mappings[container_port]
-            service_name = port_services.get(container_port, "Unknown Service")
-
-            logger.info(f"   {container_port:5d} ({service_name:16s}) → {external_ip}:{external_port}")
-
-        logger.info("=" * 50)
-
-        # 주요 서비스 URL 생성
-        main_services = []
-        if 1111 in port_mappings:
-            ip, port = port_mappings[1111]
-            main_services.append(f"🏠 Instance Portal: http://{ip}:{port}")
-
-        if 8080 in port_mappings:
-            ip, port = port_mappings[8080]
-            main_services.append(f"📓 Jupyter: http://{ip}:{port}")
-
-        if 12434 in port_mappings:
-            ip, port = port_mappings[12434]
-            main_services.append(f"🤖 vLLM Main: http://{ip}:{port}")
-
-        if 12435 in port_mappings:
-            ip, port = port_mappings[12435]
-            main_services.append(f"🎛️ vLLM Controller: http://{ip}:{port}")
-
-        if 6006 in port_mappings:
-            ip, port = port_mappings[6006]
-            main_services.append(f"📊 Tensorboard: http://{ip}:{port}")
-
-        if main_services:
-            logger.info("\n🔗 주요 서비스 URL:")
-            for service in main_services:
-                logger.info(f"   {service}")
-
-        return port_info
-
     def destroy_instance(self, instance_id: str) -> bool:
         """인스턴스 삭제"""
         logger.info(f"인스턴스 {instance_id} 삭제 중...")
@@ -1569,31 +1147,20 @@ class VastAIManager:
         result = self.run_command(["vastai", "destroy", "instance", instance_id], parse_json=False)
 
         if result["success"]:
-            # 삭제 확인
+            # 삭제 확인 - VastAI CLI 오류를 방지하기 위해 안전하게 처리
             time.sleep(5)
-            status = self.get_instance_status(instance_id)
-
-            if status in ["destroyed", "unknown"]:
-                logger.info(f"인스턴스 {instance_id} 삭제 완료")
+            try:
+                status = self.get_instance_status(instance_id)
+                if status in ["destroyed", "unknown", "failed"]:
+                    logger.info(f"인스턴스 {instance_id} 삭제 완료 (상태: {status})")
+                    return True
+                else:
+                    logger.warning(f"인스턴스 {instance_id} 삭제 확인 실패, 현재 상태: {status}")
+                    return False
+            except Exception as e:
+                # VastAI CLI 오류 발생 시 (삭제된 인스턴스 조회 시 발생 가능)
+                logger.info(f"인스턴스 {instance_id} 상태 조회 실패 (삭제 완료로 간주): {e}")
                 return True
-            else:
-                logger.warning(f"인스턴스 {instance_id} 삭제 확인 실패, 현재 상태: {status}")
-                return False
 
         logger.error(f"인스턴스 {instance_id} 삭제 실패: {result.get('error')}")
         return False
-
-    def check_vllm_status(self, instance_id: str) -> Dict[str, Any]:
-        """vLLM 상태 확인"""
-        # 로그 확인
-        log_result = self.execute_ssh_command(instance_id, "tail -n 20 /tmp/vllm.log")
-
-        # 프로세스 확인
-        process_result = self.execute_ssh_command(instance_id, "ps aux | grep python")
-
-        return {
-            "log_output": log_result.get("stdout", ""),
-            "process_info": process_result.get("stdout", ""),
-            "log_success": log_result.get("success", False),
-            "process_success": process_result.get("success", False)
-        }

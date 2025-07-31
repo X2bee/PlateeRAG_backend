@@ -86,6 +86,11 @@ class ExecuteCommandRequest(BaseModel):
     background: bool = Field(False, description="백그라운드 실행 여부")
     timeout: Optional[int] = Field(300, description="타임아웃 (초)", ge=1, le=3600)
 
+class SetVLLMConfigRequest(BaseModel):
+    """VLLM 설정 업데이트 요청"""
+    api_base_url: str = Field(..., description="VLLM API Base URL", example="http://localhost:8000/v1")
+    model_name: str = Field(..., description="VLLM 모델명", example="Qwen/Qwen3-1.7B")
+
 # ========== Response Models ==========
 class OfferInfo(BaseModel):
     """GPU 오퍼 정보"""
@@ -147,6 +152,14 @@ def get_vast_service(request: Request) -> VastService:
     except Exception as e:
         logger.error(f"VastService 초기화 실패: {e}")
         raise HTTPException(status_code=500, detail="VastService 초기화 실패")
+
+def get_config_composer(request: Request):
+    """ConfigComposer 인스턴스 가져오기"""
+    try:
+        return request.app.state.config_composer
+    except Exception as e:
+        logger.error(f"ConfigComposer 가져오기 실패: {e}")
+        raise HTTPException(status_code=500, detail="ConfigComposer 초기화 실패")
 
 # ========== API Endpoints ==========
 
@@ -405,7 +418,6 @@ async def destroy_instance(request: Request, instance_id: str):
 async def update_instance_ports(request: Request, instance_id: str):
     try:
         service = get_vast_service(request)
-
         logger.info(f"인스턴스 {instance_id} 포트 매핑 업데이트 시작")
 
         # 개선된 포트 매핑 업데이트 실행
@@ -421,13 +433,6 @@ async def update_instance_ports(request: Request, instance_id: str):
             logger.info(f"  - 공인 IP: {public_ip}")
             logger.info(f"  - 포트 매핑 개수: {len(port_mappings)}")
 
-            # 각 포트 매핑 로깅
-            for port, mapping in port_mappings.items():
-                if isinstance(mapping, dict):
-                    host_ip = mapping.get("host_ip", "unknown")
-                    host_port = mapping.get("host_port", "unknown")
-                    logger.info(f"    포트 {port}: {host_ip}:{host_port}")
-
             return {
                 "success": True,
                 "instance_id": instance_id,
@@ -438,7 +443,6 @@ async def update_instance_ports(request: Request, instance_id: str):
                 "port_count": len(port_mappings)
             }
         else:
-            logger.warning(f"⚠️ 포트 매핑 업데이트 실패 - 인스턴스 {instance_id}")
             return {
                 "success": False,
                 "instance_id": instance_id,
@@ -454,3 +458,107 @@ async def update_instance_ports(request: Request, instance_id: str):
     except Exception as e:
         logger.error(f"포트 매핑 업데이트 실패: {e}")
         raise HTTPException(status_code=500, detail="포트 매핑 업데이트 실패")
+
+@router.put("/set-vllm",
+    summary="VLLM 설정 업데이트",
+    description="VLLM API Base URL과 모델명을 업데이트합니다. 실행 중인 애플리케이션의 설정을 동적으로 변경할 수 있습니다.",
+    response_model=Dict[str, Any],
+    responses={
+        400: {"description": "잘못된 설정 값"},
+        404: {"description": "설정을 찾을 수 없음"},
+        500: {"description": "서버 오류"}
+    })
+async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
+    """VLLM API Base URL과 모델명 설정 업데이트"""
+    try:
+        config_composer = get_config_composer(request)
+        updated_configs = {}
+        services_refreshed = []
+
+        # VLLM_API_BASE_URL 업데이트
+        try:
+            api_base_url_config = config_composer.get_config_by_name("VLLM_API_BASE_URL")
+            old_api_base_url = api_base_url_config.value
+            api_base_url_config.value = vllm_config.api_base_url
+            api_base_url_config.save()
+            updated_configs["VLLM_API_BASE_URL"] = {
+                "old_value": old_api_base_url,
+                "new_value": vllm_config.api_base_url
+            }
+            logger.info(f"VLLM_API_BASE_URL 업데이트: {old_api_base_url} -> {vllm_config.api_base_url}")
+        except KeyError:
+            logger.warning("VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
+            raise HTTPException(status_code=404, detail="VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
+
+        # VLLM_MODEL_NAME 업데이트
+        try:
+            model_name_config = config_composer.get_config_by_name("VLLM_MODEL_NAME")
+            old_model_name = model_name_config.value
+            model_name_config.value = vllm_config.model_name
+            model_name_config.save()
+            updated_configs["VLLM_MODEL_NAME"] = {
+                "old_value": old_model_name,
+                "new_value": vllm_config.model_name
+            }
+            logger.info(f"VLLM_MODEL_NAME 업데이트: {old_model_name} -> {vllm_config.model_name}")
+        except KeyError:
+            logger.warning("VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
+            raise HTTPException(status_code=404, detail="VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
+
+        # app.state의 config도 업데이트 (메모리에서 실행 중인 설정들 동기화)
+        if hasattr(request.app.state, 'config') and request.app.state.config:
+            for config_name in ["VLLM_API_BASE_URL", "VLLM_MODEL_NAME"]:
+                config_obj = config_composer.get_config_by_name(config_name)
+
+                # config 카테고리별로 업데이트된 값 반영
+                for category_name, category_config in request.app.state.config.items():
+                    if category_name != "all_configs" and hasattr(category_config, config_name):
+                        setattr(category_config, config_name, config_obj)
+                        logger.info(f"Updated app.state config for category '{category_name}': {config_name} = {config_obj.value}")
+
+                # all_configs도 업데이트
+                if "all_configs" in request.app.state.config:
+                    request.app.state.config["all_configs"][config_name] = config_obj
+                    logger.info(f"Updated app.state.all_configs: {config_name} = {config_obj.value}")
+
+            # config_composer의 all_configs도 업데이트
+            config_composer.all_configs["VLLM_API_BASE_URL"] = config_composer.get_config_by_name("VLLM_API_BASE_URL")
+            config_composer.all_configs["VLLM_MODEL_NAME"] = config_composer.get_config_by_name("VLLM_MODEL_NAME")
+
+        # VLLM 관련 서비스들에게 설정 변경 알림 (필요시 재초기화)
+        try:
+            # VLLM 관련 설정이 변경된 경우 관련 서비스 갱신
+            if hasattr(request.app.state, 'vllm_service') and request.app.state.vllm_service:
+                # VLLM 서비스의 설정 참조 갱신
+                if 'vllm' in request.app.state.config:
+                    request.app.state.vllm_service.config = request.app.state.config['vllm']
+                services_refreshed.append("vllm_service")
+                logger.info("Refreshed VLLM service configuration")
+
+            # LLM 서비스 설정 갱신
+            if hasattr(request.app.state, 'llm_service') and request.app.state.llm_service:
+                if 'vllm' in request.app.state.config:
+                    request.app.state.llm_service.config = request.app.state.config['vllm']
+                services_refreshed.append("llm_service")
+                logger.info("Refreshed LLM service configuration")
+
+        except (AttributeError, KeyError) as service_error:
+            logger.warning(f"Failed to refresh some services after VLLM config update: {service_error}")
+
+        logger.info("Successfully updated VLLM configuration")
+
+        return {
+            "success": True,
+            "message": "VLLM 설정이 성공적으로 업데이트되었습니다",
+            "updated_configs": updated_configs,
+            "updated_in_memory": True,
+            "services_refreshed": services_refreshed,
+            "api_base_url": vllm_config.api_base_url,
+            "model_name": vllm_config.model_name
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"VLLM 설정 업데이트 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"VLLM 설정 업데이트 실패: {str(e)}")
