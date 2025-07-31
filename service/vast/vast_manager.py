@@ -736,17 +736,21 @@ class VastAIManager:
         # 3단계 파싱 시도
         strategies = [
             ("raw", ["vastai", "show", "instance", instance_id, "--raw"]),
-            ("json", ["vastai", "show", "instance", instance_id]),
-            ("list", ["vastai", "show", "instances"])
+            # ("json", ["vastai", "show", "instance", instance_id]),
+            # ("list", ["vastai", "show", "instances"])
         ]
 
         for strategy_name, cmd in strategies:
-            result = self.run_command(cmd, parse_json=True)
+            try:
+                result = self.run_command(cmd, parse_json=True)
 
-            if result["success"] and result["data"]:
-                status = self._extract_status(result["data"], instance_id, strategy_name)
-                if status:
-                    return status
+                if result["success"] and result["data"]:
+                    status = self._extract_status(result["data"], instance_id, strategy_name)
+                    if status:
+                        return status
+            except Exception as e:
+                logger.debug(f"상태 조회 오류 ({strategy_name}): {e}")
+                return "failed"
 
         return "unknown"
 

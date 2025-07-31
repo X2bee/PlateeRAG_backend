@@ -11,9 +11,7 @@ from typing import Dict, Any, Optional, List, Literal
 from enum import Enum
 import json
 
-from config.config_composer import ConfigComposer
 from service.vast.vast_service import VastService, auto_run_vllm
-from service.database.connection import AppDatabaseManager
 
 router = APIRouter(prefix="/api/vast", tags=["vastAI"])
 logger = logging.getLogger("vast-controller")
@@ -151,7 +149,7 @@ def get_vast_service(request: Request) -> VastService:
     """VastService 인스턴스 생성"""
     try:
         config_composer = request.app.state.config_composer
-        vast_config = config_composer.vast
+        vast_config = config_composer.get_config_by_category_name("vast")
         db_manager = request.app.state.app_db
         return VastService(vast_config, db_manager)
     except Exception as e:

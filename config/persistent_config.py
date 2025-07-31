@@ -223,8 +223,8 @@ class PersistentConfig(Generic[T]):
             logger.info("'%s' using default value: %s", env_name, env_value)
             self.value = env_value
 
-        # 전역 레지스트리에 등록
-        PERSISTENT_CONFIG_REGISTRY.append(self)
+        # 전역 레지스트리에 중복 확인 후 등록
+        self._register_in_global_registry()
 
     def __str__(self):
         return str(self.value)
@@ -244,6 +244,28 @@ class PersistentConfig(Generic[T]):
                 "PersistentConfig object cannot be converted to dict, use config_get or .value instead."
             )
         return super().__getattribute__(item)
+
+    def _register_in_global_registry(self):
+        """
+        전역 레지스트리에 중복 확인 후 등록
+        같은 config_path를 가진 객체가 이미 있으면 기존 객체를 제거하고 새 객체를 등록
+        """
+        # 기존에 같은 config_path를 가진 객체가 있는지 확인
+        existing_configs_to_remove = []
+        for existing_config in PERSISTENT_CONFIG_REGISTRY:
+            if existing_config.config_path == self.config_path:
+                existing_configs_to_remove.append(existing_config)
+                logger.debug("Found duplicate config_path '%s' in registry, will replace", self.config_path)
+
+        # 중복된 객체들 제거
+        for config_to_remove in existing_configs_to_remove:
+            PERSISTENT_CONFIG_REGISTRY.remove(config_to_remove)
+            logger.debug("Removed duplicate config from registry: %s", config_to_remove.env_name)
+
+        # 새 객체 등록
+        PERSISTENT_CONFIG_REGISTRY.append(self)
+        logger.debug("Registered new config in registry: %s (config_path: %s)",
+                    self.env_name, self.config_path)
 
     def update(self):
         """데이터베이스에서 최신 값을 다시 로드"""
@@ -277,6 +299,37 @@ class PersistentConfig(Generic[T]):
 def get_all_persistent_configs() -> List[PersistentConfig]:
     """등록된 모든 PersistentConfig 객체 반환"""
     return PERSISTENT_CONFIG_REGISTRY.copy()
+
+def get_registry_statistics() -> Dict[str, Any]:
+    """레지스트리 통계 정보 반환"""
+    config_paths = [config.config_path for config in PERSISTENT_CONFIG_REGISTRY]
+    env_names = [config.env_name for config in PERSISTENT_CONFIG_REGISTRY]
+
+    # 중복 검사
+    duplicate_paths = []
+    duplicate_names = []
+
+    seen_paths = set()
+    seen_names = set()
+
+    for path in config_paths:
+        if path in seen_paths:
+            duplicate_paths.append(path)
+        seen_paths.add(path)
+
+    for name in env_names:
+        if name in seen_names:
+            duplicate_names.append(name)
+        seen_names.add(name)
+
+    return {
+        "total_configs": len(PERSISTENT_CONFIG_REGISTRY),
+        "unique_config_paths": len(set(config_paths)),
+        "unique_env_names": len(set(env_names)),
+        "duplicate_config_paths": duplicate_paths,
+        "duplicate_env_names": duplicate_names,
+        "has_duplicates": len(duplicate_paths) > 0 or len(duplicate_names) > 0
+    }
 
 def is_json_fallback_enabled() -> bool:
     """JSON fallback이 활성화되어 있는지 확인"""
