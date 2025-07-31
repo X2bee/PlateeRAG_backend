@@ -693,7 +693,7 @@ class VastAIManager:
             if status == "running":
                 logger.info(f"인스턴스 {instance_id} 실행 중")
                 return True
-            elif status == "failed":
+            elif status == "failed" or status == "destroyed":
                 logger.error(f"인스턴스 {instance_id} 실행 실패")
                 return False
 

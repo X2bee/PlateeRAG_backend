@@ -10,6 +10,7 @@ import logging
 from typing import Dict, Any, Optional, List, Literal
 from enum import Enum
 import json
+from urllib import request as urllib_request
 
 from service.vast.vast_service import VastService
 
@@ -453,6 +454,32 @@ async def update_instance_ports(request: Request, instance_id: str):
                     "3. 인스턴스 ID가 정확한지 확인하세요",
                     "4. 잠시 후 다시 시도해보세요"
                 ]
+            }
+
+    except Exception as e:
+        logger.error(f"포트 매핑 업데이트 실패: {e}")
+        raise HTTPException(status_code=500, detail="포트 매핑 업데이트 실패")
+
+@router.post("/instances/{instance_id}/vllm-down",
+    summary="VLLM 다운",
+    description="인스턴스의 VLLM을 다운시킵니다.",
+    response_model=Dict[str, Any])
+async def vllm_down(request: Request, instance_id: str):
+    try:
+        service = get_vast_service(request)
+        db_instance = service.get_instance_from_db(instance_id)
+        port_mappings = db_instance.get_port_mappings_dict()
+        controller_url = f"http://{port_mappings.get('12435', {}).get('external_ip')}:{port_mappings.get('12435', {}).get('external_port')}/api/vllm/down"
+
+        # VLLM 다운 요청
+        response = urllib_request.urlopen(controller_url).read().decode('utf-8')
+        response_data = json.loads(response)
+        if response_data.get("status") == "success":
+            logger.info(f"VLLM 다운 성공: {response_data.get('message', 'No message provided')}")
+            return {
+                "success": True,
+                "message": response_data.get("message", "VLLM이 성공적으로 다운되었습니다"),
+                "instance_id": instance_id
             }
 
     except Exception as e:
