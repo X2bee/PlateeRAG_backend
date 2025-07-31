@@ -755,16 +755,14 @@ class VastAIManager:
 
     def get_instance_info(self, instance_id: str) -> Optional[Dict[str, Any]]:
         """인스턴스 상세 정보 조회"""
-        result = self.run_command(["vastai", "show", "instance", instance_id], parse_json=True)
+        result = self.run_command(["vastai", "show", "instance", instance_id, "--raw"], parse_json=True)
 
         if result["success"] and result["data"]:
             data = result["data"]
 
-            # JSON 딕셔너리가 반환된 경우
             if isinstance(data, dict):
                 return data
 
-            # 문자열이 반환된 경우 (테이블 형식 출력)
             elif isinstance(data, str):
                 logger.debug(f"인스턴스 정보가 텍스트 형식으로 반환됨: {data[:100]}...")
                 # 텍스트에서 기본 정보 추출 시도
@@ -1075,6 +1073,83 @@ class VastAIManager:
                 return ip
         return None
 
+    def _extract_public_ip_from_instance_info(self, instance_info: Dict[str, Any]) -> str:
+        """인스턴스 정보에서 공인 IP 추출 (여러 필드명 시도)"""
+        # 가능한 IP 필드들을 우선순위대로 확인
+        ip_fields = [
+            "public_ipaddr",     # 일반적인 VastAI 필드
+            "external_ip",       # 외부 IP
+            "host_ip",          # 호스트 IP
+            "ssh_host",         # SSH 호스트
+            "ip",               # 기본 IP
+            "ipaddr",           # IP 주소
+            "external_ipaddr",  # 외부 IP 주소
+            "public_ip",        # 공개 IP
+        ]
+
+        for field in ip_fields:
+            ip = instance_info.get(field)
+            if ip and self._is_valid_public_ip(ip):
+                logger.info(f"✅ {field} 필드에서 유효한 공인 IP 발견: {ip}")
+                return ip
+
+        # SSH URL에서 IP 추출 시도
+        ssh_url = instance_info.get("ssh_url", "")
+        if ssh_url:
+            ip = self._extract_ip_from_ssh_url(ssh_url)
+            if ip and self._is_valid_public_ip(ip):
+                logger.info(f"✅ SSH URL에서 유효한 공인 IP 발견: {ip}")
+                return ip
+
+        # 포트 매핑에서 IP 추출 시도
+        ports = instance_info.get("ports", {})
+        if ports:
+            for port_key, port_bindings in ports.items():
+                if isinstance(port_bindings, list) and port_bindings:
+                    binding = port_bindings[0]
+                    if isinstance(binding, dict):
+                        host_ip = binding.get("HostIp", "")
+                        if host_ip and self._is_valid_public_ip(host_ip):
+                            logger.info(f"✅ 포트 바인딩에서 유효한 공인 IP 발견: {host_ip}")
+                            return host_ip
+
+        logger.warning("⚠️ 유효한 공인 IP를 찾을 수 없습니다.")
+        return "unknown"
+
+    def _is_valid_public_ip(self, ip: str) -> bool:
+        """유효한 공인 IP 주소인지 확인"""
+        if not ip or not isinstance(ip, str):
+            return False
+
+        # 기본 유효성 검사
+        if ip in ["0.0.0.0", "127.0.0.1", "localhost", "unknown", ""]:
+            return False
+
+        # 로컬 IP 대역 제외
+        if ip.startswith(("127.", "10.", "172.", "192.168.", "169.254.")):
+            return False
+
+        # 기본 IP 형식 검사 (간단한 정규식)
+        import re
+        ip_pattern = r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+        return bool(re.match(ip_pattern, ip))
+
+    def _extract_ip_from_ssh_url(self, ssh_url: str) -> Optional[str]:
+        """SSH URL에서 IP 주소 추출"""
+        import re
+
+        # ssh://root@1.2.3.4:22 형태에서 IP 추출
+        match = re.search(r"ssh://[^@]*@([^:]+)", ssh_url)
+        if match:
+            return match.group(1)
+
+        # root@1.2.3.4 형태에서 IP 추출
+        match = re.search(r"@([^:]+)", ssh_url)
+        if match:
+            return match.group(1)
+
+        return None
+
     def _get_port_mappings_from_instance_info(self, instance_id: str) -> Dict[str, Any]:
         """인스턴스 정보에서 포트 매핑 추출"""
         info = self.get_instance_info(instance_id)
@@ -1082,7 +1157,7 @@ class VastAIManager:
             return {}
 
         mappings = {}
-        public_ip = info.get("public_ipaddr")
+        public_ip = self._extract_public_ip_from_instance_info(info)
 
         # 포트 정보 추출
         if "ports" in info:
@@ -1092,18 +1167,17 @@ class VastAIManager:
                 if internal and external:
                     mappings[str(internal)] = {
                         "external_port": external,
-                        "url": f"http://{public_ip}:{external}" if public_ip else None
+                        "url": f"http://{public_ip}:{external}" if public_ip != "unknown" else None
                     }
 
         return {"mappings": mappings, "public_ip": public_ip}
 
     def _get_port_mappings_from_raw_info(self, instance_id: str) -> Dict[int, Tuple[str, int]]:
-        """--raw 옵션을 활용한 포트 매핑 정보 수집 (개선된 방법)"""
-        logger.debug(f"🌐 --raw 옵션으로 포트 매핑 정보 수집 (인스턴스 ID: {instance_id})")
-
         try:
             # get_instance_info를 통해 --raw 정보 가져오기
             raw_info = self.get_instance_info(instance_id)
+
+            logger.info(f"🔍 인스턴스 정보 조회 완료*********************: {raw_info}")
 
             if not raw_info or not isinstance(raw_info, dict):
                 logger.warning("❌ 인스턴스 정보를 가져올 수 없습니다.")
@@ -1112,7 +1186,10 @@ class VastAIManager:
             logger.info(f"🔍 Raw info keys: {list(raw_info.keys())}")
 
             mapping: Dict[int, Tuple[str, int]] = {}
-            public_ip = raw_info.get("public_ipaddr", "unknown")
+
+            # 공인 IP 추출 - 여러 필드명 시도
+            public_ip = self._extract_public_ip_from_instance_info(raw_info)
+            logger.info(f"🔍 추출된 공인 IP: {public_ip}")
 
             # 1. ports 필드에서 포트 매핑 정보 추출
             ports_data = raw_info.get("ports", {})
@@ -1133,8 +1210,15 @@ class VastAIManager:
                                 host_port = int(first_binding.get("HostPort", "0"))
                                 host_ip = first_binding.get("HostIp", "0.0.0.0")
 
-                                # 실제 공인 IP 사용
-                                external_ip = public_ip if public_ip != "unknown" else host_ip
+                                # 실제 공인 IP 사용 (개선된 로직)
+                                if public_ip != "unknown" and self._is_valid_public_ip(public_ip):
+                                    external_ip = public_ip
+                                elif self._is_valid_public_ip(host_ip):
+                                    external_ip = host_ip
+                                    logger.info(f"   📌 HostIp를 외부 IP로 사용: {host_ip}")
+                                else:
+                                    external_ip = public_ip  # 최후의 수단
+                                    logger.warning(f"   ⚠️ 유효한 공인 IP를 찾을 수 없음, {public_ip} 사용")
 
                                 if container_port > 0 and host_port > 0:
                                     mapping[container_port] = (external_ip, host_port)
@@ -1231,8 +1315,8 @@ class VastAIManager:
                 if target_instance:
                     logger.info(f"✅ 인스턴스 찾음 (ID: {target_instance.get('id')})")
 
-                    # 공인 IP 가져오기
-                    public_ip = target_instance.get("public_ipaddr", "unknown")
+                    # 공인 IP 가져오기 (개선된 추출 로직 사용)
+                    public_ip = self._extract_public_ip_from_instance_info(target_instance)
 
                     # 포트 정보 파싱
                     ports_dict = target_instance.get("ports", {})

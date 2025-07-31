@@ -253,46 +253,193 @@ class VastService:
             return None
 
     def get_enhanced_instance_status(self, instance_id: str) -> Dict[str, Any]:
-        """향상된 인스턴스 상태 정보 반환"""
         try:
-            # 기본 상태 정보
-            status_info = self.get_instance_status_info(instance_id)
-
-            # DB에서 추가 정보
+            # DB에서 인스턴스 정보 조회
             db_instance = self.get_instance_from_db(instance_id)
 
-            # vLLM 상태
-            vllm_status = None
-            try:
-                vllm_status = self.vast_manager.check_vllm_status(instance_id)
-            except Exception as e:
-                logger.warning(f"vLLM 상태 확인 실패: {e}")
+            if not db_instance:
+                return {
+                    "error": f"인스턴스 {instance_id}를 DB에서 찾을 수 없습니다",
+                    "instance_id": instance_id
+                }
+
+            # VastAI CLI로 기본 상태만 확인 (SSH 없음)
+            basic_status = self.vast_manager.get_instance_status(instance_id)
+
+            # DB에서 포트 매핑 정보 가져오기
+            port_mappings = db_instance.get_port_mappings_dict()
+
+            # 접근 URL 생성 (DB 기반)
+            access_urls = self._generate_access_urls_from_db(db_instance)
+
+            # vLLM 상태는 DB 정보와 포트 접근성으로 판단
+            vllm_status = self._check_vllm_status_from_db(db_instance)
 
             # 통합 상태 정보 구성
             enhanced_status = {
                 "instance_id": instance_id,
-                "basic_status": status_info,
+                "basic_status": {
+                    "status": basic_status,
+                    "public_ip": db_instance.public_ip,
+                    "ssh_port": db_instance.ssh_port,
+                    "urls": access_urls,
+                    "port_mappings": port_mappings
+                },
                 "vllm_status": vllm_status,
-                "db_info": {}
-            }
-
-            if db_instance:
-                enhanced_status["db_info"] = {
+                "db_info": {
                     "status": db_instance.status,
-                    "cost_per_hour": db_instance.cost_per_hour,
+                    "cost_per_hour": db_instance.dph_total,  # dph_total을 cost_per_hour로 매핑
                     "gpu_info": db_instance.get_gpu_info_dict(),
-                    "port_mappings": db_instance.get_port_mappings_dict(),
+                    "port_mappings": port_mappings,
                     "auto_destroy": db_instance.auto_destroy,
+                    "template_name": db_instance.template_name,
+                    "model_name": db_instance.model_name,
                     "created_at": db_instance.created_at,
                     "updated_at": db_instance.updated_at,
-                    "uptime": str(datetime.now() - db_instance.created_at) if db_instance.created_at else None
+                    "uptime": str(datetime.now() - db_instance.created_at) if db_instance.created_at else None,
+                    "system_info": {
+                        "cpu_name": db_instance.cpu_name,
+                        "cpu_cores": db_instance.cpu_cores,
+                        "ram": db_instance.ram,
+                        "cuda_max_good": db_instance.cuda_max_good
+                    }
                 }
+            }
 
             return enhanced_status
 
         except Exception as e:
             logger.error(f"향상된 인스턴스 상태 조회 실패: {e}")
-            return {"error": str(e)}
+            return {"error": str(e), "instance_id": instance_id}
+
+    def _generate_access_urls_from_db(self, db_instance) -> Dict[str, str]:
+        """DB 정보를 기반으로 접근 URL 생성"""
+        urls = {}
+
+        if not db_instance.public_ip:
+            return urls
+
+        port_mappings = db_instance.get_port_mappings_dict()
+
+        # 설정에서 포트 정보 가져오기
+        vllm_port = str(self.config.vllm_port())  # 기본값: 11479
+        controller_port = str(self.config.vllm_controller_port())  # 기본값: 11480
+
+        for internal_port, mapping_info in port_mappings.items():
+            if isinstance(mapping_info, dict):
+                external_port = mapping_info.get("external_port")
+            else:
+                # 단순 매핑인 경우
+                external_port = mapping_info
+
+            if not external_port:
+                continue
+
+            # VLLM API 포트
+            if internal_port == vllm_port:
+                urls["vllm_api"] = f"http://{db_instance.public_ip}:{external_port}"
+                urls["vllm_docs"] = f"http://{db_instance.public_ip}:{external_port}/docs"
+                urls["vllm_health"] = f"http://{db_instance.public_ip}:{external_port}/health"
+
+            # VLLM 컨트롤러 포트
+            elif internal_port == controller_port:
+                urls["vllm_controller"] = f"http://{db_instance.public_ip}:{external_port}"
+                urls["vllm_controller_health"] = f"http://{db_instance.public_ip}:{external_port}/health"
+                urls["vllm_controller_status"] = f"http://{db_instance.public_ip}:{external_port}/api/status"
+
+            # SSH 포트
+            elif internal_port == "22" or (db_instance.ssh_port and internal_port == str(db_instance.ssh_port)):
+                urls["ssh"] = f"ssh://root@{db_instance.public_ip}:{external_port}"
+
+        return urls
+
+    def _check_vllm_status_from_db(self, db_instance) -> Dict[str, Any]:
+        """DB 정보를 기반으로 vLLM 상태 확인 (SSH 없음)"""
+        vllm_status = {
+            "running": False,
+            "accessible": False,
+            "status": "unknown",
+            "last_check": datetime.now().isoformat(),
+            "method": "db_based"
+        }
+
+        # DB 상태 기반 판단
+        if db_instance.status in ["running", "running_vllm"]:
+            vllm_status["status"] = "potentially_running"
+
+            # 포트 매핑이 있고 공개 IP가 있으면 접근 가능한 것으로 판단
+            port_mappings = db_instance.get_port_mappings_dict()
+            vllm_port = str(self.config.vllm_port())
+
+            if port_mappings and vllm_port in port_mappings and db_instance.public_ip:
+                vllm_status["accessible"] = True
+                vllm_status["running"] = db_instance.status == "running_vllm"
+
+        elif db_instance.status in ["creating", "pending"]:
+            vllm_status["status"] = "starting"
+
+        elif db_instance.status in ["exited", "destroyed", "deleted"]:
+            vllm_status["status"] = "stopped"
+
+        else:
+            vllm_status["status"] = db_instance.status or "unknown"
+
+        return vllm_status
+
+    def update_instance_port_mappings(self, instance_id: str) -> bool:
+        """인스턴스의 포트 매핑 정보를 DB에 업데이트"""
+        try:
+            port_info = self.vast_manager.get_port_mappings(instance_id)
+
+            # get_port_mappings는 mappings와 public_ip를 반
+            mappings = port_info.get("mappings", {})
+            public_ip = port_info.get("public_ip")
+
+            # 매핑이나 공개 IP가 없으면 실패로 간주
+            if not mappings and not public_ip:
+                logger.warning(f"인스턴스 {instance_id}의 포트 매핑 정보를 가져올 수 없습니다")
+                return False
+
+            # DB 업데이트 준비
+            updates = {}
+
+            if public_ip:
+                updates["public_ip"] = public_ip
+                logger.info(f"인스턴스 {instance_id}의 공개 IP 업데이트: {public_ip}")
+
+            if mappings:
+                # 포트 매핑을 JSON 문자열로 저장
+                # mappings는 {internal_port: (external_ip, external_port)} 형태
+                # DB 저장용으로 {internal_port: {"external_ip": ip, "external_port": port}} 형태로 변환
+                db_mappings = {}
+                for internal_port, mapping_info in mappings.items():
+                    if isinstance(mapping_info, tuple) and len(mapping_info) >= 2:
+                        external_ip, external_port = mapping_info[0], mapping_info[1]
+                        db_mappings[str(internal_port)] = {
+                            "external_ip": external_ip,
+                            "external_port": external_port
+                        }
+                    else:
+                        # 이미 dict 형태인 경우
+                        db_mappings[str(internal_port)] = mapping_info
+
+                updates["port_mappings"] = json.dumps(db_mappings)
+                logger.info(f"인스턴스 {instance_id}의 포트 매핑 업데이트: {len(db_mappings)}개 포트")
+
+            if updates:
+                success = self._update_instance(instance_id, updates)
+                if success:
+                    logger.info(f"인스턴스 {instance_id}의 포트 매핑 정보가 DB에 성공적으로 업데이트되었습니다")
+                else:
+                    logger.error(f"인스턴스 {instance_id}의 DB 업데이트 실패")
+                return success
+            else:
+                logger.info(f"인스턴스 {instance_id}에 대한 업데이트할 정보가 없습니다")
+                return True
+
+        except Exception as e:
+            logger.error(f"포트 매핑 업데이트 실패: {e}")
+            return False
 
     def search_and_select_offer(self) -> Optional[Dict[str, Any]]:
         """오퍼 검색 및 선택"""
@@ -464,19 +611,41 @@ class VastService:
                 }
                 updates["gpu_info"] = gpu_info
 
-            if "dph_total" in instance_info:
-                updates["dph_total"] = instance_info.get("dph_total")
+            # 추가 시스템 정보 저장
+            if "cpu_name" in instance_info:
+                updates["cpu_name"] = instance_info.get("cpu_name")
+            if "cpu_cores" in instance_info:
+                updates["cpu_cores"] = instance_info.get("cpu_cores")
+            if "cpu_ram" in instance_info:
+                updates["ram"] = instance_info.get("cpu_ram")
+            if "cuda_max_good" in instance_info:
+                updates["cuda_max_good"] = instance_info.get("cuda_max_good")
 
             self._update_instance(instance_id, updates)
 
-        port_info = self.vast_manager.get_port_mappings(instance_id)
-        if port_info.get("mappings"):
-            # 포트 매핑을 JSON 문자열로 저장
-            import json
-            self._update_instance(instance_id, {
-                "port_mappings": json.dumps(port_info["mappings"]),
-                "status": "running_vllm"
-            })
+        # 포트 매핑 정보 수집 및 저장
+        logger.info(f"인스턴스 {instance_id}의 포트 매핑 정보 수집 중...")
+        port_update_success = self.update_instance_port_mappings(instance_id)
+
+        if port_update_success:
+            # vLLM 설정 및 실행 (SSH 기반이 아닌 API 기반으로 추후 개선 예정)
+            if not self.vast_manager.setup_and_run_vllm(instance_id):
+                self._log_execution(
+                    instance_id=instance_id,
+                    operation="setup_vllm",
+                    command="setup and run vLLM",
+                    result="",
+                    success=False,
+                    execution_time=time.time() - start_time,
+                    error_message="vLLM 설정 및 실행 실패"
+                )
+                return False
+
+            # 최종 상태 업데이트
+            self._update_instance(instance_id, {"status": "running_vllm"})
+        else:
+            logger.warning(f"인스턴스 {instance_id}의 포트 매핑 정보 수집 실패")
+            self._update_instance(instance_id, {"status": "running"})
 
         execution_time = time.time() - start_time
         self._log_execution(
@@ -492,42 +661,43 @@ class VastService:
         return True
 
     def get_instance_status_info(self, instance_id: str) -> Dict[str, Any]:
-        """인스턴스 상태 정보 조회"""
-        # 기본 상태 확인
-        status = self.vast_manager.get_instance_status(instance_id)
+        """인스턴스 상태 정보 조회 (DB 기반, SSH 없음)"""
+        try:
+            # DB에서 인스턴스 정보 가져오기
+            db_instance = self.get_instance_from_db(instance_id)
 
-        # vLLM 상태 확인
-        vllm_status = self.vast_manager.check_vllm_status(instance_id)
+            if not db_instance:
+                return {
+                    "instance_id": instance_id,
+                    "status": "not_found",
+                    "error": "DB에서 인스턴스를 찾을 수 없습니다"
+                }
 
-        # 포트 매핑 정보
-        port_info = self.vast_manager.get_port_mappings(instance_id)
+            # VastAI CLI로 기본 상태만 확인
+            vast_status = self.vast_manager.get_instance_status(instance_id)
 
-        return {
-            "instance_id": instance_id,
-            "status": status,
-            "vllm_status": vllm_status,
-            "port_mappings": port_info,
-            "urls": self._generate_access_urls(port_info)
-        }
+            # DB 정보 기반으로 상태 정보 구성
+            port_mappings = db_instance.get_port_mappings_dict()
+            access_urls = self._generate_access_urls_from_db(db_instance)
 
-    def _generate_access_urls(self, port_info: Dict[str, Any]) -> Dict[str, str]:
-        """접속 URL 생성"""
-        urls = {}
+            return {
+                "instance_id": instance_id,
+                "status": vast_status,
+                "db_status": db_instance.status,
+                "public_ip": db_instance.public_ip,
+                "ssh_port": db_instance.ssh_port,
+                "port_mappings": {"mappings": port_mappings, "public_ip": db_instance.public_ip},
+                "urls": access_urls,
+                "vllm_status": self._check_vllm_status_from_db(db_instance)
+            }
 
-        public_ip = port_info.get("public_ip")
-        mappings = port_info.get("mappings", {})
-
-        if public_ip and mappings:
-            for internal_port, mapping in mappings.items():
-                external_port = mapping.get("external_port")
-
-                if internal_port == "8000":
-                    urls["vllm_api"] = f"http://{public_ip}:{external_port}"
-                    urls["vllm_docs"] = f"http://{public_ip}:{external_port}/docs"
-                elif internal_port == "22":
-                    urls["ssh"] = f"ssh://{public_ip}:{external_port}"
-
-        return urls
+        except Exception as e:
+            logger.error(f"인스턴스 상태 정보 조회 실패: {e}")
+            return {
+                "instance_id": instance_id,
+                "status": "error",
+                "error": str(e)
+            }
 
     def destroy_instance(self, instance_id: str) -> bool:
         """인스턴스 삭제"""
