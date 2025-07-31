@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, List, Literal
 from enum import Enum
 import json
 
-from service.vast.vast_service import VastService, auto_run_vllm
+from service.vast.vast_service import VastService
 
 router = APIRouter(prefix="/api/vast", tags=["vastAI"])
 logger = logging.getLogger("vast-controller")
@@ -370,79 +370,6 @@ async def list_instances(
         logger.error(f"인스턴스 목록 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="인스턴스 목록 조회 실패")
 
-@router.get("/instances/{instance_id}",
-    summary="인스턴스 상태 조회",
-    description="특정 인스턴스의 상세 상태 정보를 조회합니다. 개선된 포트 매핑 추출 로직으로 정확한 공인 IP와 포트 정보를 제공합니다. SSH를 사용하지 않습니다.",
-    response_model=InstanceStatusResponse,
-    responses={500: {"description": "상태 조회 실패"}})
-async def get_instance_status(request: Request, instance_id: str) -> InstanceStatusResponse:
-    try:
-        service = get_vast_service(request)
-
-        logger.info(f"인스턴스 {instance_id} 상태 조회 시작")
-
-        port_update_success = service.update_instance_port_mappings(instance_id)
-        logger.info(f"포트 매핑 업데이트 결과: {'성공' if port_update_success else '실패'}")
-
-        # 2단계: DB 기반 상태 정보 조회 (SSH 없음)
-        enhanced_status = service.get_enhanced_instance_status(instance_id)
-
-        if "error" in enhanced_status:
-            raise HTTPException(
-                status_code=404,
-                detail=f"인스턴스 {instance_id}: {enhanced_status['error']}"
-            )
-
-        # 3단계: 응답 구성 (개선된 데이터 구조)
-        basic_status = enhanced_status.get("basic_status", {})
-        db_info = enhanced_status.get("db_info", {})
-        vllm_status = enhanced_status.get("vllm_status", {})
-        access_urls = enhanced_status.get("access_urls", [])
-
-        # 포트 매핑 정보 로깅
-        port_mappings = basic_status.get("port_mappings", {})
-        public_ip = basic_status.get("public_ip")
-
-        logger.info(f"📊 상태 조회 결과:")
-        logger.info(f"  - 인스턴스 상태: {basic_status.get('status', 'unknown')}")
-        logger.info(f"  - 공인 IP: {public_ip}")
-        logger.info(f"  - 포트 매핑 개수: {len(port_mappings)}")
-
-        for port, mapping in port_mappings.items():
-            if isinstance(mapping, dict):
-                host_ip = mapping.get("host_ip", "unknown")
-                host_port = mapping.get("host_port", "unknown")
-                logger.info(f"    포트 {port}: {host_ip}:{host_port}")
-
-        # URLs 구성 (기존 방식 + 새로운 access_urls)
-        urls = basic_status.get("urls", {})
-
-        # access_urls에서 추가 URL 정보 병합
-        for url_info in access_urls:
-            if isinstance(url_info, dict) and "name" in url_info and "url" in url_info:
-                urls[url_info["name"]] = url_info["url"]
-
-        logger.info(f"  - 접근 URL 개수: {len(urls)}")
-        for name, url in urls.items():
-            logger.info(f"    {name}: {url}")
-
-        return InstanceStatusResponse(
-            instance_id=instance_id,
-            status=basic_status.get("status", "unknown"),
-            public_ip=public_ip,
-            urls=urls,
-            port_mappings=port_mappings,
-            gpu_info=db_info.get("gpu_info", {}),
-            cost_per_hour=db_info.get("cost_per_hour"),
-            uptime=db_info.get("uptime"),
-            vllm_status=vllm_status
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"인스턴스 상태 조회 실패: {e}")
-        raise HTTPException(status_code=500, detail="인스턴스 상태 조회 실패")
-
 @router.delete("/instances/{instance_id}",
     summary="인스턴스 삭제",
     description="지정된 인스턴스를 삭제합니다.",
@@ -470,66 +397,6 @@ async def destroy_instance(request: Request, instance_id: str):
         logger.error(f"인스턴스 삭제 실패: {e}")
         raise HTTPException(status_code=500, detail="인스턴스 삭제 실패")
 
-@router.get("/instances/{instance_id}/info",
-    summary="인스턴스 상세 정보 조회",
-    description="포트 매핑, 접근 URL, 시스템 정보 등 상세한 인스턴스 정보를 조회합니다. 개선된 IP 추출 로직으로 정확한 공인 IP를 제공합니다. SSH를 사용하지 않습니다.",
-    response_model=Dict[str, Any])
-async def get_instance_info(request: Request, instance_id: str):
-    try:
-        service = get_vast_service(request)
-
-        logger.info(f"인스턴스 {instance_id} 상세 정보 조회 시작")
-
-        # 1단계: 포트 매핑 최신화 (개선된 로직)
-        port_update_success = service.update_instance_port_mappings(instance_id)
-        logger.info(f"포트 매핑 업데이트 결과: {'성공' if port_update_success else '실패'}")
-
-        # 2단계: 상세 정보 조회
-        enhanced_status = service.get_enhanced_instance_status(instance_id)
-
-        if "error" in enhanced_status:
-            raise HTTPException(
-                status_code=404,
-                detail=f"인스턴스 {instance_id}: {enhanced_status['error']}"
-            )
-
-        # 3단계: 상세 정보 로깅
-        basic_status = enhanced_status.get("basic_status", {})
-        if basic_status:
-            public_ip = basic_status.get("public_ip")
-            port_mappings = basic_status.get("port_mappings", {})
-            urls = basic_status.get("urls", {})
-
-            logger.info(f"📊 상세 정보 요약:")
-            logger.info(f"  - 공인 IP: {public_ip}")
-            logger.info(f"  - 포트 매핑 개수: {len(port_mappings)}")
-            logger.info(f"  - 접근 URL 개수: {len(urls)}")
-
-            # 각 포트 매핑 상세 로깅
-            for port, mapping in port_mappings.items():
-                if isinstance(mapping, dict):
-                    host_ip = mapping.get("host_ip", "unknown")
-                    host_port = mapping.get("host_port", "unknown")
-                    logger.info(f"    포트 {port}: {host_ip}:{host_port}")
-
-            # 각 URL 상세 로깅
-            for name, url in urls.items():
-                logger.info(f"    {name}: {url}")
-
-        return {
-            "instance_id": instance_id,
-            "detailed_info": enhanced_status,
-            "port_mapping_status": "updated" if port_update_success else "failed",
-            "data_source": "database_based_with_improved_ip_extraction",
-            "ip_extraction_method": "multi_field_validation",
-            "timestamp": enhanced_status.get("timestamp", "unknown")
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"인스턴스 상세 정보 조회 실패: {e}")
-        raise HTTPException(status_code=500, detail="인스턴스 상세 정보 조회 실패")
 
 @router.post("/instances/{instance_id}/update-ports",
     summary="포트 매핑 정보 업데이트",
