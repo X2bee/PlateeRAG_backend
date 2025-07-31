@@ -460,6 +460,32 @@ async def update_instance_ports(request: Request, instance_id: str):
         logger.error(f"포트 매핑 업데이트 실패: {e}")
         raise HTTPException(status_code=500, detail="포트 매핑 업데이트 실패")
 
+@router.post("/instances/{instance_id}/vllm-serve",
+    summary="VLLM 서비스 시작",
+    description="인스턴스의 VLLM 서비스를 시작합니다. VLLM 설정을 기반으로 VLLM 서버를 실행합니다.",
+    response_model=Dict[str, Any])
+async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMConfigRequest):
+    try:
+        service = get_vast_service(request)
+        db_instance = service.get_instance_from_db(instance_id)
+        port_mappings = db_instance.get_port_mappings_dict()
+        controller_url = f"http://{port_mappings.get('12435', {}).get('external_ip')}:{port_mappings.get('12435', {}).get('external_port')}/api/vllm/serve"
+
+        # VLLM 서비스 시작 요청
+        response = urllib_request.urlopen(controller_url, json.dumps(vllm_config.dict())).read().decode('utf-8')
+        response_data = json.loads(response)
+        if response_data.get("status") == "success":
+            logger.info(f"VLLM 서비스 시작 성공: {response_data.get('message', 'No message provided')}")
+            return {
+                "success": True,
+                "message": response_data.get("message", "VLLM 서비스가 성공적으로 시작되었습니다"),
+                "instance_id": instance_id
+            }
+
+    except Exception as e:
+        logger.error(f"VLLM 서비스 시작 실패: {e}")
+        raise HTTPException(status_code=500, detail="VLLM 서비스 시작 실패")
+
 @router.post("/instances/{instance_id}/vllm-down",
     summary="VLLM 다운",
     description="인스턴스의 VLLM을 다운시킵니다.",
