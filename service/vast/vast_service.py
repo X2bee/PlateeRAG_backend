@@ -356,20 +356,11 @@ class VastService:
         logger.info(f"오퍼 선택 완료: {selected_offer.get('id')} (${selected_offer.get('dph_total')}/h)")
         return selected_offer
 
-    def create_vllm_instance(self, offer_id: str = None, template_name: str = None) -> Optional[str]:
+    def create_vllm_instance(self, offer_id: str = None, template_name: str = None, create_request = None) -> Optional[str]:
         """vLLM 인스턴스 생성 (템플릿 지원)"""
         logger.info("vLLM 인스턴스 생성 시작")
 
         start_time = time.time()
-
-        # 오퍼 선택 (제공되지 않은 경우)
-        selected_offer = None
-        if not offer_id:
-            offer = self.search_and_select_offer()
-            if not offer:
-                return None
-            offer_id = offer.get('id')
-            selected_offer = offer
 
         # 인스턴스 생성
         instance_id = self.vast_manager.create_instance_fallback(offer_id)
@@ -389,32 +380,29 @@ class VastService:
                 }
             )
             return None
-
-        # 인스턴스 정보 저장 (향상된 버전)
+        gpu_info = {
+            "gpu_name": create_request.offer_info.get("gpu_name"),
+            "num_gpus": create_request.offer_info.get("num_gpus", 1),
+            "gpu_ram": create_request.offer_info.get("gpu_ram")
+        }
         instance_data = {
             "instance_id": instance_id,
             "offer_id": offer_id,
             "image_name": self.config.image_name(),
             "status": "creating",
             "auto_destroy": self.config.auto_destroy(),
-            "start_command": self._generate_start_command()
+            "gpu_info": json.dumps(gpu_info) if gpu_info else None,
+            "dph_total": create_request.offer_info.get("dph_total", 0.0),
+            "cpu_name": create_request.offer_info.get("cpu_name"),
+            "cpu_cores": create_request.offer_info.get("cpu_cores"),
+            "ram": create_request.offer_info.get("ram"),
+            "cuda_max_good": create_request.offer_info.get("cuda_max_good", 0.0),
+            "model_name": create_request.vllm_config.vllm_model_name,
+            "max_model_length": create_request.vllm_config.vllm_max_model_len,
         }
 
-        # 템플릿 정보 추가
         if template_name:
             instance_data["template_name"] = template_name
-
-        # 선택된 오퍼 정보 추가
-        if selected_offer:
-            gpu_info = {
-                "gpu_name": selected_offer.get("gpu_name"),
-                "num_gpus": selected_offer.get("num_gpus", 1),
-                "gpu_ram": selected_offer.get("gpu_ram")
-            }
-            instance_data.update({
-                "gpu_info": gpu_info,
-                "cost_per_hour": selected_offer.get("dph_total")
-            })
 
         self._save_instance(instance_data)
 
@@ -436,10 +424,6 @@ class VastService:
 
         logger.info(f"vLLM 인스턴스 생성 완료: {instance_id}")
         return instance_id
-
-    def _generate_start_command(self) -> str:
-        """시작 명령어 생성"""
-        return f"vllm serve {self.config.vllm_model_name()} --host {self.config.vllm_host_ip()} --port {self.config.vllm_port()}"
 
     def wait_and_setup_instance(self, instance_id: str) -> bool:
         """인스턴스 실행 대기 및 설정"""
@@ -480,26 +464,11 @@ class VastService:
                 }
                 updates["gpu_info"] = gpu_info
 
-            # 비용 정보 저장
             if "dph_total" in instance_info:
-                updates["cost_per_hour"] = instance_info.get("dph_total")
+                updates["dph_total"] = instance_info.get("dph_total")
 
             self._update_instance(instance_id, updates)
 
-        # vLLM 설정 및 실행
-        if not self.vast_manager.setup_and_run_vllm(instance_id):
-            self._log_execution(
-                instance_id=instance_id,
-                operation="setup_vllm",
-                command="setup and run vLLM",
-                result="",
-                success=False,
-                execution_time=time.time() - start_time,
-                error_message="vLLM 설정 및 실행 실패"
-            )
-            return False
-
-        # 포트 매핑 수집
         port_info = self.vast_manager.get_port_mappings(instance_id)
         if port_info.get("mappings"):
             # 포트 매핑을 JSON 문자열로 저장

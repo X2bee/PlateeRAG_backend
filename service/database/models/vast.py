@@ -20,10 +20,16 @@ class VastInstance(BaseModel):
         self.ssh_port: Optional[int] = kwargs.get('ssh_port')
         self.port_mappings: Optional[str] = kwargs.get('port_mappings')  # JSON string
         self.start_command: Optional[str] = kwargs.get('start_command')
-        self.cost_per_hour: Optional[float] = kwargs.get('cost_per_hour')
         self.gpu_info: Optional[str] = kwargs.get('gpu_info')  # JSON string
         self.auto_destroy: Optional[bool] = kwargs.get('auto_destroy', False)
-        self.template_name: Optional[str] = kwargs.get('template_name')  # 사용된 템플릿 이름
+        self.template_name: Optional[str] = kwargs.get('template_name')
+        self.model_name: Optional[str] = kwargs.get('model_name')
+        self.max_model_length: Optional[int] = kwargs.get('max_model_length')
+        self.dph_total: Optional[float] = kwargs.get('dph_total', 0.0)
+        self.cpu_name: Optional[str] = kwargs.get('cpu_name')
+        self.cpu_cores: Optional[int] = kwargs.get('cpu_cores')
+        self.ram: Optional[int] = kwargs.get('ram')
+        self.cuda_max_good: Optional[float] = kwargs.get('cuda_max_good')
         self.destroyed_at: Optional[datetime] = kwargs.get('destroyed_at')
 
     def get_table_name(self) -> str:
@@ -39,10 +45,16 @@ class VastInstance(BaseModel):
             "ssh_port": "INTEGER",
             "port_mappings": "TEXT",
             "start_command": "TEXT",
-            "cost_per_hour": "DECIMAL(10,4)",
             "gpu_info": "TEXT",
             "auto_destroy": "BOOLEAN DEFAULT FALSE",
             "template_name": "VARCHAR(100)",
+            "model_name": "VARCHAR(100)",
+            "max_model_length": "INTEGER",
+            "dph_total": "DECIMAL(10,4) DEFAULT 0.0",
+            "cpu_name": "VARCHAR(100)",
+            "cpu_cores": "INTEGER",
+            "ram": "INTEGER",
+            "cuda_max_good": "DECIMAL(10,4) DEFAULT 0.0",
             "destroyed_at": "TIMESTAMP"
         }
 

@@ -244,7 +244,7 @@ class VastAIManager:
                         "id": str(offer.get("id", "")),
                         "gpu_name": offer.get("gpu_name", "Unknown"),
                         "gpu_ram": float(offer.get("gpu_ram", 0)),
-                        "dph_total": float(offer.get("dph_total", 0)),  # dph_total 필드를 직접 사용
+                        "dph_total": float(offer.get("dph_total", 0)),
                         "num_gpus": int(offer.get("num_gpus", 1)),
                         "rentable": offer.get("rentable", True),
                         "verified": offer.get("verified", False),
@@ -253,11 +253,12 @@ class VastAIManager:
                         "score": offer.get("score", 0.0),
                         "geolocation": offer.get("geolocation", "Unknown"),
                         "cpu_cores": offer.get("cpu_cores", 1),
+                        "cpu_name": offer.get("cpu_name", "Unknown"),
                         "ram": offer.get("cpu_ram", 1),
                         "disk_space": offer.get("disk_space", 10),
                         "inet_down": offer.get("inet_down", 100),
                         "inet_up": offer.get("inet_up", 100),
-                        "cuda_max_good": offer.get("cuda_vers", "11.0"),
+                        "cuda_max_good": offer.get("cuda_max_good", "11.0"),
                         "hostname": offer.get("hostname", "unknown-host")
                     }
                     offers.append(normalized_offer)
@@ -273,35 +274,6 @@ class VastAIManager:
             # 백업으로 텍스트 파싱 시도
             logger.info("백업 방식으로 텍스트 파싱 시도...")
             return self._fallback_search_offers(custom_query)
-
-    def _normalize_offer(self, offer: Dict[str, Any]) -> Dict[str, Any]:
-        """오퍼 데이터 정규화"""
-        normalized = {
-            'id': offer.get('id'),
-            'gpu_name': offer.get('gpu_name', 'Unknown'),
-            'gpu_ram': offer.get('gpu_ram', 0),
-            'dph_total': float(offer.get('dph_total', 999.0)),
-            'num_gpus': offer.get('num_gpus', 1),
-            'verified': offer.get('verified', False),
-            'rentable': offer.get('rentable', True),
-            'cuda_max_good': offer.get('cuda_max_good', '11.0'),
-            'cpu_cores': offer.get('cpu_cores', 1),
-            'ram': offer.get('ram', 1),
-            'disk_space': offer.get('disk_space', 10),
-            'inet_down': offer.get('inet_down', 100),
-            'inet_up': offer.get('inet_up', 100),
-            'score': offer.get('score', 0.0),
-            'reliability': offer.get('reliability', 0.0),
-            'geolocation': offer.get('geolocation', 'Unknown'),
-            'hostname': offer.get('hostname', 'unknown-host'),
-        }
-
-        # 추가 필드들도 보존
-        for key, value in offer.items():
-            if key not in normalized:
-                normalized[key] = value
-
-        return normalized
 
     def _parse_offers(self, data) -> List[Dict[str, Any]]:
         """오퍼 데이터 파싱"""
@@ -525,8 +497,6 @@ class VastAIManager:
 
         return offers
 
-        return offers
-
     def select_offer(self, offers: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """오퍼 선택 (중간 가격대)"""
         if not offers:
@@ -579,13 +549,13 @@ class VastAIManager:
             "-e OPEN_BUTTON_PORT=1111",
             "-e OPEN_BUTTON_TOKEN=1",
             "-e JUPYTER_DIR=/",
-            "-e DATA_DIRECTORY=/workspace/",
+            "-e DATA_DIRECTORY=/vllm/",
             f"-e PORTAL_CONFIG=\"localhost:1111:11111:/:Instance Portal|localhost:8080:18080:/:Jupyter|localhost:8080:8080:/terminals/1:Jupyter Terminal|localhost:8384:18384:/:Syncthing|localhost:6006:16006:/:Tensorboard\"",
             "-e NVIDIA_VISIBLE_DEVICES=all",
-            f"-e VLLM_HOST_IP={vllm_host}",
-            f"-e VLLM_PORT={vllm_port}",
-            f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
             f"-e VLLM_MODEL_NAME={self.config.vllm_model_name()}",
+            f"-e VLLM_PORT={vllm_port}",
+            f"-e VLLM_HOST_IP={vllm_host}",
+            f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
             f"-e VLLM_MAX_MODEL_LEN={self.config.vllm_max_model_len()}",
             f"-e VLLM_GPU_MEMORY_UTILIZATION={self.config.vllm_gpu_memory_utilization()}",
             f"-e VLLM_PIPELINE_PARALLEL_SIZE={self.config.vllm_pipeline_parallel_size()}",
@@ -599,7 +569,7 @@ class VastAIManager:
         cmd.extend(["--env", env_string])
 
         # onstart 명령어
-        onstart_cmd = self.config.generate_onstart_command()
+        onstart_cmd = "/vllm/entrypoint.sh"
         cmd.extend(["--onstart-cmd", onstart_cmd])
 
         # 기본 옵션들
@@ -607,13 +577,11 @@ class VastAIManager:
         cmd.append("--ssh")
         cmd.append("--direct")
 
-        logger.debug(f"실행할 명령어: {' '.join(cmd)}")
+        logger.info(f"실행할 명령어: {' '.join(cmd)}")
 
         try:
             result = self.run_command(cmd, parse_json=False)
-
             if result["success"]:
-                # 인스턴스 ID 추출
                 output = result["data"]
                 instance_id = self._extract_instance_id_from_output(output)
 
@@ -748,6 +716,10 @@ class VastAIManager:
                     status = self._extract_status(result["data"], instance_id, strategy_name)
                     if status:
                         return status
+
+                elif result["success"] == False:
+                    logger.error(f"상태 조회 실패 ({strategy_name}): {result.get('error')}")
+                    return "failed"
             except Exception as e:
                 logger.debug(f"상태 조회 오류 ({strategy_name}): {e}")
                 return "failed"
@@ -1393,8 +1365,8 @@ class VastAIManager:
             "080": 8080,    # xxxxx8080 -> 8080
             "006": 6006,    # xxxxx6006 -> 6006
             "384": 8384,    # xxxxx8384 -> 8384
-            "479": 11479,   # xxxxx1479 -> 11479
-            "480": 11480,   # xxxxx1480 -> 11480
+            "2434": 12434,   # xxxxx2434 -> 12434
+            "2435": 12435,   # xxxxx2435 -> 12435
         }
 
         if port_suffix in port_mapping:
@@ -1434,30 +1406,6 @@ class VastAIManager:
 
         return {"mappings": mappings, "public_ip": public_ip}
 
-    def _get_port_mappings_from_ssh(self, instance_id: str, command: str) -> Dict[str, Any]:
-        """SSH를 통해 포트 매핑 수집"""
-        result = self.execute_ssh_command(instance_id, command)
-
-        if not result["success"]:
-            return {}
-
-        # netstat/ss 출력 파싱
-        mappings = {}
-        for line in result["stdout"].split('\n'):
-            if ':8000' in line or ':22' in line:
-                # 간단한 포트 감지
-                if ':8000' in line:
-                    mappings["8000"] = {"external_port": "8000", "url": None}
-                if ':22' in line:
-                    mappings["22"] = {"external_port": "22", "url": None}
-
-        return {"mappings": mappings, "public_ip": None}
-
-    def _get_port_mappings_from_api(self, instance_id: str) -> Dict[str, Any]:
-        """API를 통한 직접 포트 매핑 수집"""
-        # 이는 향후 Vast.ai API 직접 호출로 구현 가능
-        return {}
-
     def _get_default_port_mappings(self) -> Dict[str, Any]:
         """기본 포트 매핑 반환"""
         return {
@@ -1483,8 +1431,8 @@ class VastAIManager:
             6006: "Tensorboard",
             8080: "Jupyter",
             8384: "Syncthing",
-            11479: "vLLM Main",
-            11480: "vLLM Controller",
+            12434: "vLLM Main",
+            12435: "vLLM Controller",
             22: "SSH",
             72299: "Custom Service"
         }
@@ -1511,12 +1459,12 @@ class VastAIManager:
             ip, port = port_mappings[8080]
             main_services.append(f"📓 Jupyter: http://{ip}:{port}")
 
-        if 11479 in port_mappings:
-            ip, port = port_mappings[11479]
+        if 12434 in port_mappings:
+            ip, port = port_mappings[12434]
             main_services.append(f"🤖 vLLM Main: http://{ip}:{port}")
 
-        if 11480 in port_mappings:
-            ip, port = port_mappings[11480]
+        if 12435 in port_mappings:
+            ip, port = port_mappings[12435]
             main_services.append(f"🎛️ vLLM Controller: http://{ip}:{port}")
 
         if 6006 in port_mappings:
@@ -1550,29 +1498,6 @@ class VastAIManager:
 
         logger.error(f"인스턴스 {instance_id} 삭제 실패: {result.get('error')}")
         return False
-
-    def setup_and_run_vllm(self, instance_id: str) -> bool:
-        """vLLM 설정 및 실행 (HF 로그인 제거)"""
-        logger.info("vLLM 설정 및 실행 중...")
-
-        # vLLM 실행 명령
-        commands = [
-            "cd /vllm/vllm-script",
-            "nohup python3 main.py > /tmp/vllm.log 2>&1 &"
-        ]
-
-        for cmd in commands:
-            result = self.execute_ssh_command(instance_id, cmd)
-
-            if not result["success"]:
-                logger.error(f"명령 실행 실패: {cmd}")
-                logger.error(f"오류: {result.get('error')}")
-                return False
-
-            logger.info(f"명령 완료: {cmd}")
-
-        logger.info("vLLM 실행 완료")
-        return True
 
     def check_vllm_status(self, instance_id: str) -> Dict[str, Any]:
         """vLLM 상태 확인"""

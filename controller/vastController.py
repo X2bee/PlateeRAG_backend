@@ -22,19 +22,6 @@ class SortBy(str, Enum):
     gpu_ram = "gpu_ram"
     num_gpus = "num_gpus"
 
-class VLLMDtype(str, Enum):
-    auto = "auto"
-    half = "half"
-    float16 = "float16"
-    bfloat16 = "bfloat16"
-    float = "float"
-    float32 = "float32"
-
-class ToolCallParser(str, Enum):
-    hermes = "hermes"
-    mistral = "mistral"
-    none = "none"
-
 # ========== Request Models ==========
 class OfferSearchRequest(BaseModel):
     """GPU 오퍼 검색 요청"""
@@ -54,8 +41,8 @@ class VLLMConfigRequest(BaseModel):
 
     # 네트워크 설정
     vllm_host_ip: str = Field("0.0.0.0", description="호스트 IP", example="0.0.0.0")
-    vllm_port: int = Field(11479, description="VLLM 서비스 포트", example=12434, ge=1024, le=65535)
-    vllm_controller_port: int = Field(11480, description="VLLM 컨트롤러 포트", example=12435, ge=1024, le=65535)
+    vllm_port: int = Field(12434, description="VLLM 서비스 포트", example=12434, ge=1024, le=65535)
+    vllm_controller_port: int = Field(12435, description="VLLM 컨트롤러 포트", example=12435, ge=1024, le=65535)
 
     # 성능 설정
     vllm_gpu_memory_utilization: float = Field(0.9, description="GPU 메모리 사용률", example=0.5, ge=0.1, le=1.0)
@@ -63,8 +50,8 @@ class VLLMConfigRequest(BaseModel):
     vllm_tensor_parallel_size: int = Field(1, description="텐서 병렬 크기", example=1, ge=1)
 
     # 데이터 타입 및 고급 설정
-    vllm_dtype: VLLMDtype = Field(VLLMDtype.auto, description="데이터 타입")
-    vllm_tool_call_parser: Optional[ToolCallParser] = Field(None, description="도구 호출 파서")
+    vllm_dtype: str = Field('auto', description="데이터 타입")
+    vllm_tool_call_parser: Optional[str] = Field(None, description="도구 호출 파서")
     vllm_trust_remote_code: bool = Field(True, description="원격 코드 신뢰 여부")
     vllm_enforce_eager: bool = Field(False, description="즉시 실행 강제 여부")
     vllm_max_num_seqs: Optional[int] = Field(None, description="최대 시퀀스 수", ge=1)
@@ -74,7 +61,8 @@ class VLLMConfigRequest(BaseModel):
 
 class CreateInstanceRequest(BaseModel):
     """인스턴스 생성 요청"""
-    offer_id: Optional[str] = Field(None, description="특정 오퍼 ID (없으면 자동 선택)", example="12345")
+    offer_id: str = Field(None, description="특정 오퍼 ID (없으면 자동 선택)", example="12345")
+    offer_info: Optional[Dict[str, Any]] = Field(None, description="오퍼 정보")
     hf_hub_token: Optional[str] = Field(None, description="HuggingFace 토큰", example="hf_xxxxx")
     template_name: Optional[str] = Field(None, description="사용할 템플릿 이름 (budget, high_performance, research)", example="budget")
     auto_destroy: Optional[bool] = Field(None, description="자동 삭제 여부", example=False)
@@ -107,6 +95,10 @@ class OfferInfo(BaseModel):
     gpu_ram: float = Field(..., description="GPU RAM (GB)")
     dph_total: float = Field(..., description="시간당 총 가격 ($)")
     rentable: bool = Field(..., description="렌트 가능 여부")
+    cpu_cores: int = Field(..., description="CPU 코어 수")
+    cpu_name: Optional[str] = Field(..., description="CPU 모델명")
+    ram: float = Field(..., description="RAM 용량")
+    cuda_max_good: float = Field(..., description="CUDA 최대 버전")
     public_ipaddr: Optional[str] = Field(None, description="공개 IP 주소")
 
 class OfferSearchResponse(BaseModel):
@@ -155,37 +147,6 @@ def get_vast_service(request: Request) -> VastService:
     except Exception as e:
         logger.error(f"VastService 초기화 실패: {e}")
         raise HTTPException(status_code=500, detail="VastService 초기화 실패")
-
-def generate_vllm_env_vars(config: VLLMConfigRequest, hf_token: Optional[str] = None) -> Dict[str, str]:
-    """VLLM 환경변수 생성"""
-    env_vars = {
-        "VLLM_MODEL_NAME": config.vllm_model_name,
-        "VLLM_HOST_IP": config.vllm_host_ip,
-        "VLLM_PORT": str(config.vllm_port),
-        "VLLM_CONTROLLER_PORT": str(config.vllm_controller_port),
-        "VLLM_MAX_MODEL_LEN": str(config.vllm_max_model_len),
-        "VLLM_GPU_MEMORY_UTILIZATION": str(config.vllm_gpu_memory_utilization),
-        "VLLM_PIPELINE_PARALLEL_SIZE": str(config.vllm_pipeline_parallel_size),
-        "VLLM_TENSOR_PARALLEL_SIZE": str(config.vllm_tensor_parallel_size),
-        "VLLM_DTYPE": config.vllm_dtype,
-        "VLLM_TRUST_REMOTE_CODE": str(config.vllm_trust_remote_code).lower(),
-        "VLLM_ENFORCE_EAGER": str(config.vllm_enforce_eager).lower(),
-        "VLLM_BLOCK_SIZE": str(config.vllm_block_size),
-        "VLLM_SWAP_SPACE": str(config.vllm_swap_space),
-        "VLLM_DISABLE_LOG_STATS": str(config.vllm_disable_log_stats).lower()
-    }
-
-    if config.vllm_tool_call_parser:
-        env_vars["VLLM_TOOL_CALL_PARSER"] = config.vllm_tool_call_parser
-    if config.vllm_max_num_seqs:
-        env_vars["VLLM_MAX_NUM_SEQS"] = str(config.vllm_max_num_seqs)
-    if hf_token:
-        env_vars.update({
-            "HUGGING_FACE_HUB_TOKEN": hf_token,
-            "HF_HUB_TOKEN": hf_token
-        })
-
-    return env_vars
 
 # ========== API Endpoints ==========
 
@@ -306,7 +267,8 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
         # 인스턴스 생성
         instance_id = service.create_vllm_instance(
             offer_id=create_request.offer_id,
-            template_name=create_request.template_name
+            template_name=create_request.template_name,
+            create_request=create_request
         )
 
         if not instance_id:
@@ -327,120 +289,6 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
     except Exception as e:
         logger.error(f"인스턴스 생성 실패: {e}")
         raise HTTPException(status_code=500, detail="인스턴스 생성 실패")
-
-@router.post("/instances/{instance_id}/setup-vllm",
-    summary="VLLM 설정 및 실행",
-    description="인스턴스에 VLLM을 설정하고 실행합니다. requirements.txt 설치부터 환경변수 설정, 스크립트 실행까지 자동화됩니다.",
-    response_model=Dict[str, Any])
-async def setup_vllm(request: Request, instance_id: str, setup_request: SetupVLLMRequest):
-    try:
-        service = get_vast_service(request)
-        results = []
-
-        # 1. 디렉토리 확인
-        logger.info(f"📁 디렉토리 확인: {setup_request.script_directory}")
-        check_result = service.vast_manager.execute_ssh_command(
-            instance_id, f"ls -la {setup_request.script_directory}"
-        )
-        results.append({"step": "directory_check", "result": check_result})
-
-        if not check_result.get("success"):
-            return {
-                "success": False,
-                "error": f"디렉토리 {setup_request.script_directory}를 찾을 수 없습니다",
-                "results": results
-            }
-
-        # 2. requirements.txt 설치
-        if setup_request.install_requirements:
-            logger.info("📦 requirements.txt 확인 및 설치")
-            req_check = service.vast_manager.execute_ssh_command(
-                instance_id, f"ls {setup_request.script_directory}/requirements.txt 2>/dev/null || echo 'no requirements.txt'"
-            )
-
-            if "requirements.txt" in req_check.get("stdout", "") and "no requirements.txt" not in req_check.get("stdout", ""):
-                install_result = service.vast_manager.execute_ssh_command(
-                    instance_id, f"cd {setup_request.script_directory} && pip3 install -r requirements.txt"
-                )
-                results.append({"step": "install_requirements", "result": install_result})
-
-        # 3. 환경변수 설정 및 실행
-        env_vars = generate_vllm_env_vars(setup_request.vllm_config, setup_request.hf_token)
-        if setup_request.additional_env_vars:
-            env_vars.update(setup_request.additional_env_vars)
-
-        env_exports = [f"export {key}={value}" for key, value in env_vars.items()]
-        env_cmd = " && ".join(env_exports)
-
-        main_py_cmd = f"""cd {setup_request.script_directory} && \\
-{env_cmd} && \\
-nohup python3 {setup_request.main_script} > {setup_request.log_file} 2>&1 &"""
-
-        main_result = service.vast_manager.execute_ssh_command(instance_id, main_py_cmd)
-        results.append({"step": "execute_main", "command": main_py_cmd, "result": main_result})
-
-        # 4. 프로세스 확인
-        import time
-        time.sleep(2)
-        process_check = service.vast_manager.execute_ssh_command(
-            instance_id, f"ps aux | grep {setup_request.main_script} | grep -v grep"
-        )
-        results.append({"step": "process_check", "result": process_check})
-
-        return {
-            "success": True,
-            "instance_id": instance_id,
-            "message": "VLLM 설정 및 실행 완료",
-            "config": {
-                "script_directory": setup_request.script_directory,
-                "main_script": setup_request.main_script,
-                "log_file": setup_request.log_file,
-                "environment_vars": env_vars
-            },
-            "results": results
-        }
-
-    except Exception as e:
-        logger.error(f"VLLM 설정 실패: {e}")
-        raise HTTPException(status_code=500, detail="VLLM 설정 실패")
-
-@router.post("/instances/{instance_id}/execute",
-    summary="명령어 실행",
-    description="인스턴스에서 SSH를 통해 명령어를 실행합니다. 백그라운드 실행과 환경변수 설정을 지원합니다.",
-    response_model=CommandExecutionResponse)
-async def execute_command(request: Request, instance_id: str, command_request: ExecuteCommandRequest) -> CommandExecutionResponse:
-    try:
-        service = get_vast_service(request)
-
-        # 명령어 구성
-        commands = []
-        if command_request.working_directory:
-            commands.append(f"cd {command_request.working_directory}")
-
-        if command_request.environment_vars:
-            env_exports = [f"export {key}={value}" for key, value in command_request.environment_vars.items()]
-            commands.extend(env_exports)
-
-        commands.append(command_request.command)
-
-        final_command = " && ".join(commands)
-        if command_request.background:
-            final_command = f"nohup bash -c '{final_command}' > /tmp/command_output.log 2>&1 &"
-
-        result = service.vast_manager.execute_ssh_command(instance_id, final_command)
-
-        return CommandExecutionResponse(
-            success=result.get("success", False),
-            instance_id=instance_id,
-            command=command_request.command,
-            stdout=result.get("stdout", ""),
-            stderr=result.get("stderr", ""),
-            background=command_request.background,
-            error=result.get("error")
-        )
-    except Exception as e:
-        logger.error(f"명령어 실행 실패: {e}")
-        raise HTTPException(status_code=500, detail="명령어 실행 실패")
 
 @router.get("/instances",
     summary="인스턴스 목록 조회",
@@ -591,43 +439,3 @@ async def get_logs(request: Request, instance_id: str, log_file: str = "/tmp/vll
     except Exception as e:
         logger.error(f"로그 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="로그 조회 실패")
-
-@router.get("/instances/{instance_id}/processes",
-    summary="프로세스 상태 조회",
-    description="인스턴스에서 실행 중인 프로세스를 조회합니다.",
-    response_model=Dict[str, Any])
-async def get_processes(request: Request, instance_id: str, process_name: Optional[str] = Query(None, description="특정 프로세스 이름")):
-    try:
-        service = get_vast_service(request)
-
-        if process_name:
-            cmd = f"ps aux | grep {process_name} | grep -v grep"
-        else:
-            cmd = "ps aux | grep python | grep -v grep"
-
-        result = service.vast_manager.execute_ssh_command(instance_id, cmd)
-
-        processes = []
-        if result.get("success") and result.get("stdout"):
-            lines = result["stdout"].strip().split('\n')
-            for line in lines:
-                if line.strip():
-                    parts = line.split()
-                    if len(parts) >= 11:
-                        processes.append({
-                            "user": parts[0],
-                            "pid": parts[1],
-                            "cpu": parts[2],
-                            "mem": parts[3],
-                            "command": " ".join(parts[10:])
-                        })
-
-        return {
-            "instance_id": instance_id,
-            "process_name": process_name,
-            "processes": processes,
-            "total_processes": len(processes)
-        }
-    except Exception as e:
-        logger.error(f"프로세스 상태 조회 실패: {e}")
-        raise HTTPException(status_code=500, detail="프로세스 상태 조회 실패")
