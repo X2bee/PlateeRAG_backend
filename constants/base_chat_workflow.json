@@ -251,13 +251,13 @@
       "id": "edge-default_agents:result-tools/print_any-1752938022538:input_print-1753158044561",
       "source": {
         "nodeId": "default_agents",
-        "portId": "result",
+        "portId": "stream",
         "portType": "output",
-        "type": "STR"
+        "type": "STREAM STR"
       },
       "target": {
         "nodeId": "tools/print_any-1752938022538",
-        "portId": "input_print",
+        "portId": "stream",
         "portType": "input"
       }
     }
