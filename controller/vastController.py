@@ -60,6 +60,27 @@ class VLLMConfigRequest(BaseModel):
     vllm_swap_space: int = Field(4, description="스왑 공간 (GiB)", example=4, ge=0)
     vllm_disable_log_stats: bool = Field(False, description="로그 통계 비활성화")
 
+class VLLMServeConfigRequest(BaseModel):
+    """VLLM 설정 요청"""
+    # 모델 설정
+    model_id: str = Field("Qwen/Qwen3-1.7B", description="사용할 모델명", example="Qwen/Qwen3-1.7B")
+    tokenizer: Optional[str] = Field(None, description="토크나이저 모델명", example="Qwen/Qwen3-1.7B-tokenizer")
+    max_model_len: int = Field(4096, description="최대 모델 길이", example=2048, ge=512, le=32768)
+
+    # 네트워크 설정
+    host: str = Field("0.0.0.0", description="호스트 IP", example="0.0.0.0")
+    port: int = Field(12434, description="VLLM 서비스 포트", example=12434, ge=1024, le=65535)
+
+    # 성능 설정
+    gpu_memory_utilization: float = Field(0.9, description="GPU 메모리 사용률", example=0.5, ge=0.1, le=1.0)
+    pipeline_parallel_size: int = Field(1, description="파이프라인 병렬 크기", example=1, ge=1)
+    tensor_parallel_size: int = Field(1, description="텐서 병렬 크기", example=1, ge=1)
+
+    # 데이터 타입 및 고급 설정
+    dtype: str = Field('auto', description="데이터 타입")
+    kv_cache_dtype: Optional[str] = Field(None, description="KV 캐시 데이터 타입", example="bfloat16")
+    tool_call_parser: Optional[str] = Field(None, description="도구 호출 파서")
+
 class CreateInstanceRequest(BaseModel):
     """인스턴스 생성 요청"""
     offer_id: str = Field(None, description="특정 오퍼 ID (없으면 자동 선택)", example="12345")
@@ -464,7 +485,7 @@ async def update_instance_ports(request: Request, instance_id: str):
     summary="VLLM 서비스 시작",
     description="인스턴스의 VLLM 서비스를 시작합니다. VLLM 설정을 기반으로 VLLM 서버를 실행합니다.",
     response_model=Dict[str, Any])
-async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMConfigRequest):
+async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMServeConfigRequest):
     try:
         service = get_vast_service(request)
         db_instance = service.get_instance_from_db(instance_id)
@@ -472,10 +493,26 @@ async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMConfig
         controller_url = f"http://{port_mappings.get('12435', {}).get('external_ip')}:{port_mappings.get('12435', {}).get('external_port')}/api/vllm/serve"
 
         # VLLM 서비스 시작 요청
-        response = urllib_request.urlopen(controller_url, json.dumps(vllm_config.dict())).read().decode('utf-8')
+        data = json.dumps(vllm_config.dict()).encode('utf-8')
+        req = urllib_request.Request(
+            controller_url,
+            data=data,
+            headers={
+                'Content-Type': 'application/json',
+                'Content-Length': str(len(data))
+            },
+            method='POST'
+        )
+        response = urllib_request.urlopen(req).read().decode('utf-8')
         response_data = json.loads(response)
         if response_data.get("status") == "success":
             logger.info(f"VLLM 서비스 시작 성공: {response_data.get('message', 'No message provided')}")
+
+            service._update_instance(instance_id, updates={
+                "status": "running_vllm",
+                "model_name": vllm_config.model_id,
+                "max_model_length": vllm_config.max_model_len,
+            })
             return {
                 "success": True,
                 "message": response_data.get("message", "VLLM 서비스가 성공적으로 시작되었습니다"),
@@ -498,10 +535,22 @@ async def vllm_down(request: Request, instance_id: str):
         controller_url = f"http://{port_mappings.get('12435', {}).get('external_ip')}:{port_mappings.get('12435', {}).get('external_port')}/api/vllm/down"
 
         # VLLM 다운 요청
-        response = urllib_request.urlopen(controller_url).read().decode('utf-8')
+        req = urllib_request.Request(
+            controller_url,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        response = urllib_request.urlopen(req).read().decode('utf-8')
         response_data = json.loads(response)
         if response_data.get("status") == "success":
             logger.info(f"VLLM 다운 성공: {response_data.get('message', 'No message provided')}")
+
+            service._update_instance(instance_id, updates={
+                "status": "running",
+                "model_name": "None",
+                "max_model_length": 0,
+            })
+
             return {
                 "success": True,
                 "message": response_data.get("message", "VLLM이 성공적으로 다운되었습니다"),
@@ -509,8 +558,8 @@ async def vllm_down(request: Request, instance_id: str):
             }
 
     except Exception as e:
-        logger.error(f"포트 매핑 업데이트 실패: {e}")
-        raise HTTPException(status_code=500, detail="포트 매핑 업데이트 실패")
+        logger.error(f"VLLM 다운 실패: {e}")
+        raise HTTPException(status_code=500, detail="VLLM 다운 실패")
 
 @router.put("/set-vllm",
     summary="VLLM 설정 업데이트",

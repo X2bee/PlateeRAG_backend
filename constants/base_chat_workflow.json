@@ -46,8 +46,8 @@
       "id": "tools/print_any-1752938022538",
       "data": {
         "functionId": "endnode",
-        "id": "tools/print_any",
-        "nodeName": "Print Any",
+        "id": "tools/print_any_stream",
+        "nodeName": "Print Any (Stream)",
         "description": "임의의 타입의 데이터를 입력받아 그대로 반환하는 출력 노드입니다. 워크플로우의 최종 결과를 확인하는데 사용됩니다.",
         "tags": [
           "output",
@@ -117,8 +117,8 @@
       "id": "default_agents",
       "data": {
         "functionId": "agents",
-        "id": "agents/openai_v2",
-        "nodeName": "Agent OpenAI V2",
+        "id": "agents/openai_stream_v2",
+        "nodeName": "Agent OpenAI Stream V2",
         "description": "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드",
         "tags": [
           "agent",
