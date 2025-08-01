@@ -25,7 +25,7 @@ class AgentOpenAIStreamNodeV2(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False}
     ]
     outputs = [
-        {"id": "result_stream", "name": "Result Stream", "type": "STREAM STR", "stream": True}
+        {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}
     ]
     parameters = [
         # agent_openai_v2.py와 동일한 파라미터들
@@ -44,10 +44,10 @@ class AgentOpenAIStreamNodeV2(Node):
 
     def execute(self, text: str, tools: Optional[Any] = None, memory: Optional[Any] = None,
                 model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 1000, base_url: str = "https://api.openai.com/v1") -> Generator[str, None, None]:
-        
+
         try:
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
-            
+
             inputs = {"input": text, "chat_history": chat_history}
 
             if tools_list:
@@ -59,7 +59,7 @@ class AgentOpenAIStreamNodeV2(Node):
                 ])
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(agent=agent, tools=tools_list, verbose=True, handle_parsing_errors=True)
-                
+
                 # stream() 메소드를 사용하여 스트리밍 응답 생성
                 for chunk in agent_executor.stream(inputs):
                     if "output" in chunk:
@@ -86,9 +86,9 @@ class AgentOpenAIStreamNodeV2(Node):
         config_composer = AppServiceManager.get_config_composer()
         if not config_composer:
             raise ValueError("Config Composer가 설정되지 않았습니다.")
-        
+
         llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
-        
+
         if llm_provider == "openai":
             api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
             if not api_key:
@@ -108,7 +108,7 @@ class AgentOpenAIStreamNodeV2(Node):
             return f"지원하지 않는 LLM Provider: {llm_provider}"
 
         llm = ChatOpenAI(api_key=api_key, model=model, temperature=temperature, max_tokens=max_tokens, base_url=base_url, streaming=True)
-        
+
         tools_list = []
         if tools:
             tools_list = tools if isinstance(tools, list) else [tools]
@@ -120,5 +120,5 @@ class AgentOpenAIStreamNodeV2(Node):
                 chat_history = memory_vars.get("chat_history", [])
             except Exception:
                 chat_history = []
-        
+
         return llm, tools_list, chat_history

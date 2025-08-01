@@ -11,7 +11,7 @@ class PrintAnyStreamNode(Node):
 
     inputs = [
         {
-            "id": "input_stream",
+            "id": "stream",
             "name": "Stream",
             "type": "STREAM STR",
             "multi": False,
@@ -20,13 +20,13 @@ class PrintAnyStreamNode(Node):
         },
     ]
 
-    def execute(self, input_stream: Generator[Any, None, None]) -> Generator[Any, None, None]:
+    def execute(self, stream: Generator[Any, None, None]) -> Generator[Any, None, None]:
         """
         입력으로 받은 스트림(generator)의 각 항목을 그대로 yield 합니다.
         WorkflowExecutor는 이 generator를 감지하고 최종 응답으로 스트리밍합니다.
         """
         try:
-            for chunk in input_stream:
+            for chunk in stream:
                 yield chunk
         except Exception as e:
             print(f"\n[STREAMING ERROR] 스트림 처리 중 오류 발생: {e}")

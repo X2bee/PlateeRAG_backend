@@ -60,9 +60,9 @@
         ],
         "inputs": [
           {
-            "id": "input_print",
-            "name": "Print",
-            "type": "ANY",
+            "id": "stream",
+            "name": "Stream",
+            "type": "STREAM STR",
             "multi": false,
             "required": true
           }
@@ -152,9 +152,9 @@
         ],
         "outputs": [
           {
-            "id": "result",
-            "name": "Result",
-            "type": "STR"
+            "id": "stream",
+            "name": "Stream",
+            "type": "STREAM STR"
           }
         ],
         "parameters": [
