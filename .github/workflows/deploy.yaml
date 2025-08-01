@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies & Restart server
         run: |
           cd /polarag_backend
-          pip install --no-cache-dir -r requirements.txt
-          python3 -m pip install --upgrade pip setuptools
+          RUN pip install --upgrade uv
+          uv sync
           pm2 reload backend
           echo "🚀 Backend server restarted."

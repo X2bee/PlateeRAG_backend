@@ -6,3 +6,8 @@ services:
     env_file:
       - .env
     command: "./.venv/bin/uvicorn main:app --host ${SERVER_HOST} --port ${SERVER_PORT} --reload"
+    volumes:
+      - ./backup/service/eval/job_data:/app/job_data
+      - ./backup/service/eval/eval_job_data:/app/eval_job_data
+      - ./backup/downloads:/app/downloads
+      - ./backup/constants:/app/constants

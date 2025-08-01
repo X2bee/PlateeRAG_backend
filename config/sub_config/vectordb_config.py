@@ -22,7 +22,7 @@ class VectorDBConfig(BaseConfig):
         self.QDRANT_HOST = self.create_persistent_config(
             env_name="QDRANT_HOST",
             config_path="vectordb.qdrant.host",
-            default_value="localhost"
+            default_value="host.docker.internal"
         )
         
         # Qdrant HTTP 포트 (기본: 6333)

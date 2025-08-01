@@ -174,7 +174,7 @@ class AppDatabaseManager:
             db_type = self.config_db_manager.db_type
 
             if db_type == "postgresql":
-                query = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT $1 OFFSET $2"
+                query = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT %s OFFSET %s"
             else:
                 query = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT ? OFFSET ?"
 
