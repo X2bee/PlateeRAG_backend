@@ -202,3 +202,5 @@ cython_debug/
 trash/
 trash/persistent_config_backup.py
 trash/persistent_config_new.py
+
+backup
