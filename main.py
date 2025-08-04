@@ -71,6 +71,7 @@ async def lifespan(app: FastAPI):
         try:
             logger.info("Initializing RAG services...")
             rag_service = RAGService(configs["vectordb"], configs["collection"], configs.get("openai"))
+
             # 개별 서비스들을 app.state에 등록
             app.state.rag_service = rag_service
             app.state.vector_manager = rag_service.vector_manager
