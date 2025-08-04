@@ -132,6 +132,8 @@ class OfferInfo(BaseModel):
     ram: float = Field(..., description="RAM 용량")
     cuda_max_good: float = Field(..., description="CUDA 최대 버전")
     public_ipaddr: Optional[str] = Field(None, description="공개 IP 주소")
+    inet_down: float = Field(..., description="다운로드 속도 (Mbps)")
+    inet_up: float = Field(..., description="업로드 속도 (Mbps)")
 
 class OfferSearchResponse(BaseModel):
     """GPU 오퍼 검색 응답"""
