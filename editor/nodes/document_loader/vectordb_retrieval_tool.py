@@ -34,7 +34,7 @@ class QdrantRetrievalTool(Node):
             "id": "tool_name",
             "name": "Tool Name",
             "type": "STR",
-            "value": "도구의 명칭",
+            "value": "toolname",
             "required": True,
         },
         {
