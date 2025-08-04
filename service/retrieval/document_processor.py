@@ -91,27 +91,34 @@ class DocumentProcessor:
             if hasattr(app.state, 'config_composer'):
                 collection_config = app.state.config_composer.get_config_by_category_name("collection")
                 
-                if hasattr(collection_config, 'get_env_value'):
+                # 🔥 get_env_value() 대신 직접 .value 접근
+                if hasattr(collection_config, 'IMAGE_TEXT_MODEL_PROVIDER'):
+                    provider_obj = getattr(collection_config, 'IMAGE_TEXT_MODEL_PROVIDER')
+                    base_url_obj = getattr(collection_config, 'IMAGE_TEXT_BASE_URL')
+                    api_key_obj = getattr(collection_config, 'IMAGE_TEXT_API_KEY')
+                    model_obj = getattr(collection_config, 'IMAGE_TEXT_MODEL_NAME')
+                    temp_obj = getattr(collection_config, 'IMAGE_TEXT_TEMPERATURE')
+                    
+                    # PersistentConfig 객체에서 실제 값 추출
                     config = {
-                        'provider': collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER', 'no_model').lower(),
-                        'base_url': collection_config.get_env_value('IMAGE_TEXT_BASE_URL', 'https://api.openai.com/v1'),
-                        'api_key': collection_config.get_env_value('IMAGE_TEXT_API_KEY', ''),
-                        'model': collection_config.get_env_value('IMAGE_TEXT_MODEL_NAME', 'gpt-4-vision-preview'),
-                        'temperature': float(collection_config.get_env_value('IMAGE_TEXT_TEMPERATURE', '0.7'))
+                        'provider': str(provider_obj.value if hasattr(provider_obj, 'value') else provider_obj).lower(),
+                        'base_url': str(base_url_obj.value if hasattr(base_url_obj, 'value') else base_url_obj),
+                        'api_key': str(api_key_obj.value if hasattr(api_key_obj, 'value') else api_key_obj),
+                        'model': str(model_obj.value if hasattr(model_obj, 'value') else model_obj),
+                        'temperature': float(temp_obj.value if hasattr(temp_obj, 'value') else temp_obj)
                     }
-                    logger.debug(f"🔄 Real-time config loaded: provider={config['provider']}")
+                    
+                    logger.info(f"🔄 Direct value access config: {config}")
                     return config
-        
+            
         except Exception as e:
-            logger.warning(f"Failed to get current config: {e}")
+            logger.error(f"🔍 Error in _get_current_image_text_config: {e}")
+            import traceback
+            logger.error(f"🔍 Traceback: {traceback.format_exc()}")
         
-        # fallback to initialization config
-        if isinstance(self.collection_config, dict):
-            logger.debug("Using fallback initialization config")
-            return self.collection_config
-        else:
-            logger.debug("Using default no_model config")
-            return {'provider': 'no_model'}
+        # fallback
+        logger.warning("🔍 Using fallback config")
+        return {'provider': 'no_model'}
 
     def _is_image_text_enabled(self, config: Dict[str, Any]) -> bool:
         """설정에 따라 OCR이 활성화되어 있는지 확인"""
@@ -221,19 +228,19 @@ class DocumentProcessor:
             # OCR 프롬프트
             prompt = """이 이미지를 정확한 텍스트로 변환해주세요. 다음 규칙을 철저히 지켜주세요:
 
-1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요
-2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
-3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
-4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
-5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
+                        1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요
+                        2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
+                        3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
+                        4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
+                        5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
 
-만약 표가 있다면 다음과 같은 마크다운 형식으로 변환해주세요:
-| 항목 | 내용 |
-|------|------|
-| 데이터1 | 값1 |
-| 데이터2 | 값2 |
+                        만약 표가 있다면 다음과 같은 마크다운 형식으로 변환해주세요:
+                        | 항목 | 내용 |
+                        |------|------|
+                        | 데이터1 | 값1 |
+                        | 데이터2 | 값2 |
 
-텍스트만 출력하고, 추가 설명은 하지 마세요."""
+                        텍스트만 출력하고, 추가 설명은 하지 마세요."""
 
             # 이미지 메시지 생성
             message = HumanMessage(
