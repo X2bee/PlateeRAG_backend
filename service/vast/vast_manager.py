@@ -47,10 +47,24 @@ class VastAIManager:
         """
         timeout = timeout or self.timeout
 
-        # vastai 명령어인 경우 uv를 통해 실행하도록 수정
+        # vastai 명령어인 경우 먼저 prefix와 함께 시도
         if cmd and cmd[0] == "vastai":
-            cmd = self.vastai_prefix + cmd
+            prefixed_cmd = self.vastai_prefix + cmd
 
+            # prefix와 함께 실행 시도
+            result = self._execute_command(prefixed_cmd, parse_json, timeout)
+
+            # prefix와 함께 실행이 실패한 경우 prefix 없이 재시도
+            if not result["success"]:
+                logger.debug(f"prefix와 함께 실행 실패, prefix 없이 재시도: {' '.join(cmd)}")
+                result = self._execute_command(cmd, parse_json, timeout)
+
+            return result
+        else:
+            return self._execute_command(cmd, parse_json, timeout)
+
+    def _execute_command(self, cmd: List[str], parse_json: bool = True, timeout: int = None) -> Dict[str, Any]:
+        """실제 명령어 실행"""
         try:
             if self.config.debug():
                 logger.debug(f"실행 명령: {' '.join(cmd)}")
@@ -138,11 +152,22 @@ class VastAIManager:
 
     def _run_command_without_api_key(self, cmd: List[str], capture_json: bool = False) -> Any:
         """API 키 없이 명령어 실행 (API 키 관리용)"""
-        try:
-            # vastai 명령어인 경우 uv를 통해 실행하도록 수정
-            if cmd and cmd[0] == "vastai":
-                cmd = self.vastai_prefix + cmd
+        # vastai 명령어인 경우 먼저 prefix와 함께 시도
+        if cmd and cmd[0] == "vastai":
+            prefixed_cmd = self.vastai_prefix + cmd
 
+            # prefix와 함께 실행 시도
+            try:
+                return self._execute_command_without_api_key(prefixed_cmd, capture_json)
+            except Exception as e:
+                logger.debug(f"prefix와 함께 실행 실패, prefix 없이 재시도: {' '.join(cmd)}")
+                return self._execute_command_without_api_key(cmd, capture_json)
+        else:
+            return self._execute_command_without_api_key(cmd, capture_json)
+
+    def _execute_command_without_api_key(self, cmd: List[str], capture_json: bool = False) -> Any:
+        """실제 명령어 실행 (API 키 관리용)"""
+        try:
             logger.debug(f"명령어 실행: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
@@ -926,11 +951,25 @@ class VastAIManager:
 
     def _execute_stream_command(self, cmd: List[str]) -> Dict[str, Any]:
         """스트리밍 명령 실행"""
-        try:
-            # vastai 명령어인 경우 uv를 통해 실행하도록 수정
-            if cmd and cmd[0] == "vastai":
-                cmd = self.vastai_prefix + cmd
+        # vastai 명령어인 경우 먼저 prefix와 함께 시도
+        if cmd and cmd[0] == "vastai":
+            prefixed_cmd = self.vastai_prefix + cmd
 
+            # prefix와 함께 실행 시도
+            result = self._execute_stream_command_internal(prefixed_cmd)
+
+            # prefix와 함께 실행이 실패한 경우 prefix 없이 재시도
+            if not result["success"]:
+                logger.debug(f"prefix와 함께 스트림 실행 실패, prefix 없이 재시도: {' '.join(cmd)}")
+                result = self._execute_stream_command_internal(cmd)
+
+            return result
+        else:
+            return self._execute_stream_command_internal(cmd)
+
+    def _execute_stream_command_internal(self, cmd: List[str]) -> Dict[str, Any]:
+        """실제 스트리밍 명령 실행"""
+        try:
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
