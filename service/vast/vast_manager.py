@@ -160,7 +160,8 @@ class VastAIManager:
             try:
                 return self._execute_command_without_api_key(prefixed_cmd, capture_json)
             except Exception as e:
-                logger.debug(f"prefix와 함께 실행 실패, prefix 없이 재시도: {' '.join(cmd)}")
+                logger.debug(f"prefix와 함께 실행 실패: {e}, prefix 없이 재시도: {' '.join(cmd)}")
+                # prefix 없이 재시도
                 return self._execute_command_without_api_key(cmd, capture_json)
         else:
             return self._execute_command_without_api_key(cmd, capture_json)
