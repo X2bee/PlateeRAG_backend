@@ -38,12 +38,12 @@ class AgentOpenAIStreamNodeV2(Node):
             ]
         },
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "min": 0.0, "max": 2.0, "step": 0.1},
-        {"id": "max_tokens", "name": "Max Tokens", "type": "INTEGER", "value": 1000, "min": 1, "max": 4000, "step": 1},
+        {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 4096, "min": 1, "max": 8192, "step": 1},
         {"id": "base_url", "name": "Base URL", "type": "STRING", "value": "https://api.openai.com/v1", "optional": True},
     ]
 
     def execute(self, text: str, tools: Optional[Any] = None, memory: Optional[Any] = None,
-                model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 1000, base_url: str = "https://api.openai.com/v1") -> Generator[str, None, None]:
+                model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 4096, base_url: str = "https://api.openai.com/v1") -> Generator[str, None, None]:
 
         try:
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
