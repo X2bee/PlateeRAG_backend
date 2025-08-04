@@ -246,7 +246,7 @@ class DocumentProcessor:
         """코드 텍스트 정리 (코드의 구조를 보존)"""
         if not text:
             return ""
-        
+        print("Kim")
         # 코드 파일의 경우 들여쓰기와 줄바꿈을 보존
         # 다만 파일 끝의 과도한 공백은 제거
         text = text.rstrip()
