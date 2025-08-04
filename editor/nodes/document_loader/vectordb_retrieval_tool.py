@@ -34,8 +34,8 @@ class QdrantRetrievalTool(Node):
             "id": "tool_name",
             "name": "Tool Name",
             "type": "STR",
-            "value": "toolname",
-            "required": True,
+            "value": "tool",
+            "required": False,
         },
         {
             "id": "description",
