@@ -246,7 +246,7 @@ class DocumentProcessor:
         """코드 텍스트 정리 (코드의 구조를 보존)"""
         if not text:
             return ""
-        print("Kim")
+        
         # 코드 파일의 경우 들여쓰기와 줄바꿈을 보존
         # 다만 파일 끝의 과도한 공백은 제거
         text = text.rstrip()
@@ -629,6 +629,43 @@ class DocumentProcessor:
             logger.debug(f"Error extracting simple table text: {e}")
             return ""
     
+    async def extract_text_from_file(self, file_path: str, file_extension: str) -> str:
+        """파일에서 텍스트 추출 (파일 형식에 따라 적절한 메서드 호출)
+        
+        Args:
+            file_path: 파일 경로
+            file_extension: 파일 확장자
+            
+        Returns:
+            추출된 텍스트
+            
+        Raises:
+            Exception: 텍스트 추출 실패
+        """
+        try:
+            category = self.get_file_category(file_extension)
+            
+            logger.info(f"Extracting text from {file_extension} file ({category} category): {file_path}")
+            
+            # 파일 형식별 텍스트 추출
+            if file_extension == 'pdf':
+                return await self._extract_text_from_pdf(file_path)
+            elif file_extension in ['docx', 'doc']:
+                return await self._extract_text_from_docx(file_path)
+            elif file_extension in ['xlsx', 'xls']:
+                return await self._extract_text_from_excel(file_path)
+            elif file_extension in self.image_types:
+                return await self._convert_image_to_text(file_path)
+            elif file_extension in (self.text_types + self.code_types + self.config_types + 
+                                self.script_types + self.log_types + self.web_types):
+                return await self._extract_text_from_text_file(file_path, file_extension)
+            else:
+                raise ValueError(f"Unsupported file type: {file_extension}")
+            
+        except Exception as e:
+            logger.error(f"Failed to extract text from {file_path}: {e}")
+            raise
+
     def _is_similar_table_text(self, text1: str, text2: str, threshold: float = 0.8) -> bool:
         """두 표 텍스트가 유사한지 확인 (중복 제거용)"""
         try:
