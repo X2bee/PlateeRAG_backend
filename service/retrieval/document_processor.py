@@ -101,52 +101,27 @@ class DocumentProcessor:
 
             config_dict: Dict[str, Any] = {}
             try:
-                # 객체에서 직접 속성으로 접근 (수정된 부분)
-                p = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', None)
+                p      = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', None)
+                u_api  = getattr(self.collection_config, 'IMAGE_TEXT_API_BASE_URL', None)
                 u_base = getattr(self.collection_config, 'IMAGE_TEXT_BASE_URL', None)
-                k = getattr(self.collection_config, 'IMAGE_TEXT_API_KEY', None)
-                m = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_NAME', None)
-                t = getattr(self.collection_config, 'IMAGE_TEXT_TEMPERATURE', None)
+                k      = getattr(self.collection_config, 'IMAGE_TEXT_API_KEY', None)
+                m      = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_NAME', None)
+                t      = getattr(self.collection_config, 'IMAGE_TEXT_TEMPERATURE', None)
 
-                # 값 추출 - .value 속성이 아닌 직접 값 또는 get_env_value 메서드 사용
-                if hasattr(self.collection_config, 'get_env_value'):
-                    # get_env_value 메서드가 있는 경우 (권장)
-                    config_dict['provider'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER') or 'no_model'
-                    ).lower()
-                    config_dict['base_url'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_BASE_URL') or 
-                        'https://api.openai.com/v1'
-                    )
-                    config_dict['api_key'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_API_KEY') or ''
-                    )
-                    config_dict['model'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_MODEL_NAME') or 
-                        'gpt-4-vision-preview'
-                    )
-                    config_dict['temperature'] = float(
-                        self.collection_config.get_env_value('IMAGE_TEXT_TEMPERATURE') or 0.7
-                    )
+                config_dict['provider']    = (p.value.lower() if p else 'no_model')
+                if u_api and getattr(u_api, 'value', None):
+                    config_dict['base_url'] = u_api.value
+                elif u_base and getattr(u_base, 'value', None):
+                    config_dict['base_url'] = u_base.value
                 else:
-                    # 직접 속성 접근 방식 (fallback)
-                    config_dict['provider'] = (str(p).lower() if p else 'no_model')
-                    config_dict['base_url'] = (str(u_base) if u_base else 'https://api.openai.com/v1')
-                    config_dict['api_key'] = (str(k) if k else '')
-                    config_dict['model'] = (str(m) if m else 'gpt-4-vision-preview')
-                    config_dict['temperature'] = float(t if t else 0.7)
-                
+                    config_dict['base_url'] = 'https://api.openai.com/v1'
+                config_dict['api_key']     = (k.value if k else '')
+                config_dict['model']       = (m.value if m else 'gpt-4-vision-preview')
+                config_dict['temperature'] = (t.value if t else 0.7)
                 logger.info(f"Extracted config_dict: {config_dict}")
             except Exception as attr_err:
                 logger.error(f"Error extracting config attributes: {attr_err}")
-                # 안전한 기본값 설정
-                config_dict = {
-                    'provider': 'no_model',
-                    'base_url': 'https://api.openai.com/v1',
-                    'api_key': '',
-                    'model': 'gpt-4-vision-preview',
-                    'temperature': 0.7
-                }
+                config_dict = {'provider':'no_model','base_url':'','api_key':'','model':'','temperature':0.7}
 
             provider = config_dict['provider']
             if provider in ('openai','vllm'):
@@ -192,7 +167,6 @@ class DocumentProcessor:
             logger.error(f"Traceback: {traceback.format_exc()}")
             self.collection_config = {'provider':'no_model'}
             self.image_text_enabled = False
-
 
     def _apply_healthcheck(self, result: Dict[str,Any], config_dict: Dict[str,Any]):
         """헬스체크 결과 적용"""
@@ -266,52 +240,28 @@ class DocumentProcessor:
             with open(image_path, "rb") as image_file:
                 base64_image = base64.b64encode(image_file.read()).decode('utf-8')
             
-            # collection_config에서 프로바이더 정보 가져오기 (수정된 부분)
+            # collection_config에서 프로바이더 정보 가져오기
             if not self.collection_config:
                 return "[이미지 파일: 기본 텍스트 추출 모드에서는 이미지 변환을 지원하지 않습니다]"
             
-            # config_dict가 이미 딕셔너리로 변환되어 있으므로 직접 접근
-            if isinstance(self.collection_config, dict):
-                # _load_image_text_config에서 이미 딕셔너리로 변환된 경우
-                provider = self.collection_config.get('provider', 'openai').lower()
-                api_key = self.collection_config.get('api_key', '')
-                base_url = self.collection_config.get('base_url', 'https://api.openai.com/v1')
-                model = self.collection_config.get('model', 'gpt-4-vision-preview')
-                temperature = self.collection_config.get('temperature', 0.7)
-            else:
-                # 원본 config 객체인 경우 (fallback)
-                if hasattr(self.collection_config, 'get_env_value'):
-                    provider = (self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER') or 'openai').lower()
-                    api_key = self.collection_config.get_env_value('IMAGE_TEXT_API_KEY') or ''
-                    base_url = self.collection_config.get_env_value('IMAGE_TEXT_BASE_URL') or 'https://api.openai.com/v1'
-                    model = self.collection_config.get_env_value('IMAGE_TEXT_MODEL_NAME') or 'gpt-4-vision-preview'
-                    temperature = float(self.collection_config.get_env_value('IMAGE_TEXT_TEMPERATURE') or 0.7)
-                else:
-                    # 직접 속성 접근
-                    provider = str(getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', 'openai')).lower()
-                    api_key = str(getattr(self.collection_config, 'IMAGE_TEXT_API_KEY', ''))
-                    base_url = str(getattr(self.collection_config, 'IMAGE_TEXT_BASE_URL', 'https://api.openai.com/v1'))
-                    model = str(getattr(self.collection_config, 'IMAGE_TEXT_MODEL_NAME', 'gpt-4-vision-preview'))
-                    temperature = float(getattr(self.collection_config, 'IMAGE_TEXT_TEMPERATURE', 0.7))
-            
+            provider = self.collection_config.get('provider', 'openai').lower()
             logger.info(f'Using image-text provider: {provider}')
-            logger.info(f'Model: {model}, Base URL: {base_url}')
             
             # 프로바이더별 LLM 클라이언트 생성
             if provider == 'openai':
                 llm = ChatOpenAI(
-                    model=model,
-                    openai_api_key=api_key,
-                    base_url=base_url,
-                    temperature=temperature
+                    model=self.collection_config.get('model', 'gpt-4-vision-preview'),
+                    openai_api_key=self.collection_config.get('api_key'),
+                    base_url=self.collection_config.get('base_url', 'https://api.openai.com/v1'),
+                    temperature=self.collection_config.get('temperature', 0.7)
                 )
             elif provider == 'vllm':
                 # vLLM의 경우 OpenAI 호환 API 사용
                 llm = ChatOpenAI(
-                    model=model,
-                    openai_api_key=api_key or 'dummy',  # vLLM은 보통 API 키가 필요없음
-                    base_url=base_url,
-                    temperature=temperature
+                    model=self.collection_config.get('model', 'Qwen/Qwen2.5-VL-7B-Instruct'),
+                    openai_api_key=self.collection_config.get('api_key', 'dummy'),  # vLLM은 보통 API 키가 필요없음
+                    base_url=self.collection_config.get('base_url'),
+                    temperature=self.collection_config.get('temperature', 0.7)
                 )
             else:
                 logger.error(f"Unsupported image-text provider: {provider}")
@@ -320,19 +270,19 @@ class DocumentProcessor:
             # OCR 프롬프트
             prompt = """이 이미지를 정확한 텍스트로 변환해주세요. 다음 규칙을 철저히 지켜주세요:
 
-    1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요
-    2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
-    3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
-    4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
-    5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
+1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요
+2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
+3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
+4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
+5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
 
-    만약 표가 있다면 다음과 같은 마크다운 형식으로 변환해주세요:
-    | 항목 | 내용 |
-    |------|------|
-    | 데이터1 | 값1 |
-    | 데이터2 | 값2 |
+만약 표가 있다면 다음과 같은 마크다운 형식으로 변환해주세요:
+| 항목 | 내용 |
+|------|------|
+| 데이터1 | 값1 |
+| 데이터2 | 값2 |
 
-    텍스트만 출력하고, 추가 설명은 하지 마세요."""
+텍스트만 출력하고, 추가 설명은 하지 마세요."""
 
             # 이미지 메시지 생성
             message = HumanMessage(
@@ -351,20 +301,79 @@ class DocumentProcessor:
             logger.error(f"Error converting image to text {image_path}: {e}")
             return f"[이미지 파일: 텍스트 변환 중 오류 발생 - {str(e)}]"
     
+    async def extract_text_from_file(self, file_path: str, file_type: str = None) -> str:
+        """파일에서 텍스트 추출
+        
+        Args:
+            file_path: 파일 경로
+            file_type: 파일 형식 (없으면 확장자에서 추출)
+            
+        Returns:
+            추출된 텍스트
+            
+        Raises:
+            ValueError: 지원하지 않는 파일 형식
+            Exception: 파일 처리 오류
+        """
+        from pathlib import Path
+        import subprocess
+        import os
+        
+        if file_type is None:
+            file_type = Path(file_path).suffix[1:].lower()
+        
+        file_type = file_type.lower()
+        
+        if file_type not in self.supported_types:
+            raise ValueError(f"Unsupported file type: {file_type}")
+        
+        try:
+            category = self.get_file_category(file_type)
+            
+            # 이미지 파일 처리
+            if category == 'image':
+                return await self._convert_image_to_text(file_path)
+            
+            # .doc 파일은 libreoffice로 .docx로 변환 후 파싱 (항상 변환 시도)
+            if file_type == 'doc':
+                doc_path = Path(file_path)
+                docx_path = doc_path.with_suffix('.docx')
+                logger.info(f"[INFO] .doc 파일을 .docx로 변환 중: {doc_path.name}")
+                result = subprocess.run([
+                    "libreoffice", "--headless", "--convert-to", "docx", str(doc_path),
+                    "--outdir", str(doc_path.parent)
+                ], capture_output=True)
+                if result.returncode != 0:
+                    logger.error(f"[ERROR] .doc -> .docx 변환 실패: {result.stderr.decode()}")
+                    raise Exception(f".doc 파일을 .docx로 변환하는데 실패했습니다: {result.stderr.decode()}")
+                else:
+                    logger.info(f"[SUCCESS] 변환 완료: {docx_path.name}")
+                # 변환된 .docx 파일로 파싱
+                return await self._extract_text_from_docx(str(docx_path))
+            
+            if file_type == 'pdf':
+                return await self._extract_text_from_pdf(file_path)
+            elif file_type == 'docx':
+                return await self._extract_text_from_docx(file_path)
+            elif file_type in ['xlsx', 'xls']:
+                if not PANDAS_AVAILABLE:
+                    raise ValueError(f"Excel file processing requires pandas but it's not available: {file_type}")
+                return await self._extract_text_from_excel(file_path)
+            elif category in ['text', 'code', 'config', 'data', 'script', 'log', 'web']:
+                return await self._extract_text_from_text_file(file_path, file_type)
+            else:
+                raise ValueError(f"Unsupported file type: {file_type}")
+        except Exception as e:
+            logger.error(f"Failed to extract text from {file_path}: {e}")
+            raise
+    
     async def _extract_text_from_pdf(self, file_path: str) -> str:
         """PDF 파일에서 텍스트 추출 (프로바이더에 따라 텍스트 추출 또는 OCR)"""
         try:
-            # 프로바이더 확인 (수정된 부분)
+            # 프로바이더 확인 (올바른 키 사용)
             provider = 'no_model'
-            if self.collection_config:
-                if isinstance(self.collection_config, dict):
-                    provider = self.collection_config.get('provider', 'no_model').lower()
-                elif hasattr(self.collection_config, 'get_env_value'):
-                    provider_value = self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER')
-                    provider = (provider_value or 'no_model').lower()
-                else:
-                    provider_attr = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', 'no_model')
-                    provider = str(provider_attr).lower()
+            if self.collection_config and isinstance(self.collection_config, dict):
+                provider = self.collection_config.get('provider', 'no_model').lower()
             
             logger.info(f"PDF processing with provider: {provider}")
             
@@ -397,15 +406,8 @@ class DocumentProcessor:
             
             # 에러 발생시에도 프로바이더에 따라 처리
             provider = 'no_model'
-            if self.collection_config:
-                if isinstance(self.collection_config, dict):
-                    provider = self.collection_config.get('provider', 'no_model').lower()
-                elif hasattr(self.collection_config, 'get_env_value'):
-                    provider_value = self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER')
-                    provider = (provider_value or 'no_model').lower()
-                else:
-                    provider_attr = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', 'no_model')
-                    provider = str(provider_attr).lower()
+            if self.collection_config and isinstance(self.collection_config, dict):
+                provider = self.collection_config.get('provider', 'no_model').lower()
             
             if provider == 'no_model':
                 # no_model인 경우 기본 fallback만 시도
@@ -495,6 +497,7 @@ class DocumentProcessor:
             logger.warning("OCR failed, falling back to text extraction")
             return await self._extract_text_from_pdf_fallback(file_path)
 
+    # 나머지 메서드들은 동일하므로 생략...
     async def _extract_text_from_docx(self, file_path: str) -> str:
         """DOCX 파일에서 텍스트 추출 (표, 이미지 포함)"""
         try:
