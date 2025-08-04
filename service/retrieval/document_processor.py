@@ -112,21 +112,19 @@ class DocumentProcessor:
                 if hasattr(self.collection_config, 'get_env_value'):
                     # get_env_value 메서드가 있는 경우 (권장)
                     config_dict['provider'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER') or 'no_model'
+                        self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER', 'no_model')
                     ).lower()
                     config_dict['base_url'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_BASE_URL') or 
-                        'https://api.openai.com/v1'
+                        self.collection_config.get_env_value('IMAGE_TEXT_BASE_URL', 'https://api.openai.com/v1')
                     )
                     config_dict['api_key'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_API_KEY') or ''
+                        self.collection_config.get_env_value('IMAGE_TEXT_API_KEY', '')
                     )
                     config_dict['model'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_MODEL_NAME') or 
-                        'gpt-4-vision-preview'
+                        self.collection_config.get_env_value('IMAGE_TEXT_MODEL_NAME', 'gpt-4-vision-preview')
                     )
                     config_dict['temperature'] = float(
-                        self.collection_config.get_env_value('IMAGE_TEXT_TEMPERATURE') or 0.7
+                        self.collection_config.get_env_value('IMAGE_TEXT_TEMPERATURE', '0.7')
                     )
                 else:
                     # 직접 속성 접근 방식 (fallback)
