@@ -56,7 +56,7 @@ class VastAIManager:
 
             # prefix와 함께 실행이 실패한 경우 prefix 없이 재시도
             if not result["success"]:
-                logger.debug(f"prefix와 함께 실행 실패, prefix 없이 재시도: {' '.join(cmd)}")
+                logger.info(f"🔄 prefix 실행 실패, fallback으로 재시도: {' '.join(cmd)}")
                 result = self._execute_command(cmd, parse_json, timeout)
 
             return result
@@ -160,7 +160,8 @@ class VastAIManager:
             try:
                 return self._execute_command_without_api_key(prefixed_cmd, capture_json)
             except Exception as e:
-                logger.debug(f"prefix와 함께 실행 실패, prefix 없이 재시도: {' '.join(cmd)}")
+                logger.info(f"🔄 prefix API 키 명령 실패, fallback으로 재시도: {' '.join(cmd)} (오류: {e})")
+                # prefix 없이 재시도
                 return self._execute_command_without_api_key(cmd, capture_json)
         else:
             return self._execute_command_without_api_key(cmd, capture_json)
@@ -960,7 +961,7 @@ class VastAIManager:
 
             # prefix와 함께 실행이 실패한 경우 prefix 없이 재시도
             if not result["success"]:
-                logger.debug(f"prefix와 함께 스트림 실행 실패, prefix 없이 재시도: {' '.join(cmd)}")
+                logger.info(f"🔄 prefix 스트림 실행 실패, fallback으로 재시도: {' '.join(cmd)}")
                 result = self._execute_stream_command_internal(cmd)
 
             return result
