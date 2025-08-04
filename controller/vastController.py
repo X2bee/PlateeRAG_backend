@@ -116,7 +116,7 @@ class SetVLLMConfigRequest(BaseModel):
 class VLLMHealthCheckRequest(BaseModel):
     """VLLM 헬스 체크 요청"""
     ip: str = Field(..., description="VLLM 서비스 IP", example="1.2.3.4")
-    port: str = Field(..., description="VLLM 서비스 포트", example="18434")
+    port: int = Field(..., description="VLLM 서비스 포트", example=12434)
 
 # ========== Response Models ==========
 class OfferInfo(BaseModel):
@@ -685,6 +685,9 @@ async def vllm_health_check(request: Request, health_request: VLLMHealthCheckReq
     try:
         vllm_ip = health_request.ip
         vllm_port = health_request.port
+
+        if not type(vllm_port) is str:
+            vllm_port = str(vllm_port)
 
         # VLLM 헬스 체크 실행
         health_url = f"http://{vllm_ip}:{vllm_port}/health"
