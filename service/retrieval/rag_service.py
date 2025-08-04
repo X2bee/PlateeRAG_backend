@@ -32,6 +32,7 @@ class RAGService:
         self.config = vectordb_config
         self.openai_config = openai_config
         self.document_processor = DocumentProcessor(collection_config)
+        self.document_processor.test()
         self.vector_manager = VectorManager(vectordb_config)
         self.embeddings_client = None
 

@@ -73,9 +73,6 @@ class DocumentProcessor:
         )
         self.collection_config = collection_config
         
-        # ★ image_text_enabled 속성 초기화 (매우 중요!)
-        self.image_text_enabled = False
-        
         if not PANDAS_AVAILABLE:
             self.supported_types = [t for t in self.supported_types if t not in ['xlsx','xls']]
         if not LANGCHAIN_OPENAI_AVAILABLE:
@@ -86,121 +83,53 @@ class DocumentProcessor:
             logger.warning("pdfminer not available. Using PyPDF2 fallback.")
         if not PDF2IMAGE_AVAILABLE:
             logger.warning("pdf2image not available. OCR disabled.")
-        self._load_image_text_config()
 
-    def _load_image_text_config(self):
-        """이미지-텍스트 변환 설정 로드 (OpenAI/vLLM healthcheck 포함)"""
+    def _get_current_image_text_config(self) -> Dict[str, Any]:
+        """실시간으로 현재 IMAGE_TEXT 설정 가져오기"""
         try:
-            logger.info(f"initial collection_config: {self.collection_config}")
-
-            if not self.collection_config:
-                self.collection_config = {'provider':'no_model'}
-                self.image_text_enabled = False
-                logger.info("❌ Image-text conversion disabled (no_model)")
-                return
-
-            config_dict: Dict[str, Any] = {}
-            try:
-                # 객체에서 직접 속성으로 접근 (수정된 부분)
-                p = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', None)
-                u_base = getattr(self.collection_config, 'IMAGE_TEXT_BASE_URL', None)
-                k = getattr(self.collection_config, 'IMAGE_TEXT_API_KEY', None)
-                m = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_NAME', None)
-                t = getattr(self.collection_config, 'IMAGE_TEXT_TEMPERATURE', None)
-
-                # 값 추출 - .value 속성이 아닌 직접 값 또는 get_env_value 메서드 사용
-                if hasattr(self.collection_config, 'get_env_value'):
-                    # get_env_value 메서드가 있는 경우 (권장)
-                    config_dict['provider'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER', 'no_model')
-                    ).lower()
-                    config_dict['base_url'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_BASE_URL', 'https://api.openai.com/v1')
-                    )
-                    config_dict['api_key'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_API_KEY', '')
-                    )
-                    config_dict['model'] = (
-                        self.collection_config.get_env_value('IMAGE_TEXT_MODEL_NAME', 'gpt-4-vision-preview')
-                    )
-                    config_dict['temperature'] = float(
-                        self.collection_config.get_env_value('IMAGE_TEXT_TEMPERATURE', '0.7')
-                    )
-                else:
-                    # 직접 속성 접근 방식 (fallback)
-                    config_dict['provider'] = (str(p).lower() if p else 'no_model')
-                    config_dict['base_url'] = (str(u_base) if u_base else 'https://api.openai.com/v1')
-                    config_dict['api_key'] = (str(k) if k else '')
-                    config_dict['model'] = (str(m) if m else 'gpt-4-vision-preview')
-                    config_dict['temperature'] = float(t if t else 0.7)
+            from main import app
+            if hasattr(app.state, 'config_composer'):
+                collection_config = app.state.config_composer.get_config_by_category_name("collection")
                 
-                logger.info(f"Extracted config_dict: {config_dict}")
-            except Exception as attr_err:
-                logger.error(f"Error extracting config attributes: {attr_err}")
-                # 안전한 기본값 설정
-                config_dict = {
-                    'provider': 'no_model',
-                    'base_url': 'https://api.openai.com/v1',
-                    'api_key': '',
-                    'model': 'gpt-4-vision-preview',
-                    'temperature': 0.7
-                }
-
-            provider = config_dict['provider']
-            if provider in ('openai','vllm'):
-                try:
-                    import asyncio
-                    service = LLMService()
-                    coro = service.test_provider_connection(
-                        provider,
-                        {
-                            'api_key':    config_dict['api_key'],
-                            'base_url':   config_dict['base_url'],
-                            'model':      config_dict['model'],
-                            'model_name': config_dict['model']
-                        }
-                    )
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            # 비동기 환경에서는 healthcheck를 나중에 실행
-                            task = loop.create_task(coro)
-                            task.add_done_callback(lambda t: self._apply_healthcheck(t.result(), config_dict))
-                            # 일단 활성화해놓고 healthcheck 결과를 기다림
-                            self.image_text_enabled = True
-                        else:
-                            result = loop.run_until_complete(coro)
-                            self._apply_healthcheck(result, config_dict)
-                    except Exception as hc_err:
-                        logger.error(f"Healthcheck error: {hc_err}")
-                        config_dict['provider'] = 'no_model'
-                        self.image_text_enabled = False
-                except ImportError:
-                    logger.warning("LLMService not available, enabling OCR without healthcheck")
-                    self.image_text_enabled = True
-            else:
-                self.image_text_enabled = False
-
-            self.collection_config = config_dict
-            logger.info(f"final collection_config: {self.collection_config}")
-            logger.info(f"Image-text enabled={self.image_text_enabled}, provider={config_dict['provider']}")
+                # 🔥 get_env_value() 대신 직접 .value 접근
+                if hasattr(collection_config, 'IMAGE_TEXT_MODEL_PROVIDER'):
+                    provider_obj = getattr(collection_config, 'IMAGE_TEXT_MODEL_PROVIDER')
+                    base_url_obj = getattr(collection_config, 'IMAGE_TEXT_BASE_URL')
+                    api_key_obj = getattr(collection_config, 'IMAGE_TEXT_API_KEY')
+                    model_obj = getattr(collection_config, 'IMAGE_TEXT_MODEL_NAME')
+                    temp_obj = getattr(collection_config, 'IMAGE_TEXT_TEMPERATURE')
+                    
+                    # PersistentConfig 객체에서 실제 값 추출
+                    config = {
+                        'provider': str(provider_obj.value if hasattr(provider_obj, 'value') else provider_obj).lower(),
+                        'base_url': str(base_url_obj.value if hasattr(base_url_obj, 'value') else base_url_obj),
+                        'api_key': str(api_key_obj.value if hasattr(api_key_obj, 'value') else api_key_obj),
+                        'model': str(model_obj.value if hasattr(model_obj, 'value') else model_obj),
+                        'temperature': float(temp_obj.value if hasattr(temp_obj, 'value') else temp_obj)
+                    }
+                    
+                    logger.info(f"🔄 Direct value access config: {config}")
+                    return config
+            
         except Exception as e:
-            logger.error(f"_load_image_text_config fatal: {e}")
+            logger.error(f"🔍 Error in _get_current_image_text_config: {e}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            self.collection_config = {'provider':'no_model'}
-            self.image_text_enabled = False
+            logger.error(f"🔍 Traceback: {traceback.format_exc()}")
+        
+        # fallback
+        logger.warning("🔍 Using fallback config")
+        return {'provider': 'no_model'}
 
-
-    def _apply_healthcheck(self, result: Dict[str,Any], config_dict: Dict[str,Any]):
-        """헬스체크 결과 적용"""
-        if result.get('status') == 'success':
-            logger.info("✅ Healthcheck passed.")
-            self.image_text_enabled = True
-        else:
-            logger.warning("❌ Healthcheck failed, fallback to no_model")
-            config_dict['provider'] = 'no_model'
-            self.image_text_enabled = False
+    def _is_image_text_enabled(self, config: Dict[str, Any]) -> bool:
+        """설정에 따라 OCR이 활성화되어 있는지 확인"""
+        provider = config.get('provider', 'no_model')
+        if provider in ('openai', 'vllm'):
+            # OCR 사용 가능한 프로바이더인지 확인
+            if not LANGCHAIN_OPENAI_AVAILABLE:
+                logger.warning("langchain_openai not available for OCR")
+                return False
+            return True
+        return False
 
     def get_supported_types(self) -> List[str]:
         """지원하는 파일 형식 목록 반환"""
@@ -255,8 +184,11 @@ class DocumentProcessor:
         return text
     
     async def _convert_image_to_text(self, image_path: str) -> str:
-        """이미지를 텍스트로 변환 (설정된 프로바이더 사용)"""
-        if not self.image_text_enabled:
+        """이미지를 텍스트로 변환 (실시간 설정 사용)"""
+        # 🔥 실시간 설정 가져오기
+        current_config = self._get_current_image_text_config()
+        
+        if not self._is_image_text_enabled(current_config):
             return "[이미지 파일: 이미지-텍스트 변환이 설정되지 않았습니다]"
         
         try:
@@ -264,35 +196,13 @@ class DocumentProcessor:
             with open(image_path, "rb") as image_file:
                 base64_image = base64.b64encode(image_file.read()).decode('utf-8')
             
-            # collection_config에서 프로바이더 정보 가져오기 (수정된 부분)
-            if not self.collection_config:
-                return "[이미지 파일: 기본 텍스트 추출 모드에서는 이미지 변환을 지원하지 않습니다]"
+            provider = current_config.get('provider', 'openai')
+            api_key = current_config.get('api_key', '')
+            base_url = current_config.get('base_url', 'https://api.openai.com/v1')
+            model = current_config.get('model', 'gpt-4-vision-preview')
+            temperature = current_config.get('temperature', 0.7)
             
-            # config_dict가 이미 딕셔너리로 변환되어 있으므로 직접 접근
-            if isinstance(self.collection_config, dict):
-                # _load_image_text_config에서 이미 딕셔너리로 변환된 경우
-                provider = self.collection_config.get('provider', 'openai').lower()
-                api_key = self.collection_config.get('api_key', '')
-                base_url = self.collection_config.get('base_url', 'https://api.openai.com/v1')
-                model = self.collection_config.get('model', 'gpt-4-vision-preview')
-                temperature = self.collection_config.get('temperature', 0.7)
-            else:
-                # 원본 config 객체인 경우 (fallback)
-                if hasattr(self.collection_config, 'get_env_value'):
-                    provider = (self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER') or 'openai').lower()
-                    api_key = self.collection_config.get_env_value('IMAGE_TEXT_API_KEY') or ''
-                    base_url = self.collection_config.get_env_value('IMAGE_TEXT_BASE_URL') or 'https://api.openai.com/v1'
-                    model = self.collection_config.get_env_value('IMAGE_TEXT_MODEL_NAME') or 'gpt-4-vision-preview'
-                    temperature = float(self.collection_config.get_env_value('IMAGE_TEXT_TEMPERATURE') or 0.7)
-                else:
-                    # 직접 속성 접근
-                    provider = str(getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', 'openai')).lower()
-                    api_key = str(getattr(self.collection_config, 'IMAGE_TEXT_API_KEY', ''))
-                    base_url = str(getattr(self.collection_config, 'IMAGE_TEXT_BASE_URL', 'https://api.openai.com/v1'))
-                    model = str(getattr(self.collection_config, 'IMAGE_TEXT_MODEL_NAME', 'gpt-4-vision-preview'))
-                    temperature = float(getattr(self.collection_config, 'IMAGE_TEXT_TEMPERATURE', 0.7))
-            
-            logger.info(f'Using image-text provider: {provider}')
+            logger.info(f'🔄 Using real-time image-text provider: {provider}')
             logger.info(f'Model: {model}, Base URL: {base_url}')
             
             # 프로바이더별 LLM 클라이언트 생성
@@ -318,19 +228,19 @@ class DocumentProcessor:
             # OCR 프롬프트
             prompt = """이 이미지를 정확한 텍스트로 변환해주세요. 다음 규칙을 철저히 지켜주세요:
 
-    1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요
-    2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
-    3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
-    4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
-    5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
+                        1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요
+                        2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
+                        3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
+                        4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
+                        5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
 
-    만약 표가 있다면 다음과 같은 마크다운 형식으로 변환해주세요:
-    | 항목 | 내용 |
-    |------|------|
-    | 데이터1 | 값1 |
-    | 데이터2 | 값2 |
+                        만약 표가 있다면 다음과 같은 마크다운 형식으로 변환해주세요:
+                        | 항목 | 내용 |
+                        |------|------|
+                        | 데이터1 | 값1 |
+                        | 데이터2 | 값2 |
 
-    텍스트만 출력하고, 추가 설명은 하지 마세요."""
+                        텍스트만 출력하고, 추가 설명은 하지 마세요."""
 
             # 이미지 메시지 생성
             message = HumanMessage(
@@ -350,21 +260,13 @@ class DocumentProcessor:
             return f"[이미지 파일: 텍스트 변환 중 오류 발생 - {str(e)}]"
     
     async def _extract_text_from_pdf(self, file_path: str) -> str:
-        """PDF 파일에서 텍스트 추출 (프로바이더에 따라 텍스트 추출 또는 OCR)"""
+        """PDF 파일에서 텍스트 추출 (실시간 설정에 따라 텍스트 추출 또는 OCR)"""
         try:
-            # 프로바이더 확인 (수정된 부분)
-            provider = 'no_model'
-            if self.collection_config:
-                if isinstance(self.collection_config, dict):
-                    provider = self.collection_config.get('provider', 'no_model').lower()
-                elif hasattr(self.collection_config, 'get_env_value'):
-                    provider_value = self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER')
-                    provider = (provider_value or 'no_model').lower()
-                else:
-                    provider_attr = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', 'no_model')
-                    provider = str(provider_attr).lower()
+            # 🔥 실시간 설정 가져오기
+            current_config = self._get_current_image_text_config()
+            provider = current_config.get('provider', 'no_model')
             
-            logger.info(f"PDF processing with provider: {provider}")
+            logger.info(f"🔄 Real-time PDF processing with provider: {provider}")
             
             # no_model인 경우에만 기본 텍스트 추출
             if provider == 'no_model':
@@ -372,15 +274,18 @@ class DocumentProcessor:
                 
                 # 1단계: pdfminer 시도
                 if PDFMINER_AVAILABLE:
-                    logger.info(f"Using basic pdfminer for {file_path}")
-                    text = extract_text(file_path)
-                    cleaned_text = self.clean_text(text)
-                    if len(cleaned_text.strip()) > 100:
-                        logger.info(f"Text extracted via pdfminer: {len(cleaned_text)} chars")
-                        return cleaned_text
+                    logger.info(f"Using pdfminer for {file_path}")
+                    try:
+                        text = extract_text(file_path)
+                        cleaned_text = self.clean_text(text)
+                        if len(cleaned_text.strip()) > 100:
+                            logger.info(f"Text extracted via pdfminer: {len(cleaned_text)} chars")
+                            return cleaned_text
+                    except Exception as e:
+                        logger.warning(f"pdfminer failed: {e}")
                         
                 # 2단계: PyPDF2 fallback
-                logger.info(f"Using fallback PDF processing for {file_path}")
+                logger.info(f"Using PyPDF2 fallback for {file_path}")
                 text = await self._extract_text_from_pdf_fallback(file_path)
                 logger.info(f"Text extracted via PyPDF2: {len(text)} chars")
                 return text  # no_model에서는 OCR로 넘어가지 않음
@@ -393,17 +298,9 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"PDF processing failed: {e}")
             
-            # 에러 발생시에도 프로바이더에 따라 처리
-            provider = 'no_model'
-            if self.collection_config:
-                if isinstance(self.collection_config, dict):
-                    provider = self.collection_config.get('provider', 'no_model').lower()
-                elif hasattr(self.collection_config, 'get_env_value'):
-                    provider_value = self.collection_config.get_env_value('IMAGE_TEXT_MODEL_PROVIDER')
-                    provider = (provider_value or 'no_model').lower()
-                else:
-                    provider_attr = getattr(self.collection_config, 'IMAGE_TEXT_MODEL_PROVIDER', 'no_model')
-                    provider = str(provider_attr).lower()
+            # 에러 발생시에도 실시간 설정에 따라 처리
+            current_config = self._get_current_image_text_config()
+            provider = current_config.get('provider', 'no_model')
             
             if provider == 'no_model':
                 # no_model인 경우 기본 fallback만 시도
@@ -432,15 +329,16 @@ class DocumentProcessor:
             raise
     
     async def _extract_text_from_pdf_via_ocr(self, file_path: str) -> str:
-        """PDF를 이미지로 변환 후 기존 OCR 메서드 사용"""
+        """PDF를 이미지로 변환 후 OCR 메서드 사용 (실시간 설정)"""
         try:
             # PDF2IMAGE가 필요
             if not PDF2IMAGE_AVAILABLE:
                 logger.error("pdf2image not available for OCR processing")
                 return "[PDF 파일: pdf2image 라이브러리가 필요합니다]"
             
-            # 이미지-텍스트 변환이 비활성화된 경우
-            if not self.image_text_enabled:
+            # 실시간 설정으로 OCR 활성화 여부 확인
+            current_config = self._get_current_image_text_config()
+            if not self._is_image_text_enabled(current_config):
                 logger.warning("OCR is disabled, falling back to text extraction")
                 return await self._extract_text_from_pdf_fallback(file_path)
             
@@ -464,7 +362,7 @@ class DocumentProcessor:
                         
                         logger.info(f"Processing page {i+1}/{len(images)} via OCR")
                         
-                        # 기존 OCR 메서드 사용
+                        # OCR 메서드 사용 (실시간 설정 적용됨)
                         page_text = await self._convert_image_to_text(temp_file.name)
                         
                         if not page_text.startswith("[이미지 파일:"):  # 오류 메시지가 아닌 경우
@@ -583,7 +481,7 @@ class DocumentProcessor:
                     return para_element.text or ""
                 except:
                     return ""
-    
+   
     def _extract_table_text(self, table_element) -> str:
         """표 요소에서 텍스트 추출"""
         try:
@@ -788,9 +686,9 @@ class DocumentProcessor:
     def chunk_code_text(self, text: str, file_type: str, chunk_size: int = 1500, chunk_overlap: int = 300) -> List[str]:
         """코드 텍스트를 청크로 분할 (언어별 구문 구조를 고려한 분할)
             
-            Args:
-                text: 분할할 코드 텍스트
-                file_type: 파일 형식
+        Args:
+            text: 분할할 코드 텍스트
+            file_type: 파일 형식
             chunk_size: 청크 크기 (코드는 좀 더 큰 청크 사용)
             chunk_overlap: 청크 간 중복 크기
             
@@ -892,3 +790,33 @@ class DocumentProcessor:
                 'category': 'unknown', 
                 'supported': 'false'
             }
+
+    def get_current_config_status(self) -> Dict[str, Any]:
+        """현재 설정 상태 반환 (디버깅용)"""
+        try:
+            current_config = self._get_current_image_text_config()
+            return {
+                "provider": current_config.get('provider', 'unknown'),
+                "ocr_enabled": self._is_image_text_enabled(current_config),
+                "base_url": current_config.get('base_url', 'unknown'),
+                "model": current_config.get('model', 'unknown'),
+                "temperature": current_config.get('temperature', 'unknown'),
+                "langchain_available": LANGCHAIN_OPENAI_AVAILABLE,
+                "pdf2image_available": PDF2IMAGE_AVAILABLE
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def test(self):
+        """설정 테스트 메서드 (디버깅용)"""
+        try:
+            current_config = self._get_current_image_text_config()
+            provider = current_config.get('provider', 'no_model')
+            
+            logger.info(f"🔍 Test - Current provider: {provider}")
+            logger.info(f"🔍 Test - Current config: {current_config}")
+            logger.info(f"🔍 Test - OCR enabled: {self._is_image_text_enabled(current_config)}")
+            
+        except Exception as e:
+            logger.error(f"Error in test method: {e}")
+            raise
