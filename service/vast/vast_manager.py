@@ -31,6 +31,9 @@ class VastAIManager:
         self.db_manager = db_manager
         self.timeout = 600  # 기본 타임아웃 10분
 
+        # VastAI 실행 방식 설정 (환경에 따라 조정 가능)
+        self.vastai_prefix = ["python", "-m", "uv", "run"]
+
     def run_command(self, cmd: List[str], parse_json: bool = True, timeout: int = None) -> Dict[str, Any]:
         """CLI 명령 실행 및 결과 파싱
 
@@ -43,6 +46,10 @@ class VastAIManager:
             명령 실행 결과
         """
         timeout = timeout or self.timeout
+
+        # vastai 명령어인 경우 uv를 통해 실행하도록 수정
+        if cmd and cmd[0] == "vastai":
+            cmd = self.vastai_prefix + cmd
 
         try:
             if self.config.debug():
@@ -132,6 +139,10 @@ class VastAIManager:
     def _run_command_without_api_key(self, cmd: List[str], capture_json: bool = False) -> Any:
         """API 키 없이 명령어 실행 (API 키 관리용)"""
         try:
+            # vastai 명령어인 경우 uv를 통해 실행하도록 수정
+            if cmd and cmd[0] == "vastai":
+                cmd = self.vastai_prefix + cmd
+
             logger.debug(f"명령어 실행: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
@@ -916,6 +927,10 @@ class VastAIManager:
     def _execute_stream_command(self, cmd: List[str]) -> Dict[str, Any]:
         """스트리밍 명령 실행"""
         try:
+            # vastai 명령어인 경우 uv를 통해 실행하도록 수정
+            if cmd and cmd[0] == "vastai":
+                cmd = self.vastai_prefix + cmd
+
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
