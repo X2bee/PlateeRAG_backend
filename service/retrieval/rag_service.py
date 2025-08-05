@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+import gc
+import weakref
 
 from service.embedding import EmbeddingFactory
 from service.retrieval.document_processor import DocumentProcessor
@@ -20,23 +22,147 @@ from service.vector_db.vector_manager import VectorManager
 logger = logging.getLogger("rag-service")
 
 class RAGService:
-    """RAG 서비스의 핵심 비즈니스 로직을 담당하는 클래스"""
+    """RAG 서비스의 핵심 비즈니스 로직을 담당하는 클래스 (싱글톤)"""
+
+    _instance = None
+    _instance_ref = None  # WeakReference로 인스턴스 추적
+
+    def __new__(cls, vectordb_config, collection_config, openai_config=None):
+        """싱글톤 패턴으로 인스턴스 생성 및 기존 인스턴스 완전 정리"""
+
+        # 기존 인스턴스가 있으면 완전히 정리
+        if cls._instance is not None:
+            logger.info("Existing RAGService instance found. Performing complete cleanup...")
+            try:
+                # 기존 인스턴스 완전 정리
+                cls._cleanup_existing_instance()
+            except Exception as e:
+                logger.error(f"Error during existing instance cleanup: {e}")
+
+        # 새 인스턴스 생성
+        logger.info("Creating new RAGService instance...")
+        cls._instance = super(RAGService, cls).__new__(cls)
+        cls._instance_ref = weakref.ref(cls._instance, cls._on_instance_deleted)
+
+        return cls._instance
+
+    @classmethod
+    def _cleanup_existing_instance(cls):
+        """기존 인스턴스 완전 정리"""
+        if cls._instance is None:
+            return
+
+        try:
+            # 임베딩 클라이언트 정리
+            if hasattr(cls._instance, 'embeddings_client') and cls._instance.embeddings_client:
+                try:
+                    if hasattr(cls._instance.embeddings_client, 'cleanup'):
+                        # 비동기 cleanup이 있으면 동기적으로 호출
+                        import asyncio
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                # 이미 실행 중인 루프가 있으면 태스크로 스케줄링
+                                asyncio.create_task(cls._instance.embeddings_client.cleanup())
+                            else:
+                                loop.run_until_complete(cls._instance.embeddings_client.cleanup())
+                        except RuntimeError:
+                            # 루프가 없거나 문제가 있으면 동기적으로 처리
+                            pass
+                    cls._instance.embeddings_client = None
+                    logger.info("Embeddings client cleaned up")
+                except Exception as e:
+                    logger.warning(f"Error cleaning up embeddings client: {e}")
+
+            # 벡터 매니저 정리
+            if hasattr(cls._instance, 'vector_manager') and cls._instance.vector_manager:
+                try:
+                    if hasattr(cls._instance.vector_manager, 'cleanup'):
+                        cls._instance.vector_manager.cleanup()
+                    cls._instance.vector_manager = None
+                    logger.info("Vector manager cleaned up")
+                except Exception as e:
+                    logger.warning(f"Error cleaning up vector manager: {e}")
+
+            # 문서 프로세서 정리
+            if hasattr(cls._instance, 'document_processor') and cls._instance.document_processor:
+                try:
+                    if hasattr(cls._instance.document_processor, 'cleanup'):
+                        cls._instance.document_processor.cleanup()
+                    cls._instance.document_processor = None
+                    logger.info("Document processor cleaned up")
+                except Exception as e:
+                    logger.warning(f"Error cleaning up document processor: {e}")
+
+            # 설정 참조 정리
+            if hasattr(cls._instance, 'config'):
+                cls._instance.config = None
+            if hasattr(cls._instance, 'openai_config'):
+                cls._instance.openai_config = None
+
+            logger.info("Existing RAGService instance completely cleaned up")
+
+        except Exception as e:
+            logger.error(f"Error during RAGService cleanup: {e}")
+        finally:
+            # 가비지 컬렉션 강제 실행
+            cls._instance = None
+            cls._instance_ref = None
+            gc.collect()
+            logger.info("Garbage collection completed after RAGService cleanup")
+
+    @classmethod
+    def _on_instance_deleted(cls, ref):
+        """인스턴스가 삭제될 때 호출되는 콜백"""
+        logger.info("RAGService instance has been garbage collected")
+        cls._instance = None
+        cls._instance_ref = None
 
     def __init__(self, vectordb_config, collection_config, openai_config=None):
         """RAGService 초기화
 
         Args:
             vectordb_config: 벡터 DB 설정 객체
+            collection_config: 컬렉션 설정 객체
             openai_config: OpenAI 설정 객체 (하위 호환성)
         """
+        # 이미 초기화된 인스턴스인지 확인
+        if hasattr(self, '_initialized') and self._initialized:
+            logger.info("RAGService instance already initialized, skipping...")
+            return
+
+        logger.info("Initializing RAGService components...")
+
         self.config = vectordb_config
         self.openai_config = openai_config
+
+        # 컴포넌트 초기화
         self.document_processor = DocumentProcessor(collection_config)
         self.document_processor.test()
+
         self.vector_manager = VectorManager(vectordb_config)
         self.embeddings_client = None
 
         self._initialize_embeddings()
+
+        # 초기화 완료 마킹
+        self._initialized = True
+        logger.info("RAGService initialization completed")
+
+    def cleanup(self):
+        """현재 인스턴스 정리 (외부에서 호출 가능)"""
+        logger.info("Manual RAGService cleanup requested")
+        self._cleanup_existing_instance()
+
+    @classmethod
+    def get_instance(cls):
+        """현재 인스턴스 반환 (있는 경우)"""
+        return cls._instance
+
+    @classmethod
+    def is_initialized(cls):
+        """인스턴스가 초기화되어 있는지 확인"""
+        return cls._instance is not None and hasattr(cls._instance, '_initialized') and cls._instance._initialized
 
     def _config_refresh(self):
         """설정 갱신 메서드 (필요시 호출)"""

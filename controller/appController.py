@@ -18,22 +18,16 @@ router = APIRouter(prefix="/app", tags=["app"])
 
 def get_rag_service(request: Request) -> RAGService:
     """RAG 서비스 의존성 주입"""
-    config_composer = request.app.state.config_composer
-    if config_composer:
-        vectordb_config = config_composer.get_config_by_category_name("vectordb")
-        openai_config = config_composer.get_config_by_category_name("openai")
-        collection_config = config_composer.get_config_by_category_name("collection")
-
-        return RAGService(vectordb_config, collection_config, openai_config)
+    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
+        return request.app.state.rag_service
     else:
-        raise HTTPException(status_code=500, detail="Configuration not available")
+        raise HTTPException(status_code=500, detail="RAG service not initialized")
 
 def get_config_composer(request: Request):
     """request.app.state에서 config_composer 가져오기"""
     if hasattr(request.app.state, 'config_composer') and request.app.state.config_composer:
         return request.app.state.config_composer
     else:
-        # app.state에 없으면 임시로 import해서 사용
         from config.config_composer import config_composer
         return config_composer
 
@@ -117,31 +111,52 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
         # 3. config_composer의 all_configs도 업데이트 (이미 참조로 연결되어 있지만 명시적으로)
         config_composer.all_configs[config_name] = config_obj
 
+        logger.info("Successfully updated config '%s': %s -> %s", config_name, old_value, config_obj.value)
+
         # 4. 관련 서비스들에게 설정 변경 알림 (필요시 재초기화)
         services_refreshed = []
         try:
-            # RAG 관련 설정이 변경된 경우 RAG 서비스 갱신
-            if any(keyword in config_name.lower() for keyword in ['qdrant', 'vector', 'embedding', 'openai']):
-                if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
-                    # RAG 서비스의 설정 참조 갱신
-                    if 'vectordb' in request.app.state.config:
-                        request.app.state.rag_service.config = request.app.state.config['vectordb']
-                    if 'openai' in request.app.state.config:
-                        request.app.state.rag_service.openai_config = request.app.state.config['openai']
-                    services_refreshed.append("rag_service")
-                    logger.info("Refreshed RAG service configuration")
+            # RAG 관련 설정이 변경된 경우 RAG 서비스 재초기화
+            if any(keyword in config_name.lower() for keyword in ['qdrant','embedding', 'vector']):
+                rag_service = get_rag_service(request)
+                logger.info(f"Reinitializing RAG services due to config change: {config_name}")
 
-                # 벡터 매니저 설정 갱신
-                if hasattr(request.app.state, 'vector_manager') and request.app.state.vector_manager:
-                    if 'vectordb' in request.app.state.config:
-                        request.app.state.vector_manager.config = request.app.state.config['vectordb']
-                    services_refreshed.append("vector_manager")
-                    logger.info("Refreshed vector manager configuration")
+                try:
+                    # RAG 서비스 재초기화 (main.py와 동일한 로직)
+                    from service.retrieval import RAGService
+
+                    # 기존 인스턴스가 있으면 완전히 정리하고 새로 생성 (싱글톤 패턴)
+                    logger.info("Creating new RAGService instance (existing instance will be cleaned up automatically)")
+
+                    # 새로운 설정으로 RAG 서비스 초기화
+                    vectordb_config = config_composer.get_config_by_category_name("vectordb")
+                    collection_config = config_composer.get_config_by_category_name("collection")
+                    openai_config = config_composer.get_config_by_category_name("openai")
+
+                    # 싱글톤 패턴으로 새 인스턴스 생성 (기존 인스턴스 자동 정리)
+                    rag_service = RAGService(vectordb_config, collection_config, openai_config)
+
+                    # 개별 서비스들을 app.state에 등록 (main.py와 동일)
+                    request.app.state.rag_service = rag_service
+                    request.app.state.vector_manager = rag_service.vector_manager
+                    request.app.state.embedding_client = rag_service.embeddings_client
+                    request.app.state.document_processor = rag_service.document_processor
+
+                    services_refreshed.extend(["rag_service", "vector_manager", "embedding_client", "document_processor"])
+                    logger.info("Successfully reinitialized RAG services with new configuration")
+
+                except Exception as rag_error:
+                    logger.error(f"Failed to reinitialize RAG services: {rag_error}")
+                    # 실패 시 기존 서비스들을 None으로 설정
+                    request.app.state.rag_service = None
+                    request.app.state.vector_manager = None
+                    request.app.state.embedding_client = None
+                    request.app.state.document_processor = None
+                    services_refreshed.append("rag_services_failed")
 
         except (AttributeError, KeyError) as service_error:
             logger.warning("Failed to refresh some services after config update: %s", service_error)
 
-        logger.info("Successfully updated config '%s': %s -> %s", config_name, old_value, config_obj.value)
 
         return {
             "message": f"Config '{config_name}' updated successfully",

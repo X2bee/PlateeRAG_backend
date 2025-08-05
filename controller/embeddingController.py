@@ -7,10 +7,8 @@ Embedding 컨트롤러
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-import logging
-
-from service.retrieval import RAGService
 from service.embedding import EmbeddingFactory
+import logging
 
 logger = logging.getLogger("embedding-controller")
 router = APIRouter(prefix="/api/embedding", tags=["embedding"])
@@ -76,9 +74,9 @@ async def get_embedding_status(request: Request):
     try:
         rag_service = get_rag_service(request)
         embedding_client = get_embedding_client(request)
-        
+
         status_info = rag_service.get_embedding_status()
-        
+
         # 실제 사용 가능성 체크 (비동기)
         if embedding_client:
             try:
@@ -87,7 +85,7 @@ async def get_embedding_status(request: Request):
             except Exception as e:
                 status_info["available"] = False
                 status_info["availability_error"] = str(e)
-        
+
         return status_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get embedding status: {str(e)}")
@@ -98,11 +96,11 @@ async def test_embedding_query(request: Request, test_request: EmbeddingTestRequ
     try:
         rag_service = get_rag_service(request)
         config = get_config(request)
-        
+
         # 자동 복구 로직이 포함된 임베딩 생성 (debug=True로 상세 로그 출력)
         print(rag_service)
         embedding = await rag_service.generate_query_embedding(test_request.query_text, debug=True)
-        
+
         return {
             "query_text": test_request.query_text,
             "embedding_dimension": len(embedding),
@@ -118,9 +116,9 @@ async def reload_embedding_client(request: Request):
     """임베딩 클라이언트 강제 재로드"""
     try:
         rag_service = get_rag_service(request)
-        
+
         success = await rag_service.reload_embeddings_client()
-        
+
         if success:
             provider_info = rag_service.embeddings_client.get_provider_info()
             return {
@@ -145,15 +143,15 @@ async def switch_embedding_provider(request: Request, switch_request: EmbeddingP
         rag_service = get_rag_service(request)
         config = get_config(request)
         new_provider = switch_request.new_provider
-        
+
         # OpenAI 설정과 VectorDB 설정 연결 확인 및 재설정
         if "vectordb" in config and "openai" in config:
             config["vectordb"].set_openai_config(config["openai"])
-        
+
         # 제공자 변경 시도
         old_provider = config["vectordb"].EMBEDDING_PROVIDER.value
         success = config["vectordb"].switch_embedding_provider(new_provider)
-        
+
         if not success:
             # 실패 원인을 더 자세히 분석
             error_msg = f"Cannot switch to provider '{new_provider}'. "
@@ -167,12 +165,12 @@ async def switch_embedding_provider(request: Request, switch_request: EmbeddingP
                 custom_url = config["vectordb"].CUSTOM_EMBEDDING_URL.value
                 if not custom_url or custom_url == "http://localhost:8000/v1":
                     error_msg += "Custom HTTP URL is not properly configured."
-            
+
             raise HTTPException(status_code=400, detail=error_msg)
-        
+
         # RAG 서비스의 임베딩 클라이언트 재로드
         reload_success = await rag_service.reload_embeddings_client()
-        
+
         if reload_success:
             provider_info = rag_service.embeddings_client.get_provider_info()
             return {
@@ -186,9 +184,9 @@ async def switch_embedding_provider(request: Request, switch_request: EmbeddingP
             # 실패한 경우 원래 제공자로 롤백
             config["vectordb"].switch_embedding_provider(old_provider)
             await rag_service.reload_embeddings_client()
-            
+
             raise HTTPException(
-                status_code=500, 
+                status_code=500,
                 detail=f"Failed to initialize new provider '{new_provider}'. Rolled back to '{old_provider}'"
             )
     except HTTPException:
@@ -202,22 +200,22 @@ async def auto_switch_embedding_provider(request: Request):
     try:
         rag_service = get_rag_service(request)
         config = get_config(request)
-        
+
         # OpenAI 설정과 VectorDB 설정 연결 확인 및 재설정
         if "vectordb" in config and "openai" in config:
             config["vectordb"].set_openai_config(config["openai"])
-        
+
         old_provider = config["vectordb"].EMBEDDING_PROVIDER.value
-        
+
         # 최적의 제공자로 자동 전환 시도
         switched = config["vectordb"].check_and_switch_to_best_provider()
-        
+
         if switched:
             new_provider = config["vectordb"].EMBEDDING_PROVIDER.value
-            
+
             # 클라이언트 재로드
             reload_success = await rag_service.reload_embeddings_client()
-            
+
             if reload_success:
                 provider_info = rag_service.embeddings_client.get_provider_info()
                 return {
@@ -232,7 +230,7 @@ async def auto_switch_embedding_provider(request: Request):
                 # 실패한 경우 원래 제공자로 롤백
                 config["vectordb"].switch_embedding_provider(old_provider)
                 await rag_service.reload_embeddings_client()
-                
+
                 return {
                     "success": False,
                     "switched": False,
@@ -247,7 +245,7 @@ async def auto_switch_embedding_provider(request: Request):
                 "message": f"Current provider '{old_provider}' is already optimal",
                 "current_provider": old_provider
             }
-            
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to auto-switch embedding provider: {str(e)}")
 
@@ -257,7 +255,7 @@ async def get_embedding_config_status(request: Request):
     try:
         rag_service = get_rag_service(request)
         config_status = rag_service.config.get_embedding_provider_status()
-        
+
         # 현재 클라이언트 상태 추가
         if rag_service.embeddings_client:
             try:
@@ -279,7 +277,7 @@ async def get_embedding_config_status(request: Request):
                 "client_initialized": False,
                 "client_available": False
             })
-        
+
         return config_status
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get config status: {str(e)}")
@@ -290,7 +288,7 @@ async def get_embedding_debug_info(request: Request):
     try:
         rag_service = get_rag_service(request)
         vectordb_config = rag_service.config
-        
+
         debug_info = {
             "current_provider": vectordb_config.EMBEDDING_PROVIDER.value,
             "auto_detect_dimension": vectordb_config.AUTO_DETECT_EMBEDDING_DIM.value,
@@ -314,7 +312,7 @@ async def get_embedding_debug_info(request: Request):
                 }
             }
         }
-        
+
         # 의존성 확인
         try:
             import sentence_transformers
@@ -327,7 +325,7 @@ async def get_embedding_debug_info(request: Request):
                 "available": False,
                 "error": str(e)
             }
-        
+
         try:
             import openai
             debug_info["dependencies"]["openai"] = {
@@ -339,7 +337,7 @@ async def get_embedding_debug_info(request: Request):
                 "available": False,
                 "error": str(e)
             }
-        
+
         try:
             import aiohttp
             debug_info["dependencies"]["aiohttp"] = {
@@ -351,17 +349,17 @@ async def get_embedding_debug_info(request: Request):
                 "available": False,
                 "error": str(e)
             }
-        
+
         # 클라이언트 상세 정보
         if rag_service.embeddings_client:
             try:
                 client_info = rag_service.embeddings_client.get_provider_info()
                 debug_info["client_info"] = client_info
-                
+
                 # 기본 사용 가능성 체크
                 # basic_available = rag_service._check_client_basic_availability(rag_service.embeddings_client)
                 # debug_info["basic_availability"] = basic_available
-                
+
                 # 실제 사용 가능성 체크 (비동기)
                 try:
                     full_available = await rag_service.embeddings_client.is_available()
@@ -369,12 +367,12 @@ async def get_embedding_debug_info(request: Request):
                 except Exception as e:
                     debug_info["full_availability"] = False
                     debug_info["availability_error"] = str(e)
-                    
+
             except Exception as e:
                 debug_info["client_error"] = str(e)
-        
+
         return debug_info
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get debug info: {str(e)}")
 
@@ -383,23 +381,23 @@ async def embedding_health_check(request: Request):
     """임베딩 시스템 상태 확인"""
     try:
         rag_service = get_rag_service(request)
-        
+
         health_status = {
             "embeddings_client": bool(rag_service.embeddings_client),
             "embedding_provider": rag_service.config.EMBEDDING_PROVIDER.value
         }
-        
+
         # 임베딩 클라이언트 상태 상세 확인
         if rag_service.embeddings_client:
             try:
                 is_available = await rag_service.embeddings_client.is_available()
                 health_status["embeddings_status"] = "available" if is_available else "unavailable"
                 health_status["embeddings_available"] = is_available
-                
+
                 # 제공자 정보 추가
                 provider_info = rag_service.embeddings_client.get_provider_info()
                 health_status["provider_info"] = provider_info
-                
+
             except Exception as e:
                 health_status["embeddings_status"] = "error"
                 health_status["embeddings_error"] = str(e)
@@ -407,9 +405,9 @@ async def embedding_health_check(request: Request):
         else:
             health_status["embeddings_status"] = "not_initialized"
             health_status["embeddings_available"] = False
-        
+
         overall_status = "healthy" if health_status.get("embeddings_available", False) else "unhealthy"
-        
+
         return {
             "status": overall_status,
             "message": "Embedding system status check",
