@@ -53,6 +53,12 @@ class CollectionConfig(BaseConfig):
             default_value="auto"
         )
 
+        self.IMAGE_TEXT_BATCH_SIZE = self.create_persistent_config(
+            env_name="IMAGE_TEXT_BATCH_SIZE",
+            config_path="collection.image_test_batch_size",
+            default_value=1
+        )
+
         # 제공자 검증
         valid_providers = ["openai", "vLLM", "no_model"]
         if self.IMAGE_TEXT_MODEL_PROVIDER.value not in valid_providers:
@@ -87,6 +93,7 @@ class CollectionConfig(BaseConfig):
             "model_name": self.IMAGE_TEXT_MODEL_NAME.value,
             "temperature": self.IMAGE_TEXT_TEMPERATURE.value,
             "image_quality": self.IMAGE_QUALITY.value,
+            "image_text_batch_size" : self.IMAGE_TEXT_BATCH_SIZE.value,
             "supported_formats": self.get_supported_formats(),
             "max_image_size_mb": self.get_max_image_size()
         }
