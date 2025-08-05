@@ -93,7 +93,11 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
         # 1. DB에 저장
         config_obj.save()
 
-        # 2. app.state의 config도 업데이트 (메모리에서 실행 중인 설정들 동기화)
+        # 2. config_composer의 all_configs 업데이트
+        config_composer.update_config_by_name(config_name, config_obj.value)
+        logger.info("Updated Config Composer '%s': %s -> %s", config_name, old_value, config_composer.get_config_by_name(config_name).value)
+
+        # 3. app.state의 config도 업데이트 (메모리에서 실행 중인 설정들 동기화)
         if hasattr(request.app.state, 'config') and request.app.state.config:
             # config 카테고리별로 업데이트된 값 반영
             for category_name, category_config in request.app.state.config.items():
@@ -101,15 +105,12 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
                     # 해당 카테고리의 설정 객체도 같은 값으로 업데이트
                     setattr(category_config, config_name, config_obj)
                     logger.info("Updated app.state config for category '%s': %s = %s",
-                              category_name, config_name, config_obj.value)
+                            category_name, config_name, config_obj.value)
 
             # all_configs도 업데이트
             if "all_configs" in request.app.state.config:
                 request.app.state.config["all_configs"][config_name] = config_obj
                 logger.info("Updated app.state.all_configs: %s = %s", config_name, config_obj.value)
-
-        # 3. config_composer의 all_configs도 업데이트 (이미 참조로 연결되어 있지만 명시적으로)
-        config_composer.all_configs[config_name] = config_obj
 
         logger.info("Successfully updated config '%s': %s -> %s", config_name, old_value, config_obj.value)
 
