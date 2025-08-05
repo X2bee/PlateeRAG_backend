@@ -20,6 +20,35 @@ from controller.workflow.model import WorkflowRequest
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/api/workflow/deploy", tags=["workflow"])
 
+@router.get("/load/{user_id}/{workflow_id}")
+async def load_workflow(request: Request, user_id: str, workflow_id: str):
+    """
+    특정 workflow를 로드합니다.
+    """
+    try:
+        user_id = user_id
+
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        download_path_id = os.path.join(downloads_path, user_id)
+
+        filename = f"{workflow_id}.json"
+        file_path = os.path.join(download_path_id, filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            workflow_data = json.load(f)
+
+        logger.info(f"Workflow loaded successfully: {filename}")
+        return JSONResponse(content=workflow_data)
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+    except Exception as e:
+        logger.error(f"Error loading workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to load workflow: {str(e)}")
+
 @router.post("/execute/based_id", response_model=Dict[str, Any])
 async def execute_workflow_with_id(request: Request, request_body: WorkflowRequest):
     """
