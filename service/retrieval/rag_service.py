@@ -22,7 +22,6 @@ from service.vector_db.vector_manager import VectorManager
 logger = logging.getLogger("rag-service")
 
 class RAGService:
-    """RAG 서비스의 핵심 비즈니스 로직을 담당하는 클래스 (싱글톤)"""
 
     _instance = None
     _instance_ref = None  # WeakReference로 인스턴스 추적

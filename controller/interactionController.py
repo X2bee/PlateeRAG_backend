@@ -61,8 +61,9 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
         if interaction_id:
             where_conditions["interaction_id"] = interaction_id
 
-        if workflow_id:
-            where_conditions["workflow_id"] = workflow_id
+        # 로직 제거
+        # if workflow_id:
+        #     where_conditions["workflow_id"] = workflow_id
 
         result = app_db.find_by_condition(
             ExecutionMeta,

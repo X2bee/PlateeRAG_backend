@@ -26,7 +26,7 @@ class QdrantRetrievalTool(Node):
     ]
 
     parameters = [
-        {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "도구의 명칭", "required": True},
+        {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "tool_name", "required": True},
         {"id": "description", "name": "Description", "type": "STR", "value": "주어진 질문에 대해 검색을 수행하는 Tool입니다.", "required": True},
         {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},

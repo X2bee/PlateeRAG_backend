@@ -90,6 +90,7 @@ class AgentOpenAIStreamNode(Node):
 
         if llm_provider == "openai":
             api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
+            print(api_key)
             if not api_key:
                 logger.error(f"[CHAT_RESPONSE] OpenAI API 키가 설정되지 않았습니다")
                 return "OpenAI API 키가 설정되지 않았습니다."
