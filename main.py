@@ -6,7 +6,8 @@ import os
 from contextlib import asynccontextmanager
 from controller.nodeController import router as nodeRouter
 from controller.configController import router as configRouter
-from controller.workflowController import router as workflowController
+from controller.workflow.workflowController import router as workflowController
+from controller.workflow.workflowDeployController import router as workflowDeployController
 from controller.nodeStateController import router as nodeStateRouter
 from controller.performanceController import router as performanceRouter
 from controller.embeddingController import router as embeddingRouter
@@ -151,6 +152,7 @@ app.include_router(nodeRouter)
 app.include_router(authRouter)
 app.include_router(configRouter)
 app.include_router(workflowController)
+app.include_router(workflowDeployController)
 app.include_router(nodeStateRouter)
 app.include_router(performanceRouter)
 app.include_router(embeddingRouter)
