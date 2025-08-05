@@ -10,14 +10,7 @@ class PrintAnyStreamNode(Node):
     tags = ["output", "print", "display", "debug", "end_node", "utility", "stream", "any_type"]
 
     inputs = [
-        {
-            "id": "stream",
-            "name": "Stream",
-            "type": "STREAM STR",
-            "multi": False,
-            "required": True,
-            "stream": True  # 스트리밍 입력 포트임을 명시
-        },
+        {"id": "stream", "name": "Stream", "type": "STREAM STR", "multi": False, "required": True, "stream": True},
     ]
 
     def execute(self, stream: Generator[Any, None, None]) -> Generator[Any, None, None]:

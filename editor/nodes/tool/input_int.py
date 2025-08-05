@@ -10,22 +10,10 @@ class InputIntegersNode(Node):
 
     inputs = []
     outputs = [
-        {
-            "id": "result",
-            "name": "Result",
-            "type": "INT"
-        },
+        {"id": "result", "name": "Result", "type": "INT"},
     ]
     parameters = [
-        {
-            "id": "input_int",
-            "name": "Integer",
-            "type": "INT",
-            "value": 0,
-            "step": 1,
-            "min": -2147483648,
-            "max": 2147483647
-        },
+        {"id": "input_int", "name": "Integer", "type": "INT", "value": 0, "step": 1, "min": -2147483648, "max": 2147483647},
     ]
 
     def execute(self, input_int: int) -> int:

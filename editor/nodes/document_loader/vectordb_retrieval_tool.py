@@ -22,60 +22,15 @@ class QdrantRetrievalTool(Node):
 
     inputs = []
     outputs = [
-        {
-            "id": "tools",
-            "name": "Tools",
-            "type": "TOOL"
-        },
+        {"id": "tools", "name": "Tools", "type": "TOOL"},
     ]
 
     parameters = [
-        {
-            "id": "tool_name",
-            "name": "Tool Name",
-            "type": "STR",
-            "value": "도구의 명칭",
-            "required": True,
-        },
-        {
-            "id": "description",
-            "name": "Description",
-            "type": "STR",
-            "value": "주어진 질문에 대해 검색을 수행하는 Tool입니다.",
-            "required": True,
-        },
-        {
-            "id": "collection_name",
-            "name": "Collection Name",
-            "type": "STR",
-            "value": "Select Collection",
-            "required": True,
-            "is_api": True,
-            "api_name": "api_collection",
-            "options": [],
-        },
-        {
-            "id": "top_k",
-            "name": "Top K Results",
-            "type": "INT",
-            "value": 4,
-            "required": False,
-            "optional": True,
-            "min": 1,
-            "max": 10,
-            "step": 1
-        },
-        {
-            "id": "score_threshold",
-            "name": "Score Threshold",
-            "type": "FLOAT",
-            "value": 0.2,
-            "required": False,
-            "optional": True,
-            "min": 0.0,
-            "max": 1.0,
-            "step": 0.1
-        }
+        {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "도구의 명칭", "required": True},
+        {"id": "description", "name": "Description", "type": "STR", "value": "주어진 질문에 대해 검색을 수행하는 Tool입니다.", "required": True},
+        {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
+        {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
+        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1}
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:

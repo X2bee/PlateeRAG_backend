@@ -117,8 +117,8 @@
       "id": "default_agents",
       "data": {
         "functionId": "agents",
-        "id": "agents/openai_stream_v2",
-        "nodeName": "Agent OpenAI Stream V2",
+        "id": "agents/openai_stream",
+        "nodeName": "Agent OpenAI Stream",
         "description": "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드",
         "tags": [
           "agent",
@@ -194,12 +194,23 @@
           {
             "id": "max_tokens",
             "name": "Max Tokens",
-            "type": "INTEGER",
+            "type": "INT",
             "value": 4096,
             "required": false,
             "optional": true,
             "min": 1,
             "max": 8192,
+            "step": 1
+          },
+          {
+            "id": "n_messages",
+            "name": "Max Memory",
+            "type": "INT",
+            "value": 3,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 10,
             "step": 1
           },
           {

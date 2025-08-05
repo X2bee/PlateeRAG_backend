@@ -10,19 +10,10 @@ class InputStringNode(Node):
 
     inputs = []
     outputs = [
-        {
-            "id": "result",
-            "name": "Result",
-            "type": "STR"
-        },
+        {"id": "result", "name": "Result", "type": "STR"},
     ]
     parameters = [
-        {
-            "id": "input_str",
-            "name": "String",
-            "type": "STR",
-            "value": "",
-        },
+        {"id": "input_str", "name": "String", "type": "STR", "value": ""},
     ]
 
     def execute(self, input_str: str) -> str:

@@ -12,57 +12,22 @@ class ChatOpenAINode(Node):
     tags = ["openai", "gpt", "chat", "ai", "language_model", "conversation", "text_generation"]
 
     inputs = [
-        {
-            "id": "text",
-            "name": "Text",
-            "type": "STR",
-            "multi": False,
-            "required": True
-        },
+        {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
     ]
     outputs = [
-        {
-            "id": "result",
-            "name": "Result",
-            "type": "STR"
-        },
+        {"id": "result", "name": "Result", "type": "STR"},
     ]
     parameters = [
         {
-            "id": "model",
-            "name": "Model",
-            "type": "STR",
-            "value": "gpt-3.5-turbo",
-            "required": True,
-            "optional": False,
+            "id": "model", "name": "Model", "type": "STR", "value": "gpt-3.5-turbo", "required": True, "optional": False,
             "options": [
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
                 {"value": "gpt-4", "label": "GPT-4"},
                 {"value": "gpt-4o", "label": "GPT-4o"}
             ]
         },
-        {
-            "id": "temperature",
-            "name": "Temperature",
-            "type": "FLOAT",
-            "value": 0.7,
-            "required": False,
-            "optional": True,  # Advanced 모드에서만 표시
-            "min": 0.0,
-            "max": 2.0,
-            "step": 0.1
-        },
-        {
-            "id": "max_tokens",
-            "name": "Max Tokens",
-            "type": "INTEGER",
-            "value": 1000,
-            "required": False,
-            "optional": True,  # Advanced 모드에서만 표시
-            "min": 1,
-            "max": 4000,
-            "step": 1
-        }
+        {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
+        {"id": "max_tokens", "name": "Max Tokens", "type": "INTEGER", "value": 1000, "required": False, "optional": True, "min": 1, "max": 4000, "step": 1}
     ]
 
 

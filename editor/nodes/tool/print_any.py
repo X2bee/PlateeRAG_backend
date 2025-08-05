@@ -9,13 +9,7 @@ class PrintAnyNode(Node):
     tags = ["output", "print", "display", "debug", "end_node", "utility", "any_type"]
 
     inputs = [
-        {
-            "id": "input_print",
-            "name": "Print",
-            "type": "ANY",
-            "multi": False,
-            "required": True
-        },
+        {"id": "input_print", "name": "Print", "type": "ANY", "multi": False, "required": True},
     ]
 
     def execute(self, input_print: any) -> int:

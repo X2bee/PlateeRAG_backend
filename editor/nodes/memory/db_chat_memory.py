@@ -16,19 +16,10 @@ class DBMemoryNode(Node):
 
     inputs = []
     outputs = [
-        {
-            "id": "memory",
-            "name": "Memory",
-            "type": "OBJECT"
-        },
+        {"id": "memory", "name": "Memory", "type": "OBJECT"},
     ]
     parameters = [
-        {
-            "id": "interaction_id",
-            "name": "Interaction ID",
-            "type": "STR",
-            "value": "",
-        },
+        {"id": "interaction_id", "name": "Interaction ID", "type": "STR", "value": ""},
     ]
 
     def _load_messages_from_db(self, interaction_id: str) -> List[Dict[str, str]]:

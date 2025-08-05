@@ -1,2 +1,3 @@
-from .agent_openai import AgentOpenAINode
-from .agent_openai_v2 import AgentOpenAINodeV2
+from .agent_openai import AgentOpenAINode as AgentOpenAINode
+from .agent_openai_stream import AgentOpenAIStreamNode
+from .agent_vllm import AgentVLLMNode as AgentVLLMNode
