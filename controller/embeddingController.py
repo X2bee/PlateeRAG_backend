@@ -100,7 +100,6 @@ async def test_embedding_query(request: Request, test_request: EmbeddingTestRequ
         config = get_config(request)
         
         # 자동 복구 로직이 포함된 임베딩 생성 (debug=True로 상세 로그 출력)
-        print(rag_service)
         embedding = await rag_service.generate_query_embedding(test_request.query_text, debug=True)
         
         return {
