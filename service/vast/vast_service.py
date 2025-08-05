@@ -69,6 +69,11 @@ class VastService:
         self.db_manager = db_manager
         self.vast_manager = VastAIManager(config, db_manager)
         self.templates = self._load_templates()
+        self.status_change_callback = None  # SSE 브로드캐스트용 콜백
+
+    def set_status_change_callback(self, callback):
+        """상태 변경 콜백 설정"""
+        self.status_change_callback = callback
 
     def _load_templates(self) -> Dict[str, InstanceTemplate]:
         """인스턴스 템플릿 로드"""
@@ -217,6 +222,15 @@ class VastService:
 
                 if result:
                     logger.info(f"인스턴스 정보 업데이트 완료: {instance_id}")
+
+                    # 상태 변경 시 콜백 호출
+                    if self.status_change_callback and "status" in updates:
+                        try:
+                            # 동기 콜백으로 호출하여 이벤트 루프 문제 해결
+                            self.status_change_callback(instance_id, updates["status"])
+                        except Exception as e:
+                            logger.warning(f"상태 변경 콜백 호출 실패: {e}")
+
                     return True
                 else:
                     logger.error(f"인스턴스 정보 업데이트 실패: {instance_id}")
@@ -428,7 +442,7 @@ class VastService:
         logger.info(f"vLLM 인스턴스 생성 완료: {instance_id}")
         return instance_id
 
-    def wait_and_setup_instance(self, instance_id: str) -> bool:
+    def wait_and_setup_instance(self, instance_id: str, is_valid_model:bool = False) -> bool:
         """인스턴스 실행 대기 및 설정"""
         logger.info(f"인스턴스 {instance_id} 설정 시작")
 
@@ -481,10 +495,33 @@ class VastService:
         logger.info(f"인스턴스 {instance_id}의 포트 매핑 정보 수집 중...")
         port_update_success = self.update_instance_port_mappings(instance_id)
 
-        if port_update_success:
+        # 최종 상태 결정 로직
+        if is_valid_model and port_update_success:
+            # 유효한 모델이고 포트 업데이트 성공 시 VLLM 헬스체크 수행
+            db_instance = self.get_instance_from_db(instance_id)
+            port_mappings = db_instance.get_port_mappings_dict()
+            health_url = f"http://{port_mappings.get('12434', {}).get('external_ip')}:{port_mappings.get('12434', {}).get('external_port')}/health"
+
+            if self.vast_manager.wait_for_vllm_running(health_url):
+                self._update_instance(instance_id, {"status": "running_vllm"})
+                logger.info(f"인스턴스 {instance_id} - VLLM 서비스 정상 동작 확인")
+            else:
+                self._update_instance(instance_id, {"status": "running"})
+                logger.info(f"인스턴스 {instance_id} - VLLM 헬스체크 실패, 기본 실행 상태로 설정")
+
+        elif is_valid_model and not port_update_success:
+            # 유효한 모델이지만 포트 업데이트 실패 시
+            self._update_instance(instance_id, {"status": "running"})
+            logger.warning(f"인스턴스 {instance_id} - 포트 매핑 실패로 기본 실행 상태로 설정")
+
+        elif not is_valid_model and port_update_success:
+            # 모델이 유효하지 않지만 포트 업데이트 성공 시
             self._update_instance(instance_id, {"status": "running_vllm"})
+            logger.info(f"인스턴스 {instance_id} - 포트 매핑 성공, VLLM 상태로 설정")
+
         else:
             self._update_instance(instance_id, {"status": "running"})
+            logger.info(f"인스턴스 {instance_id} - 기본 실행 상태로 설정")
 
         execution_time = time.time() - start_time
         self._log_execution(

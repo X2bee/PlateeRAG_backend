@@ -20,9 +20,11 @@ class DBMemoryNode(Node):
     ]
     parameters = [
         {"id": "interaction_id", "name": "Interaction ID", "type": "STR", "value": ""},
+        {"id": "include_thinking", "name": "Include Thinking", "type": "BOOL", "value": False, "required": False, "optional": True},
+
     ]
 
-    def _load_messages_from_db(self, interaction_id: str) -> List[Dict[str, str]]:
+    def _load_messages_from_db(self, interaction_id: str, include_thinking: bool = False) -> List[Dict[str, str]]:
         """DB에서 대화 기록을 로드하여 메시지 리스트로 반환"""
         db_manager = AppServiceManager.get_db_manager()
         if not db_manager or interaction_id == "default":
@@ -49,12 +51,12 @@ class DBMemoryNode(Node):
                         output_data = json.loads(row['output_data']) if row['output_data'] else {}
 
                         if input_data:
-                            user_content = self._extract_content(input_data)
+                            user_content = self._extract_content(input_data, include_thinking)
                             if user_content:
                                 messages.append({"role": "user", "content": user_content})
 
                         if output_data:
-                            ai_content = self._extract_content(output_data)
+                            ai_content = self._extract_content(output_data, include_thinking)
                             if ai_content:
                                 messages.append({"role": "ai", "content": ai_content})
 
@@ -67,21 +69,33 @@ class DBMemoryNode(Node):
             logger.error(f"Error loading chat history: {e}")
             return []
 
-    def _extract_content(self, data) -> Optional[str]:
+    def _extract_content(self, data, include_thinking: bool = False) -> Optional[str]:
         """데이터에서 텍스트 내용 추출"""
         if isinstance(data, str):
-            return data
+            content = data
         elif isinstance(data, dict):
             if 'result' in data:
                 result = data['result']
                 if isinstance(result, str):
-                    return result
+                    content = result
                 elif isinstance(result, dict):
-                    return self._extract_content(result)
+                    return self._extract_content(result, include_thinking)
+                else:
+                    return None
             elif 'inputs' in data and data['inputs']:
                 first_input = list(data['inputs'].values())[0]
-                return str(first_input) if first_input else None
-        return None
+                content = str(first_input) if first_input else None
+            else:
+                return None
+        else:
+            return None
+
+        if content and not include_thinking:
+            import re
+            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+            content = content.strip()
+
+        return content if content else None
 
     def load_memory_from_db(self, db_messages: List[Dict[str, str]]):
         """
@@ -118,7 +132,7 @@ class DBMemoryNode(Node):
             logger.error(f"Error creating memory object: {e}")
             return None
 
-    def execute(self, interaction_id: str):
+    def execute(self, interaction_id: str, include_thinking: bool = False):
         """
         DB에서 대화 기록을 로드하여 ConversationBufferMemory 객체를 반환합니다.
 
@@ -130,7 +144,7 @@ class DBMemoryNode(Node):
         """
         try:
             # DB에서 메시지 로드
-            db_messages = self._load_messages_from_db(interaction_id)
+            db_messages = self._load_messages_from_db(interaction_id, include_thinking)
 
             if not db_messages:
                 logger.info(f"No chat history found for interaction_id: {interaction_id}")

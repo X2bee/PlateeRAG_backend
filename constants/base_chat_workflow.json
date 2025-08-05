@@ -34,6 +34,14 @@
             "name": "Interaction ID",
             "type": "STR",
             "value": ""
+          },
+          {
+            "id": "include_thinking",
+            "name": "Include Thinking",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
           }
         ]
       },

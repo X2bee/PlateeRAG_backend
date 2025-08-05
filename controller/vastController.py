@@ -5,17 +5,22 @@ VastAI 클라우드 GPU 인스턴스의 검색, 생성, 관리 및 모니터링�
 """
 
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import logging
 from typing import Dict, Any, Optional, List, Literal
 from enum import Enum
 import json
+import asyncio
 from urllib import request as urllib_request
 
 from service.vast.vast_service import VastService
 
 router = APIRouter(prefix="/api/vast", tags=["vastAI"])
 logger = logging.getLogger("vast-controller")
+
+# SSE 연결 관리를 위한 전역 변수
+sse_connections: Dict[str, List[asyncio.Queue]] = {}
 
 # ========== Enums ==========
 class SortBy(str, Enum):
@@ -177,7 +182,12 @@ def get_vast_service(request: Request) -> VastService:
         config_composer = request.app.state.config_composer
         vast_config = config_composer.get_config_by_category_name("vast")
         db_manager = request.app.state.app_db
-        return VastService(vast_config, db_manager)
+        service = VastService(vast_config, db_manager)
+
+        # 동기 SSE 브로드캐스트 콜백 설정
+        service.set_status_change_callback(_sync_broadcast_status_change)
+
+        return service
     except Exception as e:
         logger.error(f"VastService 초기화 실패: {e}")
         raise HTTPException(status_code=500, detail="VastService 초기화 실패")
@@ -189,6 +199,63 @@ def get_config_composer(request: Request):
     except Exception as e:
         logger.error(f"ConfigComposer 가져오기 실패: {e}")
         raise HTTPException(status_code=500, detail="ConfigComposer 초기화 실패")
+
+# ========== SSE 관련 함수들 ==========
+def _sync_broadcast_status_change(instance_id: str, status: str):
+    """동기적으로 호출 가능한 상태 변경 브로드캐스트 래퍼"""
+    try:
+        # 현재 실행 중인 이벤트 루프가 있는지 확인
+        try:
+            loop = asyncio.get_running_loop()
+            # 이벤트 루프가 실행 중이면 태스크로 스케줄링
+            loop.create_task(_broadcast_status_change(instance_id, status))
+        except RuntimeError:
+            # 이벤트 루프가 없으면 새로 생성하여 실행
+            asyncio.run(_broadcast_status_change(instance_id, status))
+    except Exception as e:
+        logger.warning(f"SSE 브로드캐스트 실패: {e}")
+
+async def _broadcast_status_change(instance_id: str, status: str):
+    """인스턴스 상태 변경을 모든 SSE 클라이언트에게 브로드캐스트"""
+    if instance_id not in sse_connections:
+        return
+
+    status_data = {
+        "instance_id": instance_id,
+        "status": status,
+        "timestamp": asyncio.get_event_loop().time()
+    }
+
+    # 연결이 끊어진 큐들을 제거하기 위한 리스트
+    dead_queues = []
+
+    for queue in sse_connections[instance_id]:
+        try:
+            await queue.put(status_data)
+        except Exception as e:
+            logger.warning(f"SSE 큐에 데이터 전송 실패: {e}")
+            dead_queues.append(queue)
+
+    # 끊어진 연결 제거
+    for dead_queue in dead_queues:
+        sse_connections[instance_id].remove(dead_queue)
+
+    # 연결이 없으면 인스턴스 키 제거
+    if not sse_connections[instance_id]:
+        del sse_connections[instance_id]
+
+def _add_sse_connection(instance_id: str, queue: asyncio.Queue):
+    """새로운 SSE 연결 추가"""
+    if instance_id not in sse_connections:
+        sse_connections[instance_id] = []
+    sse_connections[instance_id].append(queue)
+
+def _remove_sse_connection(instance_id: str, queue: asyncio.Queue):
+    """SSE 연결 제거"""
+    if instance_id in sse_connections and queue in sse_connections[instance_id]:
+        sse_connections[instance_id].remove(queue)
+        if not sse_connections[instance_id]:
+            del sse_connections[instance_id]
 
 # ========== API Endpoints ==========
 
@@ -316,8 +383,14 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
         if not instance_id:
             raise HTTPException(status_code=400, detail="인스턴스 생성 실패")
 
-        # 백그라운드 설정
-        background_tasks.add_task(service.wait_and_setup_instance, instance_id)
+        is_valid_model = False
+        if create_request.vllm_config.vllm_model_name and len(create_request.vllm_config.vllm_model_name) >= 1:
+            is_valid_model = True
+
+        background_tasks.add_task(service.wait_and_setup_instance, instance_id, is_valid_model)
+
+        # 상태 브로드캐스트
+        await _broadcast_status_change(instance_id, "creating")
 
         return {
             "success": True,
@@ -412,6 +485,101 @@ async def list_instances(
         logger.error(f"인스턴스 목록 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="인스턴스 목록 조회 실패")
 
+@router.get("/instances/{instance_id}/status-stream",
+    summary="인스턴스 상태 스트리밍",
+    description="SSE(Server-Sent Events)를 통해 인스턴스 상태 변경을 실시간으로 스트리밍합니다.",
+    responses={
+        200: {"description": "SSE 스트림"},
+        404: {"description": "인스턴스를 찾을 수 없음"}
+    })
+async def stream_instance_status(request: Request, instance_id: str):
+    """SSE를 통한 인스턴스 상태 실시간 스트리밍"""
+    try:
+        service = get_vast_service(request)
+        db_instance = service.get_instance_from_db(instance_id)
+
+        if not db_instance:
+            raise HTTPException(status_code=404, detail=f"인스턴스 '{instance_id}'를 찾을 수 없습니다")
+
+        # SSE용 큐 생성
+        queue = asyncio.Queue()
+        _add_sse_connection(instance_id, queue)
+
+        async def event_stream():
+            try:
+                # 현재 상태를 먼저 전송
+                current_status = {
+                    "instance_id": instance_id,
+                    "status": db_instance.status,
+                    "timestamp": asyncio.get_event_loop().time()
+                }
+                yield f"data: {json.dumps(current_status)}\n\n"
+
+                # 상태 변경 이벤트 대기
+                while True:
+                    try:
+                        # 큐에서 상태 변경 이벤트 대기 (타임아웃 30초)
+                        status_data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                        yield f"data: {json.dumps(status_data)}\n\n"
+                    except asyncio.TimeoutError:
+                        # 연결 유지를 위한 heartbeat
+                        heartbeat = {
+                            "type": "heartbeat",
+                            "timestamp": asyncio.get_event_loop().time()
+                        }
+                        yield f"data: {json.dumps(heartbeat)}\n\n"
+                    except Exception as e:
+                        logger.error(f"SSE 스트림 오류: {e}")
+                        break
+            finally:
+                # 연결 종료 시 큐 제거
+                _remove_sse_connection(instance_id, queue)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"SSE 스트림 생성 실패: {e}")
+        raise HTTPException(status_code=500, detail="SSE 스트림 생성 실패")
+
+@router.get("/instances/{instance_id}/status",
+    summary="인스턴스 상태 조회",
+    description="지정된 인스턴스의 현재 상태를 DB에서 조회하여 반환합니다.",
+    response_model=Dict[str, Any],
+    responses={
+        404: {"description": "인스턴스를 찾을 수 없음"},
+        500: {"description": "서버 오류"}
+    })
+async def get_instance_status(request: Request, instance_id: str):
+    """인스턴스 상태 조회"""
+    try:
+        service = get_vast_service(request)
+        db_instance = service.get_instance_from_db(instance_id)
+
+        if not db_instance:
+            raise HTTPException(status_code=404, detail=f"인스턴스 '{instance_id}'를 찾을 수 없습니다")
+
+        return {
+            "instance_id": instance_id,
+            "status": db_instance.status
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"인스턴스 상태 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="인스턴스 상태 조회 실패")
+
 @router.delete("/instances/{instance_id}",
     summary="인스턴스 삭제",
     description="지정된 인스턴스를 삭제합니다.",
@@ -427,6 +595,9 @@ async def destroy_instance(request: Request, instance_id: str):
 
         if not success:
             raise HTTPException(status_code=400, detail="인스턴스 삭제 실패")
+
+        # 상태 업데이트 및 SSE 브로드캐스트
+        await _broadcast_status_change(instance_id, "deleted")
 
         return {
             "success": True,
@@ -515,11 +686,15 @@ async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMServeC
         if response_data.get("status") == "success":
             logger.info(f"VLLM 서비스 시작 성공: {response_data.get('message', 'No message provided')}")
 
-            service._update_instance(instance_id, updates={
+            # 상태 업데이트 및 SSE 브로드캐스트
+            updates = {
                 "status": "running_vllm",
                 "model_name": vllm_config.model_id,
                 "max_model_length": vllm_config.max_model_len,
-            })
+            }
+            service._update_instance(instance_id, updates=updates)
+            await _broadcast_status_change(instance_id, "running_vllm")
+
             return {
                 "success": True,
                 "message": response_data.get("message", "VLLM 서비스가 성공적으로 시작되었습니다"),

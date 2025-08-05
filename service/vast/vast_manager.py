@@ -730,7 +730,7 @@ class VastAIManager:
             if status == "running":
                 logger.info(f"인스턴스 {instance_id} 실행 중")
                 return True
-            elif status == "failed" or status == "destroyed":
+            elif status == "failed" or status == "destroyed" or status == "deleted":
                 logger.error(f"인스턴스 {instance_id} 실행 실패")
                 return False
 
@@ -738,6 +738,28 @@ class VastAIManager:
             time.sleep(10)
 
         logger.error(f"인스턴스 {instance_id} 실행 대기 타임아웃")
+        return False
+
+    def wait_for_vllm_running(self, controller_url: str, max_wait: int = 1500) -> bool:
+        """인스턴스 실행 상태 대기"""
+        logger.info(f"인스턴스 {controller_url} 실행 대기 중...")
+
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait:
+            status = self.get_vllm_instance_status(controller_url)
+
+            if status == "running":
+                logger.info(f"인스턴스 {controller_url} 실행 중")
+                return True
+            elif status == "failed" or status == "destroyed" or status == "deleted":
+                logger.error(f"인스턴스 {controller_url} 실행 실패")
+                return False
+
+            logger.info(f"현재 상태: {status}, 대기 중...")
+            time.sleep(10)
+
+        logger.error(f"인스턴스 {controller_url} 실행 대기 타임아웃")
         return False
 
     def get_instance_status(self, instance_id: str) -> str:
@@ -774,6 +796,21 @@ class VastAIManager:
                 return "failed"
 
         return "unknown"
+
+    def get_vllm_instance_status(self, controller_url: str) -> str:
+        """VLLM 인스턴스 상태 확인"""
+        import urllib.request
+        from urllib.request import Request as UrlRequest
+
+        # 10초 타임아웃으로 요청
+        try:
+            req = UrlRequest(controller_url, headers={'Content-Type': 'application/json'})
+            response = urllib.request.urlopen(req, timeout=10)
+
+            if response.getcode() == 200:
+                return "running"
+        except:
+            return "unknown"
 
     def _extract_status(self, data, instance_id: str, strategy: str) -> Optional[str]:
         """데이터에서 상태 추출"""
