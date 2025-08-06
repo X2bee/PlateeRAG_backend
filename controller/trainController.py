@@ -27,6 +27,12 @@ def get_config_composer(request: Request):
         return config_composer
 
 # ========== Request Models ==========
+class MLFlowParams(BaseModel):
+    """MLflow 파라미터 요청"""
+    mlflow_url: str = Field("https://polar-mlflow-git.x2bee.com/", description="MLFlow URL")
+    mlflow_exp_id: str = Field("test", description="MLFlow Experiment ID")
+    mlflow_run_id: str = Field("test", description="MLFlow Run ID")
+
 class TrainingStartRequest(BaseModel):
     """훈련 시작 요청"""
     # Common settings
@@ -53,7 +59,7 @@ class TrainingStartRequest(BaseModel):
     ds_stage3_max_reuse_distance: float = Field(1e6, description="DeepSpeed Stage3 최대 재사용 거리")
 
     # Model settings
-    model_name_or_path: str = Field("", description="모델 이름 또는 경로")
+    model_name_or_path: str = Field(..., description="모델 이름 또는 경로")
     language_model_class: str = Field("none", description="언어 모델 클래스")
     ref_model_path: str = Field("", description="참조 모델 경로")
     model_subfolder: str = Field("", description="모델 서브폴더")
@@ -62,7 +68,7 @@ class TrainingStartRequest(BaseModel):
     cache_dir: str = Field("", description="캐시 디렉토리")
 
     # Data settings
-    train_data: str = Field("", description="훈련 데이터")
+    train_data: str = Field(..., description="훈련 데이터")
     train_data_dir: str = Field("", description="훈련 데이터 디렉토리")
     train_data_split: str = Field("train", description="훈련 데이터 분할")
     test_data: str = Field("", description="테스트 데이터")
@@ -70,13 +76,10 @@ class TrainingStartRequest(BaseModel):
     test_data_split: str = Field("test", description="테스트 데이터 분할")
 
     # Dataset column settings
-    dataset_main_colunm: str = Field("goods_nm", description="데이터셋 메인 컬럼")
-    dataset_sub_colunm: str = Field("label", description="데이터셋 서브 컬럼")
-    dataset_minor_colunm: str = Field("", description="데이터셋 마이너 컬럼")
-    dataset_last_colunm: str = Field("", description="데이터셋 라스트 컬럼")
     dataset_main_column: str = Field("instruction", description="데이터셋 메인 컬럼")
     dataset_sub_column: str = Field("output", description="데이터셋 서브 컬럼")
     dataset_minor_column: str = Field("", description="데이터셋 마이너 컬럼")
+    dataset_last_column: str = Field("", description="데이터셋 라스트 컬럼")
 
     # Push settings
     push_to_hub: bool = Field(True, description="허브에 푸시 여부")
@@ -274,6 +277,35 @@ async def start_training(request: Request, training_params: TrainingStartRequest
         logger.error(f"Error starting training: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@router.post("/mlflow")
+async def get_mlflow(request: Request, params: MLFlowParams):
+    """MLflow 정보 조회"""
+    try:
+        config = get_train_node_config(request)
+        url = f"{config['base_url']}/api/train/mlflow"
+
+        # 요청 파라미터를 딕셔너리로 변환
+        params_dict = params.dict()
+
+        result = make_external_api_call(
+            url=url,
+            method="POST",
+            data=params_dict,
+            timeout=config['timeout']
+        )
+
+        if result["success"]:
+            return result["data"]
+        else:
+            raise HTTPException(
+                status_code=result["status_code"],
+                detail=f"Failed to get MLflow info: {result['error']}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error getting MLflow info: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 @router.get("/status/{job_id}")
 async def get_training_status(request: Request, job_id: str):
     """훈련 작업 상태 조회"""
@@ -316,14 +348,14 @@ async def get_all_training_jobs(request: Request):
         logger.error(f"Error getting training jobs: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.post("/stop/{job_id}")
+@router.delete("/stop/{job_id}")
 async def stop_training(request: Request, job_id: str):
     """훈련 작업 중지"""
     try:
         config = get_train_node_config(request)
         url = f"{config['base_url']}/api/train/stop/{job_id}"
 
-        result = make_external_api_call(url=url, method="POST", timeout=config['timeout'])
+        result = make_external_api_call(url=url, method="DELETE", timeout=config['timeout'])
 
         if result["success"]:
             logger.info(f"Training stopped successfully: {job_id}")
@@ -336,47 +368,4 @@ async def stop_training(request: Request, job_id: str):
 
     except Exception as e:
         logger.error(f"Error stopping training: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@router.get("/logs/{job_id}")
-async def get_training_logs(request: Request, job_id: str, limit: int = Query(100, description="가져올 로그 라인 수")):
-    """훈련 작업 로그 조회"""
-    try:
-        config = get_train_node_config(request)
-        url = f"{config['base_url']}/api/train/logs/{job_id}?limit={limit}"
-
-        result = make_external_api_call(url=url, method="GET", timeout=config['timeout'])
-
-        if result["success"]:
-            return result["data"]
-        else:
-            raise HTTPException(
-                status_code=result["status_code"],
-                detail=f"Failed to get training logs: {result['error']}"
-            )
-
-    except Exception as e:
-        logger.error(f"Error getting training logs: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@router.delete("/delete/{job_id}")
-async def delete_training_job(request: Request, job_id: str):
-    """훈련 작업 삭제"""
-    try:
-        config = get_train_node_config(request)
-        url = f"{config['base_url']}/api/train/delete/{job_id}"
-
-        result = make_external_api_call(url=url, method="DELETE", timeout=config['timeout'])
-
-        if result["success"]:
-            logger.info(f"Training job deleted successfully: {job_id}")
-            return result["data"]
-        else:
-            raise HTTPException(
-                status_code=result["status_code"],
-                detail=f"Failed to delete training job: {result['error']}"
-            )
-
-    except Exception as e:
-        logger.error(f"Error deleting training job: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
