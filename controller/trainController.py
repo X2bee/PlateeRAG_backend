@@ -14,9 +14,18 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from controller.controller_helper import extract_user_id_from_request
+from datetime import datetime
+from service.database.models.train import TrainMeta
 
 logger = logging.getLogger("train-controller")
 router = APIRouter(prefix="/api/train", tags=["training"])
+
+def get_db_manager(request: Request):
+    """데이터베이스 매니저 의존성 주입"""
+    if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
+        return request.app.state.app_db
+    else:
+        raise HTTPException(status_code=500, detail="Database connection not available")
 
 def get_config_composer(request: Request):
     """request.app.state에서 config_composer 가져오기"""
@@ -194,7 +203,7 @@ class TrainingStartRequest(BaseModel):
 # ========== Helper Functions ==========
 def get_train_node_config(request: Request):
     """훈련 노드 설정 가져오기"""
-    user_id = extract_user_id_from_request(request)
+    # user_id = extract_user_id_from_request(request)
     config_composer = get_config_composer(request)
 
     trainer_host = config_composer.get_config_by_name("TRAINER_HOST").value
@@ -251,9 +260,13 @@ async def start_training(request: Request, training_params: TrainingStartRequest
     try:
         config = get_train_node_config(request)
         url = f"{config['base_url']}/api/train/start"
+        user_id = extract_user_id_from_request(request)
 
         # 요청 파라미터를 딕셔너리로 변환
         params_dict = training_params.dict()
+        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        job_id = f"job_{current_time}"
+        params_dict["mlflow_run_id"] = job_id
 
         # 외부 훈련 노드 API 호출
         result = make_external_api_call(
@@ -264,10 +277,40 @@ async def start_training(request: Request, training_params: TrainingStartRequest
         )
 
         if result["success"]:
+            workflow_meta = TrainMeta(
+                user_id=user_id,
+                model_info_name=params_dict["model_name_or_path"],
+                model_info_type=params_dict["model_load_method"],
+                train_data=params_dict["train_data"],
+                test_data=params_dict["test_data"],
+                mlflow_url=params_dict["mlflow_url"],
+                mlflow_run_id=params_dict["mlflow_run_id"],
+                status="started"
+            )
+            app_db = get_db_manager(request)
+            insert_result = app_db.insert(workflow_meta)
+
+            if insert_result and insert_result.get("result") == "success":
+                logger.info(f"Training metadata saved successfully: {workflow_meta}")
             logger.info(f"Training started successfully: {result['data']}")
             return result["data"]
         else:
             logger.error(f"Failed to start training: {result['error']}")
+            workflow_meta = TrainMeta(
+                user_id=user_id,
+                model_info_name=params_dict["model_name_or_path"],
+                model_info_type=params_dict["model_load_method"],
+                train_data=params_dict["train_data"],
+                test_data=params_dict["test_data"],
+                mlflow_url=params_dict["mlflow_url"],
+                mlflow_run_id=params_dict["mlflow_run_id"],
+                status="failed"
+            )
+            app_db = get_db_manager(request)
+            insert_result = app_db.insert(workflow_meta)
+
+            if insert_result and insert_result.get("result") == "success":
+                logger.info(f"Training metadata saved successfully: {workflow_meta}")
             raise HTTPException(
                 status_code=result["status_code"],
                 detail=f"Training start failed: {result['error']}"

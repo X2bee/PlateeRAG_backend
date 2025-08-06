@@ -10,6 +10,7 @@ from service.database.models.executor import ExecutionIO, ExecutionMeta
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.vectordb import VectorDB
 from service.database.models.vast import VastInstance, VastExecutionLog
+from service.database.models.train import TrainMeta
 
 # 사용 가능한 모델들
 __all__ = [
@@ -19,7 +20,8 @@ __all__ = [
     'PersistentConfigModel',
     'ExecutionIO', 'ExecutionMeta', 'WorkflowMeta',
     'VectorDB',
-    'VastInstance', 'VastExecutionLog'
+    'VastInstance', 'VastExecutionLog',
+    'TrainMeta'
 ]
 
 # 애플리케이션에서 사용할 모델 목록
@@ -35,5 +37,6 @@ APPLICATION_MODELS = [
     WorkflowMeta,
     VectorDB,
     VastInstance,
-    VastExecutionLog
+    VastExecutionLog,
+    TrainMeta
 ]
