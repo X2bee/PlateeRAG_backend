@@ -81,11 +81,11 @@ class AgentVLLMStreamNode(Node):
 
             additional_rag_context = ""
             if rag_context:
-                search_result = sync_run_async(rag_context.rag_service.search_documents(
-                    collection_name=rag_context.search_params.collection_name,
+                search_result = sync_run_async(rag_context['rag_service'].search_documents(
+                    collection_name=rag_context['search_params']['collection_name'],
                     query_text=text,
-                    limit=rag_context.search_params.top_k,
-                    score_threshold=rag_context.search_params.score_threshold
+                    limit=rag_context['search_params']['top_k'],
+                    score_threshold=rag_context['search_params']['score_threshold']
                 ))
                 results = search_result.get("results", [])
                 if results:
@@ -97,7 +97,7 @@ class AgentVLLMStreamNode(Node):
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        additional_rag_context = f"""{rag_context.search_params.enhance_prompt}
+                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 [Context]
 {context_text}"""
             inputs = {"input": text, "chat_history": chat_history, "additional_rag_context": additional_rag_context if rag_context else ""}
