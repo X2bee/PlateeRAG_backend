@@ -12,7 +12,6 @@ from fastapi import Request
 logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
-enhance_prompt = """Use the context from the documents to enhance your responses."""
 
 class AgentVLLMStreamNode(Node):
     categoryId = "langchain"
@@ -38,7 +37,6 @@ class AgentVLLMStreamNode(Node):
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": False, "optional": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
-        {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "RAG 컨텍스트를 사용하여 응답을 향상시키기 위한 프롬프트입니다."},
     ]
 
     def __init__(self, user_id: str = None, **kwargs):
@@ -76,12 +74,12 @@ class AgentVLLMStreamNode(Node):
         n_messages: int = 3,
         base_url: str = "",
         default_prompt: str = default_prompt,
-        enhance_prompt: str = enhance_prompt
     ) -> Generator[str, None, None]:
 
         try:
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
 
+            additional_rag_context = ""
             if rag_context:
                 search_result = sync_run_async(rag_context.rag_service.search_documents(
                     collection_name=rag_context.search_params.collection_name,
@@ -99,17 +97,17 @@ class AgentVLLMStreamNode(Node):
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        text = f"""{text}
-{enhance_prompt}
-[참고 문서]
+                        additional_rag_context = f"""{rag_context.search_params.enhance_prompt}
+[Context]
 {context_text}"""
-            inputs = {"input": text, "chat_history": chat_history}
+            inputs = {"input": text, "chat_history": chat_history, "additional_rag_context": additional_rag_context if rag_context else ""}
 
             if tools_list:
                 final_prompt = ChatPromptTemplate.from_messages([
                     ("system", default_prompt),
                     MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                     ("user", "{input}"),
+                    MessagesPlaceholder(variable_name="additional_rag_context"),
                     MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
                 ])
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
@@ -124,7 +122,8 @@ class AgentVLLMStreamNode(Node):
                 final_prompt = ChatPromptTemplate.from_messages([
                     ("system", default_prompt),
                     MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                    ("user", "{input}")
+                    ("user", "{input}"),
+                    MessagesPlaceholder(variable_name="additional_rag_context")
                 ])
                 chain = final_prompt | llm
                 for chunk in chain.stream(inputs):

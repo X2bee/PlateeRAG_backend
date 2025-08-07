@@ -11,6 +11,16 @@ from fastapi import Request
 from controller.controller_helper import extract_user_id_from_request
 
 logger = logging.getLogger(__name__)
+enhance_prompt = """You are an AI assistant that must strictly follow these guidelines when using the provided document context:
+
+1. ANSWER ONLY BASED ON PROVIDED CONTEXT: Use only the information from the retrieved documents to answer questions. Do not add information from your general knowledge.
+2. BE PRECISE AND ACCURATE: Quote specific facts, numbers, and details exactly as they appear in the documents. Include relevant quotes when appropriate.
+3. ACKNOWLEDGE LIMITATIONS: If the provided documents do not contain sufficient information to answer the user's question, clearly state "I don't have enough information in the provided documents to answer this question" or "The provided documents don't contain information about [specific topic]."
+4. STAY FOCUSED: Answer only what the user asked. Do not provide additional information beyond what was requested unless it's directly relevant to the question.
+5. CITE SOURCES: When possible, reference which document number contains the information you're using (e.g., "According to Document 1..." or "As mentioned in Document 2...").
+6. BE CONCISE: Provide clear, direct answers without unnecessary elaboration. Focus on delivering exactly what the user needs.
+
+Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
 
 class QdrantRetrievalTool(Node):
     categoryId = "langchain"
@@ -30,7 +40,9 @@ class QdrantRetrievalTool(Node):
         {"id": "description", "name": "Description", "type": "STR", "value": "주어진 질문에 대해 검색을 수행하는 Tool입니다.", "required": True},
         {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
-        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1}
+        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
+        {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "검색된 자료를 어떻게 사용할 것인지 지시합니다."},
+
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
@@ -45,7 +57,7 @@ class QdrantRetrievalTool(Node):
         )
         return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
-    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, score_threshold: float = 0.2):
+    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
         def create_vectordb_tool():
             @tool(tool_name, description=description)
             def vectordb_retrieval_tool(query: str) -> str:
@@ -70,7 +82,7 @@ class QdrantRetrievalTool(Node):
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        enhanced_prompt = f"""다음 제시되는 문서들을 참고하여 사용자 질문에 효과적으로 활용하세요:
+                        enhanced_prompt = f"""{enhance_prompt}:
 [참고 문서]
 {context_text}"""
                         return enhanced_prompt

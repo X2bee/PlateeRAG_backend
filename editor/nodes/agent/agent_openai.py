@@ -12,7 +12,6 @@ from langchain.agents import AgentExecutor
 logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
-enhance_prompt = """Use the context from the documents to enhance your responses."""
 
 class AgentOpenAINode(Node):
     categoryId = "langchain"
@@ -46,7 +45,6 @@ class AgentOpenAINode(Node):
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "required": False, "optional": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
-        {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "RAG 컨텍스트를 사용하여 응답을 향상시키기 위한 프롬프트입니다."},
     ]
 
     def execute(
@@ -61,7 +59,6 @@ class AgentOpenAINode(Node):
         n_messages: int = 3,
         base_url: str = "https://api.openai.com/v1",
         default_prompt: str = default_prompt,
-        enhance_prompt: str = enhance_prompt,
     ) -> str:
         try:
             if tools is None:
@@ -77,6 +74,7 @@ class AgentOpenAINode(Node):
                 logger.info(f"[AGENT_EXECUTE] 단일 tool을 리스트로 변환: {type(tools)}")
                 tools = [tools]
 
+            additional_rag_context = None
             if rag_context:
                 search_result = sync_run_async(rag_context.rag_service.search_documents(
                     collection_name=rag_context.search_params.collection_name,
@@ -94,12 +92,11 @@ class AgentOpenAINode(Node):
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        text = f"""{text}
-{enhance_prompt}
-[참고 문서]
+                        additional_rag_context = f"""{rag_context.search_params.enhance_prompt}
+[Context]
 {context_text}"""
 
-            response = self._generate_chat_response(text, default_prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url)
+            response = self._generate_chat_response(text, default_prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, additional_rag_context)
             logger.info(f"[AGENT_EXECUTE] Chat Agent 응답 생성 완료: {len(response)}자")
             logger.debug(f"[AGENT_EXECUTE] 생성된 응답: {response[:200]}{'...' if len(response) > 200 else ''}")
             return response
@@ -111,7 +108,7 @@ class AgentOpenAINode(Node):
             return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
 
 
-    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str) -> str:
+    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, additional_rag_context: Optional[str]) -> str:
         """OpenAI API를 사용하여 채팅 응답 생성"""
         try:
             config_composer = AppServiceManager.get_config_composer()
@@ -161,7 +158,8 @@ class AgentOpenAINode(Node):
 
             inputs = {
                 "chat_history": chat_history,
-                "input": text
+                "input": text,
+                "additional_rag_context": additional_rag_context if additional_rag_context else ""
             }
 
             if tools is not None:
@@ -169,6 +167,7 @@ class AgentOpenAINode(Node):
                     ("system", prompt),
                     MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                     ("user", "{input}"),
+                    MessagesPlaceholder(variable_name="additional_rag_context"),
                     MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
                 ])
                 agent = create_tool_calling_agent(llm, tools, final_prompt)
@@ -187,7 +186,8 @@ class AgentOpenAINode(Node):
                 final_prompt = ChatPromptTemplate.from_messages([
                     ("system", prompt),
                     MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                    ("user", "{input}")
+                    ("user", "{input}"),
+                    MessagesPlaceholder(variable_name="additional_rag_context")
                 ])
                 chain = final_prompt | llm | StrOutputParser()
                 response = chain.invoke(inputs)
