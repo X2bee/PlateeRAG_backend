@@ -163,13 +163,21 @@ class AgentOpenAINode(Node):
             }
 
             if tools is not None:
-                final_prompt = ChatPromptTemplate.from_messages([
-                    ("system", prompt),
-                    MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                    ("user", "{input}"),
-                    MessagesPlaceholder(variable_name="additional_rag_context"),
-                    MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
-                ])
+                if additional_rag_context and additional_rag_context.strip():
+                    final_prompt = ChatPromptTemplate.from_messages([
+                        ("system", prompt),
+                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
+                        ("user", "{input}"),
+                        ("user", "{additional_rag_context}"),
+                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                    ])
+                else:
+                    final_prompt = ChatPromptTemplate.from_messages([
+                        ("system", prompt),
+                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
+                        ("user", "{input}"),
+                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                    ])
                 agent = create_tool_calling_agent(llm, tools, final_prompt)
                 agent_executor = AgentExecutor(
                     agent=agent,
@@ -183,12 +191,19 @@ class AgentOpenAINode(Node):
                 return output
 
             else:
-                final_prompt = ChatPromptTemplate.from_messages([
-                    ("system", prompt),
-                    MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                    ("user", "{input}"),
-                    MessagesPlaceholder(variable_name="additional_rag_context")
-                ])
+                if additional_rag_context and additional_rag_context.strip():
+                    final_prompt = ChatPromptTemplate.from_messages([
+                        ("system", prompt),
+                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
+                        ("user", "{input}"),
+                        ("user", "{additional_rag_context}"),
+                    ])
+                else:
+                    final_prompt = ChatPromptTemplate.from_messages([
+                        ("system", prompt),
+                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
+                        ("user", "{input}")
+                    ])
                 chain = final_prompt | llm | StrOutputParser()
                 response = chain.invoke(inputs)
                 return response
