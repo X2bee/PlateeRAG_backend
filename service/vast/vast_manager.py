@@ -3,7 +3,7 @@ VastAI 인스턴스 관리자
 
 Vast.ai CLI를 래핑하여 인스턴스 생성, 삭제, 상태 관리 등의 기능을 제공합니다.
 """
-
+import os
 import subprocess
 import json
 import time
@@ -20,18 +20,16 @@ logger = logging.getLogger("vast-manager")
 class VastAIManager:
     """Vast.ai CLI 래핑 클래스"""
 
-    def __init__(self, config, db_manager=None):
+    def __init__(self, db_manager=None, config_composer=None):
         """VastAIManager 초기화
-
         Args:
             config: VastConfig 인스턴스
             db_manager: 데이터베이스 매니저 (선택사항)
         """
-        self.config = config
         self.db_manager = db_manager
-        self.timeout = 600  # 기본 타임아웃 10분
+        self.config_composer = config_composer
+        self.timeout = 600
 
-        # VastAI 실행 방식 설정 (환경에 따라 조정 가능)
         self.vastai_prefix = ["python", "-m", "uv", "run"]
 
     def run_command(self, cmd: List[str], parse_json: bool = True, timeout: int = None) -> Dict[str, Any]:
@@ -66,7 +64,7 @@ class VastAIManager:
     def _execute_command(self, cmd: List[str], parse_json: bool = True, timeout: int = None) -> Dict[str, Any]:
         """실제 명령어 실행"""
         try:
-            if self.config.debug():
+            if self.config_composer.get_config_by_name("VAST_DEBUG").value:
                 logger.debug(f"실행 명령: {' '.join(cmd)}")
 
             result = subprocess.run(
@@ -76,7 +74,7 @@ class VastAIManager:
                 timeout=timeout
             )
 
-            if self.config.debug():
+            if self.config_composer.get_config_by_name("VAST_DEBUG").value:
                 logger.debug(f"stdout: {result.stdout}")
                 logger.debug(f"stderr: {result.stderr}")
 
@@ -118,7 +116,7 @@ class VastAIManager:
 
     def setup_api_key(self) -> bool:
         """API 키 설정 및 확인"""
-        api_key = self.config.vast_api_key()
+        api_key = self.config_composer.get_config_by_name("VAST_API_KEY").value
 
         # API 키 없이도 일부 기능이 동작하도록 허용
         if not api_key or api_key == "your_api_key_here":
@@ -332,8 +330,6 @@ class VastAIManager:
         """텍스트 형태의 오퍼 파싱 (개선된 버전)"""
         offers = []
         lines = text.strip().split('\n')
-
-        # 다양한 출력 형식 처리
         logger.debug(f"파싱할 텍스트: {text[:200]}...")
 
         for line in lines:
@@ -550,7 +546,7 @@ class VastAIManager:
         sorted_offers = sorted(offers, key=lambda x: x.get("dph_total", 999))
 
         # 가격 필터링
-        max_price = self.config.max_price()
+        max_price = self.config_composer.get_config_by_name("VAST_MAX_PRICE").value
         filtered_offers = [o for o in sorted_offers if o.get("dph_total", 999) <= max_price]
 
         if not filtered_offers:
@@ -564,12 +560,14 @@ class VastAIManager:
         logger.info(f"선택된 오퍼: ID={selected.get('id')}, 가격=${selected.get('dph_total')}/h")
         return selected
 
-    def create_instance(self, offer_id: str) -> Optional[str]:
+    def create_instance(self, offer_id: str, vast_config_request=None) -> Optional[str]:
         logger.info(f"📦 인스턴스를 생성 중... (Offer ID: {offer_id})")
 
-        image_name = self.config.image_name()
-        disk_size = self.config.disk_size()
-        default_ports = self.config.default_ports()
+        name = self.config_composer.get_config_by_name("VAST_IMAGE_NAME").value
+        tag = self.config_composer.get_config_by_name("VAST_IMAGE_TAG").value
+        image_name = f"{name}:{tag}" if tag else name
+        disk_size = self.config_composer.get_config_by_name("VAST_DISK_SIZE").value
+        default_ports = self.config_composer.get_config_by_name("VAST_DEFAULT_PORTS").value
 
         # 기본 명령어 구성
         cmd = ["vastai", "create", "instance", str(offer_id)]
@@ -584,9 +582,9 @@ class VastAIManager:
             env_params.append(f"-p {port}:{port}")
 
         # 환경변수 설정
-        vllm_host = self.config.vllm_host_ip()
-        vllm_port = self.config.vllm_port()
-        vllm_controller_port = self.config.vllm_controller_port()
+        vllm_host = self.config_composer.get_config_by_name("VLLM_HOST_IP").value
+        vllm_port = self.config_composer.get_config_by_name("VLLM_PORT").value
+        vllm_controller_port = self.config_composer.get_config_by_name("VLLM_CONTROLLER_PORT").value
 
         env_params.extend([
             "-e OPEN_BUTTON_PORT=1111",
@@ -595,16 +593,88 @@ class VastAIManager:
             "-e DATA_DIRECTORY=/vllm/",
             f"-e PORTAL_CONFIG=\"localhost:1111:11111:/:Instance Portal|localhost:8080:18080:/:Jupyter|localhost:8080:8080:/terminals/1:Jupyter Terminal|localhost:8384:18384:/:Syncthing|localhost:6006:16006:/:Tensorboard\"",
             "-e NVIDIA_VISIBLE_DEVICES=all",
-            f"-e VLLM_MODEL_NAME={self.config.vllm_model_name()}",
             f"-e VLLM_PORT={vllm_port}",
             f"-e VLLM_HOST_IP={vllm_host}",
             f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
-            f"-e VLLM_MAX_MODEL_LEN={self.config.vllm_max_model_len()}",
-            f"-e VLLM_GPU_MEMORY_UTILIZATION={self.config.vllm_gpu_memory_utilization()}",
-            f"-e VLLM_PIPELINE_PARALLEL_SIZE={self.config.vllm_pipeline_parallel_size()}",
-            f"-e VLLM_TENSOR_PARALLEL_SIZE={self.config.vllm_tensor_parallel_size()}",
-            f"-e VLLM_DTYPE={self.config.vllm_dtype()}",
-            f"-e VLLM_TOOL_CALL_PARSER={self.config.vllm_tool_call_parser()}",
+            f"-e VLLM_MODEL_NAME={vast_config_request.get('VLLM_MODEL_NAME').value}",
+            f"-e VLLM_MAX_MODEL_LEN={vast_config_request.get('VLLM_MAX_MODEL_LEN').value}",
+            f"-e VLLM_GPU_MEMORY_UTILIZATION={vast_config_request.get('VLLM_GPU_MEMORY_UTILIZATION').value}",
+            f"-e VLLM_PIPELINE_PARALLEL_SIZE={vast_config_request.get('VLLM_PIPELINE_PARALLEL_SIZE').value}",
+            f"-e VLLM_TENSOR_PARALLEL_SIZE={vast_config_request.get('VLLM_TENSOR_PARALLEL_SIZE').value}",
+            f"-e VLLM_DTYPE={vast_config_request.get('VLLM_DTYPE').value}",
+            f"-e VLLM_TOOL_CALL_PARSER={vast_config_request.get('VLLM_TOOL_CALL_PARSER').value}",
+        ])
+
+        # 환경 변수 문자열로 결합
+        env_string = " ".join(env_params).strip()
+        cmd.extend(["--env", env_string])
+
+        # onstart 명령어
+        onstart_cmd = "/vllm/entrypoint.sh"
+        cmd.extend(["--onstart-cmd", onstart_cmd])
+
+        # 기본 옵션들
+        cmd.append("--jupyter")
+        cmd.append("--ssh")
+        cmd.append("--direct")
+
+        logger.info(f"실행할 명령어: {' '.join(cmd)}")
+
+        try:
+            result = self.run_command(cmd, parse_json=False)
+            if result["success"]:
+                output = result["data"]
+                instance_id = self._extract_instance_id_from_output(output)
+
+                if instance_id:
+                    logger.info(f"✅ 인스턴스 생성 성공: ID = {instance_id}")
+                    return instance_id
+                else:
+                    logger.warning("⚠️ 인스턴스 ID를 찾을 수 없습니다.")
+                    logger.info(f"CLI 출력: {output}")
+            else:
+                logger.error(f"❌ 인스턴스 생성 실패: {result.get('error')}")
+
+        except Exception as e:
+            logger.error(f"❌ 인스턴스 생성 중 오류: {e}")
+
+        return None
+
+    def create_train_instance(self, offer_id: str) -> Optional[str]:
+        logger.info(f"Trainer 인스턴스를 생성 중... (Offer ID: {offer_id})")
+        name = self.config_composer.get_config_by_name("VAST_TRAIN_IMAGE_NAME").value
+        tag = self.config_composer.get_config_by_name("VAST_TRAIN_IMAGE_TAG").value
+        image_name = f"{name}:{tag}" if tag else name
+        disk_size = self.config_composer.get_config_by_name("VAST_DISK_SIZE").value
+
+        # 기본 명령어 구성
+        cmd = ["vastai", "create", "instance", str(offer_id)]
+        cmd.extend(["--image", image_name])
+        cmd.extend(["--disk", str(disk_size)])
+
+        # 포트 설정 (간소화된 버전)
+        ports_to_expose = sorted(self.config_composer.get_config_by_name("VAST_DEFAULT_TRAIN_PORTS").value)
+        env_params = []
+
+        for port in ports_to_expose:
+            env_params.append(f"-p {port}:{port}")
+
+        MLFLOW_URL = os.getenv("MLFLOW_URL", "")
+        MINIO_URL = os.getenv("MINIO_URL", "")
+        MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "")
+        MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "")
+
+        env_params.extend([
+            "-e OPEN_BUTTON_PORT=1111",
+            "-e OPEN_BUTTON_TOKEN=1",
+            "-e JUPYTER_DIR=/",
+            "-e DATA_DIRECTORY=/vllm/",
+            f"-e PORTAL_CONFIG=\"localhost:1111:11111:/:Instance Portal|localhost:8080:18080:/:Jupyter|localhost:8080:8080:/terminals/1:Jupyter Terminal|localhost:8384:18384:/:Syncthing|localhost:6006:16006:/:Tensorboard\"",
+            "-e NVIDIA_VISIBLE_DEVICES=all",
+            f"-e MLFLOW_URL={MLFLOW_URL}",
+            f"-e MINIO_URL={MINIO_URL}",
+            f"-e MINIO_ACCESS_KEY={MINIO_ACCESS_KEY}",
+            f"-e MINIO_SECRET_KEY={MINIO_SECRET_KEY}",
         ])
 
         # 환경 변수 문자열로 결합
@@ -672,37 +742,40 @@ class VastAIManager:
 
         return None
 
-    def create_instance_fallback(self, offer_id: str) -> Optional[str]:
-        instance_id = self.create_instance(offer_id)
+    def create_instance_fallback(self, offer_id: str, vast_config_request = None) -> Optional[str]:
+        instance_id = self.create_instance(offer_id, vast_config_request)
 
         if not instance_id:
-            # 간단한 버전으로 재시도
             logger.info("기본 인스턴스 생성 실패, 간단한 버전으로 재시도")
 
             # 필수 환경변수만 포함한 간단한 버전
-            vllm_host = self.config.vllm_host_ip()
-            vllm_port = self.config.vllm_port()
-            vllm_controller_port = self.config.vllm_controller_port()
+            vllm_host = self.config_composer.get_config_by_name("VLLM_HOST_IP").value
+            vllm_port = self.config_composer.get_config_by_name("VLLM_PORT").value
+            vllm_controller_port = self.config_composer.get_config_by_name("VLLM_CONTROLLER_PORT").value
 
             env_params = [
                 f"-e VLLM_HOST_IP={vllm_host}",
                 f"-e VLLM_PORT={vllm_port}",
                 f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
-                f"-e VLLM_MODEL_NAME={self.config.vllm_model_name()}",
-                f"-e VLLM_MAX_MODEL_LEN={self.config.vllm_max_model_len()}",
-                f"-e VLLM_GPU_MEMORY_UTILIZATION={self.config.vllm_gpu_memory_utilization()}",
-                f"-e VLLM_PIPELINE_PARALLEL_SIZE={self.config.vllm_pipeline_parallel_size()}",
-                f"-e VLLM_TENSOR_PARALLEL_SIZE={self.config.vllm_tensor_parallel_size()}",
-                f"-e VLLM_DTYPE={self.config.vllm_dtype()}",
-                f"-e VLLM_TOOL_CALL_PARSER={self.config.vllm_tool_call_parser()}",
+                f"-e VLLM_MODEL_NAME={vast_config_request.get('VLLM_MODEL_NAME').value}",
+                f"-e VLLM_MAX_MODEL_LEN={vast_config_request.get('VLLM_MAX_MODEL_LEN').value}",
+                f"-e VLLM_GPU_MEMORY_UTILIZATION={vast_config_request.get('VLLM_GPU_MEMORY_UTILIZATION').value}",
+                f"-e VLLM_PIPELINE_PARALLEL_SIZE={vast_config_request.get('VLLM_PIPELINE_PARALLEL_SIZE').value}",
+                f"-e VLLM_TENSOR_PARALLEL_SIZE={vast_config_request.get('VLLM_TENSOR_PARALLEL_SIZE').value}",
+                f"-e VLLM_DTYPE={vast_config_request.get('VLLM_DTYPE').value}",
+                f"-e VLLM_TOOL_CALL_PARSER={vast_config_request.get('VLLM_TOOL_CALL_PARSER').value}",
             ]
             env_string = " ".join(env_params).strip()
+            name = self.config_composer.get_config_by_name("VAST_IMAGE_NAME").value
+            tag = self.config_composer.get_config_by_name("VAST_IMAGE_TAG").value
+            image_name = f"{name}:{tag}" if tag else name
+            disk_size = self.config_composer.get_config_by_name("VAST_DISK_SIZE").value
 
             cmd = [
                 "vastai", "create", "instance",
                 str(offer_id),
-                "--image", self.config.image_name(),
-                "--disk", str(self.config.disk_size()),
+                "--image", image_name,
+                "--disk", str(disk_size),
                 "--env", env_string
             ]
 

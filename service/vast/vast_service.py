@@ -58,18 +58,18 @@ class InstanceTemplate:
 class VastService:
     """VastAI 서비스 클래스"""
 
-    def __init__(self, config, db_manager=None):
+    def __init__(self, db_manager=None, config_composer=None):
         """VastService 초기화
 
         Args:
             config: VastConfig 인스턴스
             db_manager: 데이터베이스 매니저 (선택사항)
         """
-        self.config = config
         self.db_manager = db_manager
-        self.vast_manager = VastAIManager(config, db_manager)
+        self.config_composer = config_composer
+        self.vast_manager = VastAIManager(self.db_manager, self.config_composer)
         self.templates = self._load_templates()
-        self.status_change_callback = None  # SSE 브로드캐스트용 콜백
+        self.status_change_callback = None
 
     def set_status_change_callback(self, callback):
         """상태 변경 콜백 설정"""
@@ -127,9 +127,9 @@ class VastService:
         """템플릿을 현재 설정에 적용"""
         if template_name not in self.templates:
             raise ValueError(f"템플릿 '{template_name}'을 찾을 수 없습니다")
-
+        config = self.config_composer.get_config_by_category_name("vast")
         template = self.templates[template_name]
-        template.apply_to_config(self.config, custom_config)
+        template.apply_to_config(config, custom_config)
         logger.info(f"템플릿 '{template_name}' 적용 완료")
 
     def _log_execution(self, instance_id: str, operation: str, command: str,
@@ -373,14 +373,12 @@ class VastService:
         logger.info(f"오퍼 선택 완료: {selected_offer.get('id')} (${selected_offer.get('dph_total')}/h)")
         return selected_offer
 
-    def create_vllm_instance(self, offer_id: str = None, template_name: str = None, create_request = None) -> Optional[str]:
+    def create_vllm_instance(self, offer_id: str = None, template_name: str = None, create_request = None, vast_config_request = None) -> Optional[str]:
         """vLLM 인스턴스 생성 (템플릿 지원)"""
         logger.info("vLLM 인스턴스 생성 시작")
 
         start_time = time.time()
-
-        # 인스턴스 생성
-        instance_id = self.vast_manager.create_instance_fallback(offer_id)
+        instance_id = self.vast_manager.create_instance_fallback(offer_id, vast_config_request)
 
         if not instance_id:
             self._log_execution(
@@ -402,12 +400,16 @@ class VastService:
             "num_gpus": create_request.offer_info.get("num_gpus", 1),
             "gpu_ram": create_request.offer_info.get("gpu_ram")
         }
+        name = self.config_composer.get_config_by_name("VAST_IMAGE_NAME").value
+        tag = self.config_composer.get_config_by_name("VAST_IMAGE_TAG").value
+        image_name = f"{name}:{tag}" if tag else name
+
         instance_data = {
             "instance_id": instance_id,
             "offer_id": offer_id,
-            "image_name": self.config.image_name(),
+            "image_name": image_name,
             "status": "creating",
-            "auto_destroy": self.config.auto_destroy(),
+            "auto_destroy": self.config_composer.get_config_by_name("VAST_AUTO_DESTROY").value,
             "gpu_info": json.dumps(gpu_info) if gpu_info else None,
             "dph_total": create_request.offer_info.get("dph_total", 0.0),
             "cpu_name": create_request.offer_info.get("cpu_name"),
@@ -440,6 +442,73 @@ class VastService:
         )
 
         logger.info(f"vLLM 인스턴스 생성 완료: {instance_id}")
+        return instance_id
+
+    def create_trainer_instance(self, offer_id: str = None, create_request = None) -> Optional[str]:
+        """Trainer 인스턴스 생성 (템플릿 지원)"""
+        logger.info("Trainer 인스턴스 생성 시작")
+
+        start_time = time.time()
+
+        # 인스턴스 생성
+        instance_id = self.vast_manager.create_train_instance(offer_id)
+
+        if not instance_id:
+            self._log_execution(
+                instance_id="",
+                operation="create_instance",
+                command=f"vastai create instance {offer_id}",
+                result="",
+                success=False,
+                execution_time=time.time() - start_time,
+                error_message="인스턴스 생성 실패",
+                metadata={
+                    "offer_id": offer_id,
+                }
+            )
+            return None
+        gpu_info = {
+            "gpu_name": create_request.offer_info.get("gpu_name"),
+            "num_gpus": create_request.offer_info.get("num_gpus", 1),
+            "gpu_ram": create_request.offer_info.get("gpu_ram")
+        }
+        name = self.config_composer.get_config_by_name("VAST_TRAIN_IMAGE_NAME").value
+        tag = self.config_composer.get_config_by_name("VAST_TRAIN_IMAGE_TAG").value
+        image_name = f"{name}:{tag}" if tag else name
+        instance_data = {
+            "instance_id": instance_id,
+            "offer_id": offer_id,
+            "image_name": image_name,
+            "status": "creating",
+            "auto_destroy": self.config_composer.get_config_by_name("AUTO_DESTROY").value,
+            "gpu_info": json.dumps(gpu_info) if gpu_info else None,
+            "dph_total": create_request.offer_info.get("dph_total", 0.0),
+            "cpu_name": create_request.offer_info.get("cpu_name"),
+            "cpu_cores": create_request.offer_info.get("cpu_cores"),
+            "ram": create_request.offer_info.get("ram"),
+            "cuda_max_good": create_request.offer_info.get("cuda_max_good", 0.0),
+            "model_name": "Trainer",
+            "max_model_length": 0,
+        }
+
+        self._save_instance(instance_data)
+
+        execution_time = time.time() - start_time
+        self._log_execution(
+            instance_id=instance_id,
+            operation="create_instance",
+            command=f"vastai create instance {offer_id}",
+            result=f"Instance created successfully: {instance_id}",
+            success=True,
+            execution_time=execution_time,
+            metadata={
+                "offer_id": offer_id,
+                "gpu_info": instance_data.get("gpu_info"),
+                "cost_per_hour": instance_data.get("cost_per_hour")
+            }
+        )
+
+        logger.info(f"Trainer 인스턴스 생성 완료: {instance_id}")
         return instance_id
 
     def wait_and_setup_instance(self, instance_id: str, is_valid_model:bool = False) -> bool:

@@ -5,7 +5,7 @@ Train 컨트롤러
 실제 훈련은 다른 노드의 API를 호출하여 수행합니다.
 """
 
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException, Request, Query, BackgroundTasks
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
 import logging
@@ -16,6 +16,7 @@ import urllib.error
 from controller.controller_helper import extract_user_id_from_request
 from datetime import datetime
 from service.database.models.train import TrainMeta
+from controller.vastController import CreateInstanceRequest, get_vast_service, _broadcast_status_change
 
 logger = logging.getLogger("train-controller")
 router = APIRouter(prefix="/api/train", tags=["training"])
@@ -412,3 +413,57 @@ async def stop_training(request: Request, job_id: str):
     except Exception as e:
         logger.error(f"Error stopping training: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.post("/instances",
+    summary="인스턴스 생성",
+    description="새로운 VastAI 인스턴스를 생성합니다. 템플릿 사용(budget, high_performance, research) 또는 커스텀 설정 가능합니다.",
+    response_model=Dict[str, Any],
+    responses={
+        400: {"description": "잘못된 요청 (템플릿 없음, 인스턴스 생성 실패 등)"},
+        500: {"description": "서버 오류"}
+    })
+async def create_instance(request: Request, create_request: CreateInstanceRequest, background_tasks: BackgroundTasks):
+    try:
+        service = get_vast_service(request)
+
+        instance_id = service.create_trainer_instance(
+            offer_id=create_request.offer_id,
+            template_name=create_request.template_name,
+            create_request=create_request
+        )
+
+        if not instance_id:
+            raise HTTPException(status_code=400, detail="인스턴스 생성 실패")
+
+        is_valid_model = False
+        if create_request.vllm_config.vllm_model_name and len(create_request.vllm_config.vllm_model_name) >= 1:
+            is_valid_model = True
+
+        background_tasks.add_task(service.wait_and_setup_instance, instance_id, is_valid_model)
+
+        # 상태 브로드캐스트
+        await _broadcast_status_change(instance_id, "creating")
+
+        return {
+            "success": True,
+            "instance_id": instance_id,
+            "template_name": create_request.template_name,
+            "message": "인스턴스가 생성되었습니다. 설정이 백그라운드에서 진행됩니다.",
+            "status": "creating",
+            "tracking_endpoints": {
+                "detailed_status": f"/api/vast/instances/{instance_id}",
+                "detailed_info": f"/api/vast/instances/{instance_id}/info",
+                "update_ports": f"/api/vast/instances/{instance_id}/update-ports"
+            },
+            "next_steps": [
+                f"1. /api/vast/instances/{instance_id} 엔드포인트로 상태를 확인하세요",
+                f"2. /api/vast/instances/{instance_id}/info 엔드포인트로 상세 정보를 확인하세요",
+                f"3. 포트 매핑이 필요하면 /api/vast/instances/{instance_id}/update-ports를 호출하세요"
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"인스턴스 생성 실패: {e}")
+        raise HTTPException(status_code=500, detail="인스턴스 생성 실패")

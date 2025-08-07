@@ -13,37 +13,37 @@ class BaseConfig(ABC):
     """
     모든 설정 클래스의 기본 클래스
     """
-    
+
     def __init__(self):
         self.configs: Dict[str, PersistentConfig] = {}
         self.logger = logging.getLogger(f"config-{self.__class__.__name__.lower()}")
-        
+
         # 설정 자동 초기화
         try:
             self.initialize()
         except Exception as e:
             self.logger.error(f"Failed to initialize config: {e}")
             raise
-    
+
     @abstractmethod
     def initialize(self) -> Dict[str, PersistentConfig]:
         """
         설정을 초기화하고 PersistentConfig 객체들을 반환
         """
         pass
-    
-    def get_env_value(self, env_name: str, default_value: Any, 
-                     file_path: Optional[str] = None, 
+
+    def get_env_value(self, env_name: str, default_value: Any,
+                     file_path: Optional[str] = None,
                      type_converter: Optional[callable] = None) -> Any:
         """
         환경변수에서 값을 가져오고, 없으면 파일에서 읽거나 기본값 사용
-        
+
         Args:
             env_name: 환경변수 이름
             default_value: 기본값
             file_path: 파일 경로 (선택사항)
             type_converter: 타입 변환 함수 (선택사항)
-        
+
         Returns:
             설정값
         """
@@ -60,7 +60,7 @@ class BaseConfig(ABC):
                     return env_value
             except (ValueError, TypeError) as e:
                 self.logger.warning(f"Failed to convert environment value for '{env_name}': {e}")
-        
+
         # 2. 파일에서 확인 (제공된 경우)
         if file_path and os.path.exists(file_path):
             try:
@@ -77,26 +77,29 @@ class BaseConfig(ABC):
                             return file_value
             except Exception as e:
                 self.logger.warning(f"Failed to read {file_path} for '{env_name}': {e}")
-        
+
         # 3. 기본값 사용
         self.logger.info(f"'{env_name}' using default value: {default_value}")
         return default_value
-    
-    def create_persistent_config(self, env_name: str, config_path: str, 
+
+    def create_persistent_config(self, env_name: str, config_path: str,
                                default_value: Any, file_path: Optional[str] = None,
                                type_converter: Optional[callable] = None) -> PersistentConfig:
         """
         PersistentConfig 객체 생성
         """
         env_value = self.get_env_value(env_name, default_value, file_path, type_converter)
+
         config = PersistentConfig(
             env_name=env_name,
             config_path=config_path,
-            env_value=env_value
+            env_value=env_value,
+            type_converter=type_converter
         )
+
         self.configs[env_name] = config
         return config
-    
+
     def __getitem__(self, key: str) -> PersistentConfig:
         """
         설정에 딕셔너리 형태로 접근할 수 있도록 지원
@@ -122,9 +125,9 @@ class BaseConfig(ABC):
             }
         }
 
-def convert_to_bool(value: str) -> bool:
-    """문자열을 bool로 변환"""
-    return value.lower() in ('true', '1', 'yes', 'on', 'enabled')
+def convert_to_str(value: Any) -> str:
+    """값을 문자열로 변환"""
+    return str(value)
 
 def convert_to_int(value: str) -> int:
     """문자열을 int로 변환"""
@@ -134,6 +137,22 @@ def convert_to_float(value: str) -> float:
     """문자열을 float로 변환"""
     return float(value)
 
+def convert_to_bool(value: str) -> bool:
+    """문자열을 bool로 변환"""
+    return value.lower() in ('true', '1', 'yes', 'on', 'enabled')
+
 def convert_to_list(value: str, separator: str = ',') -> List[str]:
     """문자열을 리스트로 변환"""
     return [item.strip() for item in value.split(separator) if item.strip()]
+
+def convert_to_int_list(value: Union[str, List[int]], separator: str = ',') -> List[int]:
+    """문자열 또는 리스트를 정수 리스트로 변환"""
+    if isinstance(value, list):
+        # 이미 리스트인 경우, 모든 요소를 int로 변환
+        return [int(item) for item in value if str(item).strip().isdigit() or isinstance(item, int)]
+    elif isinstance(value, str):
+        # 문자열인 경우 분리해서 변환
+        return [int(p.strip()) for p in value.split(separator) if p.strip().isdigit()]
+    else:
+        # 다른 타입인 경우 빈 리스트 반환
+        return []

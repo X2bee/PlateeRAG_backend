@@ -23,6 +23,7 @@ from config.config_composer import config_composer
 from service.database import AppDatabaseManager
 from service.database.models import APPLICATION_MODELS
 from service.retrieval import RAGService
+from service.vast.vast_service import VastService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +89,9 @@ async def lifespan(app: FastAPI):
             app.state.vector_manager = None
             app.state.embedding_client = None
             app.state.document_processor = None
+
+        # 5. vast_service Instance 생성
+        app.state.vast_service = VastService(app.state.app_db, config_composer)
 
         config_composer.ensure_directories()
         validation_result = config_composer.validate_critical_configs()
