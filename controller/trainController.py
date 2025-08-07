@@ -437,9 +437,6 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
             raise HTTPException(status_code=400, detail="인스턴스 생성 실패")
 
         is_valid_model = False
-        if create_request.vllm_config.vllm_model_name and len(create_request.vllm_config.vllm_model_name) >= 1:
-            is_valid_model = True
-
         background_tasks.add_task(service.wait_and_setup_instance, instance_id, is_valid_model)
 
         # 상태 브로드캐스트

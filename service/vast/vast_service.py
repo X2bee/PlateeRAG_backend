@@ -583,11 +583,6 @@ class VastService:
             self._update_instance(instance_id, {"status": "running"})
             logger.warning(f"인스턴스 {instance_id} - 포트 매핑 실패로 기본 실행 상태로 설정")
 
-        elif not is_valid_model and port_update_success:
-            # 모델이 유효하지 않지만 포트 업데이트 성공 시
-            self._update_instance(instance_id, {"status": "running_vllm"})
-            logger.info(f"인스턴스 {instance_id} - 포트 매핑 성공, VLLM 상태로 설정")
-
         else:
             self._update_instance(instance_id, {"status": "running"})
             logger.info(f"인스턴스 {instance_id} - 기본 실행 상태로 설정")
