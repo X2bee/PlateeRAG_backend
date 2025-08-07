@@ -76,7 +76,7 @@ def generate_token() -> str:
 # JWT 관련 설정
 JWT_SECRET_KEY = "your-secret-key-change-this-in-production"  # 실제 환경에서는 환경변수로 관리
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):

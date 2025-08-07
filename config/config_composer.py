@@ -9,7 +9,6 @@ from pathlib import Path
 from config.base_config import BaseConfig
 from config.persistent_config import PersistentConfig, export_config_summary, refresh_all_configs, save_all_configs
 from config.database_manager import initialize_database
-
 logger = logging.getLogger("config-composer")
 
 class ConfigComposer:
@@ -221,6 +220,15 @@ class ConfigComposer:
         if config_name in self.all_configs:
             return self.all_configs[config_name]
         raise KeyError(f"Configuration '{config_name}' not found")
+
+    def update_config_by_name(self, config_name: str, new_value: Any) -> None:
+        """
+        이름으로 특정 설정 업데이트
+        """
+        if config_name in self.all_configs:
+            self.all_configs[config_name].value = new_value
+        else:
+            raise KeyError(f"Configuration '{config_name}' not found")
 
     def get_config_by_category_name(self, category_name: str):
         """

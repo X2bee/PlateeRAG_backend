@@ -5,17 +5,16 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
-from langchain_core.messages import AIMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
 
-class AgentOpenAIStreamNodeV2(Node):
+class AgentOpenAIStreamNode(Node):
     categoryId = "langchain"
     functionId = "agents"
-    nodeId = "agents/openai_stream_v2"
-    nodeName = "Agent OpenAI Stream V2"
+    nodeId = "agents/openai_stream"
+    nodeName = "Agent OpenAI Stream"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드"
     tags = ["agent", "chat", "rag", "openai", "stream"]
 
@@ -28,7 +27,6 @@ class AgentOpenAIStreamNodeV2(Node):
         {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}
     ]
     parameters = [
-        # agent_openai_v2.py와 동일한 파라미터들
         {
             "id": "model", "name": "Model", "type": "STR", "value": "gpt-4o", "required": True,
             "options": [
@@ -39,11 +37,12 @@ class AgentOpenAIStreamNodeV2(Node):
         },
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 4096, "min": 1, "max": 8192, "step": 1},
+        {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STRING", "value": "https://api.openai.com/v1", "optional": True},
     ]
 
     def execute(self, text: str, tools: Optional[Any] = None, memory: Optional[Any] = None,
-                model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 4096, base_url: str = "https://api.openai.com/v1") -> Generator[str, None, None]:
+                model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 4096, n_messages: int = 3, base_url: str = "https://api.openai.com/v1") -> Generator[str, None, None]:
 
         try:
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
@@ -53,9 +52,9 @@ class AgentOpenAIStreamNodeV2(Node):
             if tools_list:
                 final_prompt = ChatPromptTemplate.from_messages([
                     ("system", default_prompt),
-                    MessagesPlaceholder(variable_name="chat_history"),
+                    MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                     ("user", "{input}"),
-                    MessagesPlaceholder(variable_name="agent_scratchpad")
+                    MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
                 ])
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(agent=agent, tools=tools_list, verbose=True, handle_parsing_errors=True)
@@ -68,7 +67,7 @@ class AgentOpenAIStreamNodeV2(Node):
                 # 도구가 없을 경우 간단한 체인으로 스트리밍
                 final_prompt = ChatPromptTemplate.from_messages([
                     ("system", default_prompt),
-                    MessagesPlaceholder(variable_name="chat_history"),
+                    MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                     ("user", "{input}")
                 ])
                 chain = final_prompt | llm
@@ -91,6 +90,7 @@ class AgentOpenAIStreamNodeV2(Node):
 
         if llm_provider == "openai":
             api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
+            print(api_key)
             if not api_key:
                 logger.error(f"[CHAT_RESPONSE] OpenAI API 키가 설정되지 않았습니다")
                 return "OpenAI API 키가 설정되지 않았습니다."

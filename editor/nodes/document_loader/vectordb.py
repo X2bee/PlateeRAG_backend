@@ -20,46 +20,13 @@ class QdrantNode(Node):
 
     inputs = []
     outputs = [
-        {
-            "id": "rag_context",
-            "name": "RAG Context",
-            "type": "DICT"
-        },
+        {"id": "rag_context", "name": "RAG Context", "type": "DICT"},
     ]
 
     parameters = [
-        {
-            "id": "collection_name",
-            "name": "Collection Name",
-            "type": "STR",
-            "value": "Select Collection",
-            "required": True,
-            "is_api": True,
-            "api_name": "api_collection",
-            "options": [],
-        },
-        {
-            "id": "top_k",
-            "name": "Top K Results",
-            "type": "INT",
-            "value": 4,
-            "required": False,
-            "optional": True,
-            "min": 1,
-            "max": 10,
-            "step": 1
-        },
-        {
-            "id": "score_threshold",
-            "name": "Score Threshold",
-            "type": "FLOAT",
-            "value": 0.5,
-            "required": False,
-            "optional": True,
-            "min": 0.0,
-            "max": 1.0,
-            "step": 0.1
-        }
+        {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
+        {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
+        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.5, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1}
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:

@@ -515,7 +515,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
             {
                 "user_id": user_id,
                 "workflow_name": workflow_name,
-                "workflow_id": workflow_id,
+                # "workflow_id": workflow_id, # workflow_id 로직 삭제
                 "interaction_id": interaction_id
             },
             limit=1000000,  # 필요에 따라 조정 가능
@@ -583,7 +583,7 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
             {
                 "user_id": user_id,
                 "workflow_name": workflow_name,
-                "workflow_id": workflow_id,
+                # "workflow_id": workflow_id, # workflow_id 로직 삭제
                 "interaction_id": interaction_id
             },
             limit=1000000
@@ -595,7 +595,7 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
             logger.info(f"No logs found to delete for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
             return JSONResponse(content={
                 "workflow_name": workflow_name,
-                "workflow_id": workflow_id,
+                # "workflow_id": workflow_id,
                 "interaction_id": interaction_id,
                 "deleted_count": 0,
                 "message": "No logs found to delete"
@@ -606,7 +606,7 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
             {
                 "user_id": user_id,
                 "workflow_name": workflow_name,
-                "workflow_id": workflow_id,
+                # "workflow_id": workflow_id, # workflow_id 로직 삭제
                 "interaction_id": interaction_id
             }
         )
@@ -615,7 +615,7 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
             {
                 "user_id": user_id,
                 "workflow_name": workflow_name,
-                "workflow_id": workflow_id,
+                # "workflow_id": workflow_id, # workflow_id 로직 삭제
                 "interaction_id": interaction_id
             }
         )
@@ -624,7 +624,7 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
 
         return JSONResponse(content={
             "workflow_name": workflow_name,
-            "workflow_id": workflow_id,
+            # "workflow_id": workflow_id,
             "interaction_id": interaction_id,
             "deleted_count": delete_count,
             "message": f"Successfully deleted {delete_count} execution logs"
@@ -660,6 +660,45 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    
+@router.post("/execute/stream")
+async def execute_workflow_stream(request: Request, workflow: WorkflowData):
+    """
+    주어진 워크플로우를 실행하고, 각 노드의 실행 결과를 SSE로 스트리밍합니다.
+    """
+
+    async def stream_generator(result_generator):
+        full_response_chunks = []
+        try:
+            for chunk in result_generator:
+                # 클라이언트에 보낼 데이터 형식 정의 (JSON)
+                full_response_chunks.append(str(chunk))
+                response_chunk = {"type": "data", "content": chunk}
+                yield f"data: {json.dumps(response_chunk, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.01) # 짧은 딜레이로 이벤트 스트림 안정화
+            
+            end_message = {"type": "end", "message": "Stream finished"}
+            yield f"data: {json.dumps(end_message)}\n\n"
+        
+        except Exception as e:
+            logger.error(f"스트리밍 중 오류 발생: {e}", exc_info=True)
+            error_message = {"type": "error", "detail": f"스트리밍 중 오류가 발생했습니다: {str(e)}"}
+            yield f"data: {json.dumps(error_message)}\n\n"
+    try:
+        user_id = extract_user_id_from_request(request)
+        workflow_data = workflow.dict()
+        app_db = get_db_manager(request)
+
+        executor = WorkflowExecutor(workflow_data, app_db, workflow.interaction_id, user_id)
+        result_generator = executor.execute_workflow()
+
+    except Exception as e:
+        # 스트림 시작 전 초기 설정에서 에러 발생 시
+        logging.error(f"Workflow pre-execution error: {e}")
+        raise HTTPException(status_code=400, detail=f"Error setting up workflow: {e}")
+    
+    # StreamingResponse를 사용하여 제너레이터가 생성하는 이벤트를 클라이언트로 전송
+    return StreamingResponse(stream_generator(result_generator), media_type="text/event-stream")
 
 @router.post("/execute/based_id", response_model=Dict[str, Any])
 async def execute_workflow_with_id(request: Request, request_body: WorkflowRequest):
@@ -692,8 +731,9 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
             workflow_data = await _workflow_parameter_helper(request_body, workflow_data)
 
         ## ========== 워크플로우 데이터 검증 ==========
-        if workflow_data.get('workflow_id') != request_body.workflow_id:
-            raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {request_body.workflow_id}")
+        ## TODO 워크플로우 아이디 정합성 관련 로직 생각해볼 것
+        # if workflow_data.get('workflow_id') != request_body.workflow_id:
+        #     raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {request_body.workflow_id}")
 
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
@@ -760,7 +800,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-    
+
 @router.post("/execute/based_id/stream")
 async def execute_workflow_with_id_stream(request: Request, request_body: WorkflowRequest):
     """
@@ -779,10 +819,10 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 response_chunk = {"type": "data", "content": chunk}
                 yield f"data: {json.dumps(response_chunk, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.01) # 짧은 딜레이로 이벤트 스트림 안정화
-            
+
             end_message = {"type": "end", "message": "Stream finished"}
             yield f"data: {json.dumps(end_message)}\n\n"
-        
+
         except Exception as e:
             logger.error(f"스트리밍 중 오류 발생: {e}", exc_info=True)
             error_message = {"type": "error", "detail": f"스트리밍 중 오류가 발생했습니다: {str(e)}"}
@@ -796,14 +836,14 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
 
             try:
                 logger.info(f"스트림 완료. Interaction ID [{workflow_req.interaction_id}]의 로그 업데이트 시작.")
-                
+
                 # 가장 최근에 생성된 로그 레코드를 찾습니다.
                 log_to_update_list = db_manager.find_by_condition(
                     ExecutionIO,
                     {
                         "user_id": user_id,
                         "interaction_id": workflow_req.interaction_id,
-                        "workflow_id": workflow_req.workflow_id,
+                        # "workflow_id": workflow_req.workflow_id, # 워크플로우 ID 로직 삭제
                     },
                     limit=1,
                     orderby="created_at",
@@ -813,13 +853,13 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 if not log_to_update_list:
                     logger.warning(f"업데이트할 ExecutionIO 로그를 찾지 못했습니다. Interaction ID: {workflow_req.interaction_id}")
                     return
-                
+
                 log_to_update = log_to_update_list[0]
 
                 # output_data 필드의 JSON을 실제 결과로 수정
                 output_data_dict = json.loads(log_to_update.output_data)
                 output_data_dict['result'] = final_text # placeholder를 최종 텍스트로 교체
-                
+
                 # inputs 필드에 있던 generator placeholder도 업데이트 (선택적)
                 if 'inputs' in output_data_dict and isinstance(output_data_dict['inputs'], dict):
                     for key, value in output_data_dict['inputs'].items():
@@ -829,7 +869,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 # 수정된 JSON으로 레코드를 업데이트
                 log_to_update.output_data = json.dumps(output_data_dict, ensure_ascii=False)
                 db_manager.update(log_to_update)
-                
+
                 logger.info(f"Interaction ID [{workflow_req.interaction_id}]의 로그가 최종 스트림 결과로 업데이트되었습니다.")
 
             except Exception as db_error:
@@ -854,8 +894,9 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 workflow_data = json.load(f)
             workflow_data = await _workflow_parameter_helper(request_body, workflow_data)
 
-        if workflow_data.get('workflow_id') != request_body.workflow_id:
-            raise ValueError(f"워크플로우 ID가 일치하지 않습니다.")
+        ## TODO 워크플로우 아이디 정합성 관련 로직 생각해볼 것
+        # if workflow_data.get('workflow_id') != request_body.workflow_id:
+        #     raise ValueError(f"워크플로우 ID가 일치하지 않습니다.")
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
 
@@ -866,7 +907,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                     if parameters:
                         parameters[0]['value'] = request_body.input_data
                         break
-        
+
         app_db = get_db_manager(request)
         execution_meta = None
         if request_body.interaction_id != "default" and app_db:
@@ -874,7 +915,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 app_db, user_id, request_body.interaction_id,
                 request_body.workflow_id, request_body.workflow_name, request_body.input_data
             )
-        
+
         if execution_meta:
             await update_execution_meta_count(app_db, execution_meta)
 
@@ -1057,7 +1098,7 @@ async def execute_single_workflow_for_batch(
     기존 execute_workflow_with_id 로직을 재사용하되 Generator 처리 추가
     """
     start_time = time.time()
-    
+
     try:
         # ========== 워크플로우 데이터 로드 ==========
         if workflow_name == 'default_mode':
@@ -1066,7 +1107,7 @@ async def execute_single_workflow_for_batch(
             file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
             with open(file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
-            
+
             # WorkflowRequest 객체 생성 (기존 헬퍼 함수 호환)
             temp_request = WorkflowRequest(
                 workflow_name=workflow_name,
@@ -1080,16 +1121,16 @@ async def execute_single_workflow_for_batch(
             # 사용자 정의 워크플로우 처리
             downloads_path = os.path.join(os.getcwd(), "downloads")
             download_path_id = os.path.join(downloads_path, user_id)
-            
+
             filename = f"{workflow_name}.json" if not workflow_name.endswith('.json') else workflow_name
             file_path = os.path.join(download_path_id, filename)
-            
+
             if not os.path.exists(file_path):
                 raise ValueError(f"워크플로우 파일을 찾을 수 없습니다: {file_path}")
-                
+
             with open(file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
-            
+
             temp_request = WorkflowRequest(
                 workflow_name=workflow_name,
                 workflow_id=workflow_id,
@@ -1100,8 +1141,8 @@ async def execute_single_workflow_for_batch(
             workflow_data = await _workflow_parameter_helper(temp_request, workflow_data)
 
         # ========== 워크플로우 데이터 검증 ==========
-        if workflow_data.get('workflow_id') != workflow_id:
-            raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {workflow_id}")
+        # if workflow_data.get('workflow_id') != workflow_id:
+        #     raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {workflow_id}")
 
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다")
@@ -1118,7 +1159,7 @@ async def execute_single_workflow_for_batch(
         # ========== 워크플로우 실행 ==========
         executor = WorkflowExecutor(workflow_data, app_db, interaction_id, user_id)
         result_generator = executor.execute_workflow()
-        
+
         # Generator에서 모든 결과를 수집
         final_outputs = []
         try:
@@ -1126,7 +1167,7 @@ async def execute_single_workflow_for_batch(
                 final_outputs.append(chunk)
         except Exception as e:
             raise e
-        
+
         # ========== 결과 처리 ==========
         if len(final_outputs) == 1:
             processed_output = final_outputs[0]
@@ -1138,15 +1179,15 @@ async def execute_single_workflow_for_batch(
                 processed_output = final_outputs[-1]  # 아니면 마지막 값
         else:
             processed_output = "결과 없음"
-        
+
         execution_time = int((time.time() - start_time) * 1000)
-        
+
         return {
             "success": True,
             "outputs": processed_output,
             "execution_time": execution_time
         }
-        
+
     except Exception as e:
         execution_time = int((time.time() - start_time) * 1000)
         logger.error(f"배치 워크플로우 실행 실패: {str(e)}")
@@ -1171,7 +1212,7 @@ async def process_batch_group(
     배치 그룹을 병렬로 처리
     """
     results = []
-    
+
     # asyncio.gather를 사용해서 병렬 실행
     tasks = []
     for test_case in test_cases:
@@ -1187,10 +1228,10 @@ async def process_batch_group(
             request=request
         )
         tasks.append(task)
-    
+
     # 모든 태스크를 병렬로 실행
     execution_results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     # 결과 처리
     for i, (test_case, exec_result) in enumerate(zip(test_cases, execution_results)):
         if isinstance(exec_result, Exception):
@@ -1210,7 +1251,7 @@ async def process_batch_group(
                 actual_output = outputs[0] if outputs else "결과 없음"
             else:
                 actual_output = str(outputs)
-                
+
             result = BatchTestResult(
                 id=test_case.id,
                 input=test_case.input,
@@ -1230,16 +1271,16 @@ async def process_batch_group(
                 execution_time=exec_result.get("execution_time", 0),
                 error=exec_result.get("error", "알 수 없는 오류")
             )
-        
+
         results.append(result)
-        
+
         # 진행 상황 업데이트
         if batch_id in batch_status_storage:
             batch_status_storage[batch_id]["completed_count"] += 1
-            progress = (batch_status_storage[batch_id]["completed_count"] / 
+            progress = (batch_status_storage[batch_id]["completed_count"] /
                        batch_status_storage[batch_id]["total_count"]) * 100
             batch_status_storage[batch_id]["progress"] = progress
-    
+
     return results
 
 # ==================================================
@@ -1251,20 +1292,20 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
     """
     워크플로우 배치 실행 엔드포인트
     여러 테스트 케이스를 배치로 처리하여 서버 부하를 줄입니다.
-    
+
     Args:
         batch_request: 배치 실행 요청 데이터
-        
+
     Returns:
         BatchExecuteResponse: 배치 실행 결과
     """
     try:
         user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
-        
+
         batch_id = str(uuid.uuid4())
         start_time = time.time()
-        
+
         # 배치 상태 초기화
         batch_status_storage[batch_id] = {
             "status": "running",
@@ -1273,18 +1314,18 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
             "progress": 0.0,
             "start_time": start_time
         }
-        
+
         logger.info(f"배치 {batch_id} 시작: 워크플로우={batch_request.workflow_name}, "
                    f"테스트 케이스={len(batch_request.test_cases)}개, 배치 크기={batch_request.batch_size}")
-        
+
         all_results = []
-        
+
         # 배치 크기만큼 나누어서 처리
         for i in range(0, len(batch_request.test_cases), batch_request.batch_size):
             batch_group = batch_request.test_cases[i:i + batch_request.batch_size]
-            
+
             logger.info(f"배치 그룹 {i//batch_request.batch_size + 1} 처리 중: {len(batch_group)}개 병렬 실행")
-            
+
             # 현재 배치 그룹 처리
             group_results = await process_batch_group(
                 user_id=user_id,
@@ -1297,25 +1338,25 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
                 app_db=app_db,
                 request=request
             )
-            
+
             all_results.extend(group_results)
-            
+
             # 다음 배치 그룹 처리 전 잠시 대기 (서버 부하 방지위해서)
             if i + batch_request.batch_size < len(batch_request.test_cases):
                 await asyncio.sleep(0.5)
-        
+
         # 최종 결과 계산
         total_execution_time = int((time.time() - start_time) * 1000)
         success_count = sum(1 for r in all_results if r.status == "success")
         error_count = len(all_results) - success_count
-        
+
         # 배치 상태 완료로 업데이트
         batch_status_storage[batch_id]["status"] = "completed"
         batch_status_storage[batch_id]["progress"] = 100.0
-        
+
         logger.info(f"배치 {batch_id} 완료: 성공={success_count}개, 실패={error_count}개, "
                    f"총 소요시간={total_execution_time}ms")
-        
+
         response = BatchExecuteResponse(
             batch_id=batch_id,
             total_count=len(all_results),
@@ -1324,30 +1365,30 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
             total_execution_time=total_execution_time,
             results=all_results
         )
-        
+
         return response
-        
+
     except Exception as e:
         logger.error(f"배치 실행 중 오류: {str(e)}", exc_info=True)
-        
+
         if 'batch_id' in locals() and batch_id in batch_status_storage:
             batch_status_storage[batch_id]["status"] = "error"
             batch_status_storage[batch_id]["error"] = str(e)
-        
+
         raise HTTPException(status_code=500, detail=f"배치 실행 실패: {str(e)}")
 
 @router.get("/batch/status/{batch_id}")
 async def get_batch_status(batch_id: str):
     """
     배치 실행 상태 조회 (선택사항 - 실시간 진행 상황 확인용)
-    
+
     Args:
         batch_id: 배치 작업 ID
-        
+
     Returns:
         배치 작업 상태 정보
     """
     if batch_id not in batch_status_storage:
         raise HTTPException(status_code=404, detail="배치를 찾을 수 없습니다")
-    
+
     return JSONResponse(content=batch_status_storage[batch_id])
