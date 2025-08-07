@@ -59,41 +59,4 @@ class CollectionConfig(BaseConfig):
             default_value=1
         )
 
-        # 제공자 검증
-        valid_providers = ["openai", "vLLM", "no_model"]
-        if self.IMAGE_TEXT_MODEL_PROVIDER.value not in valid_providers:
-            self.logger.warning(
-                f"Invalid image-text model provider '{self.IMAGE_TEXT_MODEL_PROVIDER.value}'. "
-                f"Valid options: {', '.join(valid_providers)}. "
-                f"Defaulting to 'openai'."
-            )
-            # 올바른 방법으로 값 설정
-            self.IMAGE_TEXT_MODEL_PROVIDER.value = "openai"
-            self.IMAGE_TEXT_MODEL_PROVIDER.save()
-
-        # 환경변수에 설정 적용
-        import os
-        os.environ["IMAGE_TEXT_MODEL_PROVIDER"] = self.IMAGE_TEXT_MODEL_PROVIDER.value
-        self.logger.info(f"Image-text model provider set to: {self.IMAGE_TEXT_MODEL_PROVIDER.value}")
-
         return self.configs
-
-    def get_supported_formats(self) -> list:
-        """지원되는 이미지 형식 반환"""
-        return ["jpg", "jpeg", "png", "gif", "webp"]
-
-    def get_max_image_size(self) -> int:
-        """최대 이미지 크기 반환 (MB)"""
-        return 10  # 기본값 10MB
-
-    def get_model_info(self) -> Dict[str, any]:
-        """현재 모델 정보 반환"""
-        return {
-            "provider": self.get_current_provider(),
-            "model_name": self.IMAGE_TEXT_MODEL_NAME.value,
-            "temperature": self.IMAGE_TEXT_TEMPERATURE.value,
-            "image_quality": self.IMAGE_QUALITY.value,
-            "image_text_batch_size" : self.IMAGE_TEXT_BATCH_SIZE.value,
-            "supported_formats": self.get_supported_formats(),
-            "max_image_size_mb": self.get_max_image_size()
-        }

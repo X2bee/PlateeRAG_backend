@@ -13,7 +13,6 @@ from enum import Enum
 import json
 import asyncio
 from urllib import request as urllib_request
-
 from service.vast.vast_service import VastService
 
 router = APIRouter(prefix="/api/vast", tags=["vastAI"])
@@ -179,10 +178,7 @@ class CommandExecutionResponse(BaseModel):
 def get_vast_service(request: Request) -> VastService:
     """VastService 인스턴스 생성"""
     try:
-        config_composer = request.app.state.config_composer
-        vast_config = config_composer.get_config_by_category_name("vast")
-        db_manager = request.app.state.app_db
-        service = VastService(vast_config, db_manager)
+        service = request.app.state.vast_service
 
         # 동기 SSE 브로드캐스트 콜백 설정
         service.set_status_change_callback(_sync_broadcast_status_change)
@@ -349,6 +345,8 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
 async def create_instance(request: Request, create_request: CreateInstanceRequest, background_tasks: BackgroundTasks):
     try:
         service = get_vast_service(request)
+        config_composer = request.app.state.config_composer
+        vast_config = config_composer.get_config_by_category_name("vast")
 
         # 템플릿 적용
         if create_request.template_name:
@@ -365,10 +363,9 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
             for key, value in create_request.vllm_config.dict().items():
                 # env_name을 통해 PersistentConfig 객체 찾기
                 env_name = f"VLLM_{key.upper()}" if not key.startswith('vllm_') else key.upper()
-
                 # all_configs에서 env_name으로 찾기
-                if hasattr(service.config, 'configs'):
-                    for config_obj in service.config.configs.values():
+                if hasattr(vast_config, 'configs'):
+                    for config_obj in vast_config.configs.values():
                         if hasattr(config_obj, 'env_name') and config_obj.env_name == env_name:
                             config_obj.value = value
                             logger.info("VLLM 설정 적용: %s = %s", key, value)
@@ -383,8 +380,47 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
         if not instance_id:
             raise HTTPException(status_code=400, detail="인스턴스 생성 실패")
 
+        # 인스턴스 생성 후 즉시 상태 확인
+        try:
+            # 인스턴스가 실제로 생성되었는지 확인
+            db_instance = service.get_instance_from_db(instance_id)
+            if not db_instance:
+                raise HTTPException(status_code=400, detail="인스턴스 생성 후 DB에서 찾을 수 없음")
+
+            # VastAI에서 인스턴스 상태 확인
+            vast_instance = service.vast_manager.get_instance_info(instance_id)
+            if not vast_instance:
+                # 인스턴스가 VastAI에 존재하지 않으면 실패로 처리
+                service._update_instance(instance_id, updates={"status": "failed"})
+                await _broadcast_status_change(instance_id, "failed")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"인스턴스 {instance_id} 생성 실패: VastAI에서 인스턴스를 찾을 수 없습니다"
+                )
+
+            # 인스턴스 상태가 실패인 경우 처리
+            vast_status = vast_instance.get("actual_status", "unknown")
+            if vast_status in ["exited", "failed", "error"]:
+                service._update_instance(instance_id, updates={"status": "failed"})
+                await _broadcast_status_change(instance_id, "failed")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"인스턴스 {instance_id} 생성 실패: 상태가 {vast_status}입니다"
+                )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"인스턴스 {instance_id} 상태 확인 실패: {e}")
+            service._update_instance(instance_id, updates={"status": "failed"})
+            await _broadcast_status_change(instance_id, "failed")
+            raise HTTPException(
+                status_code=400,
+                detail=f"인스턴스 {instance_id} 생성 후 상태 확인 실패: {str(e)}"
+            )
+
         is_valid_model = False
-        if create_request.vllm_config.vllm_model_name and len(create_request.vllm_config.vllm_model_name) >= 1:
+        if create_request.vllm_config and create_request.vllm_config.vllm_model_name and len(create_request.vllm_config.vllm_model_name) >= 1:
             is_valid_model = True
 
         background_tasks.add_task(service.wait_and_setup_instance, instance_id, is_valid_model)
