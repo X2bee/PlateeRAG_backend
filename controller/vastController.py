@@ -374,7 +374,8 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
         instance_id = service.create_vllm_instance(
             offer_id=create_request.offer_id,
             template_name=create_request.template_name,
-            create_request=create_request
+            create_request=create_request,
+            vast_config_request=vast_config.configs,
         )
 
         if not instance_id:
@@ -791,90 +792,53 @@ async def vllm_down(request: Request, instance_id: str):
 async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
     """VLLM API Base URL과 모델명 설정 업데이트"""
     try:
-        config_composer = get_config_composer(request)
-        updated_configs = {}
-        services_refreshed = []
+        # appController의 update_persistent_config 함수를 import
+        from controller.appController import update_persistent_config, ConfigUpdateRequest
 
-        # VLLM_API_BASE_URL 업데이트
         try:
-            api_base_url_config = config_composer.get_config_by_name("VLLM_API_BASE_URL")
-            old_api_base_url = api_base_url_config.value
-            api_base_url_config.value = vllm_config.api_base_url
-            api_base_url_config.save()
-            updated_configs["VLLM_API_BASE_URL"] = {
-                "old_value": old_api_base_url,
-                "new_value": vllm_config.api_base_url
-            }
+            config_composer = get_config_composer(request)
+            old_api_base_url = config_composer.get_config_by_name("VLLM_API_BASE_URL").value
+
+            api_base_url_request = ConfigUpdateRequest(value=vllm_config.api_base_url)
+            api_base_url_result = await update_persistent_config("VLLM_API_BASE_URL", api_base_url_request, request)
+
             logger.info(f"VLLM_API_BASE_URL 업데이트: {old_api_base_url} -> {vllm_config.api_base_url}")
+
         except KeyError:
             logger.warning("VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
             raise HTTPException(status_code=404, detail="VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
 
-        # VLLM_MODEL_NAME 업데이트
         try:
-            model_name_config = config_composer.get_config_by_name("VLLM_MODEL_NAME")
-            old_model_name = model_name_config.value
-            model_name_config.value = vllm_config.model_name
-            model_name_config.save()
-            updated_configs["VLLM_MODEL_NAME"] = {
-                "old_value": old_model_name,
-                "new_value": vllm_config.model_name
-            }
+            old_model_name = config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+
+            model_name_request = ConfigUpdateRequest(value=vllm_config.model_name)
+            model_name_result = await update_persistent_config("VLLM_MODEL_NAME", model_name_request, request)
+
             logger.info(f"VLLM_MODEL_NAME 업데이트: {old_model_name} -> {vllm_config.model_name}")
+
         except KeyError:
             logger.warning("VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
             raise HTTPException(status_code=404, detail="VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
-
-        # app.state의 config도 업데이트 (메모리에서 실행 중인 설정들 동기화)
-        if hasattr(request.app.state, 'config') and request.app.state.config:
-            for config_name in ["VLLM_API_BASE_URL", "VLLM_MODEL_NAME"]:
-                config_obj = config_composer.get_config_by_name(config_name)
-
-                # config 카테고리별로 업데이트된 값 반영
-                for category_name, category_config in request.app.state.config.items():
-                    if category_name != "all_configs" and hasattr(category_config, config_name):
-                        setattr(category_config, config_name, config_obj)
-                        logger.info(f"Updated app.state config for category '{category_name}': {config_name} = {config_obj.value}")
-
-                # all_configs도 업데이트
-                if "all_configs" in request.app.state.config:
-                    request.app.state.config["all_configs"][config_name] = config_obj
-                    logger.info(f"Updated app.state.all_configs: {config_name} = {config_obj.value}")
-
-            # config_composer의 all_configs도 업데이트
-            config_composer.all_configs["VLLM_API_BASE_URL"] = config_composer.get_config_by_name("VLLM_API_BASE_URL")
-            config_composer.all_configs["VLLM_MODEL_NAME"] = config_composer.get_config_by_name("VLLM_MODEL_NAME")
-
-        # VLLM 관련 서비스들에게 설정 변경 알림 (필요시 재초기화)
         try:
-            # VLLM 관련 설정이 변경된 경우 관련 서비스 갱신
-            if hasattr(request.app.state, 'vllm_service') and request.app.state.vllm_service:
-                # VLLM 서비스의 설정 참조 갱신
-                if 'vllm' in request.app.state.config:
-                    request.app.state.vllm_service.config = request.app.state.config['vllm']
-                services_refreshed.append("vllm_service")
-                logger.info("Refreshed VLLM service configuration")
+            provider_request = ConfigUpdateRequest(value='vllm')
+            provider_response = await update_persistent_config("DEFAULT_LLM_PROVIDER", provider_request, request)
 
-            # LLM 서비스 설정 갱신
-            if hasattr(request.app.state, 'llm_service') and request.app.state.llm_service:
-                if 'vllm' in request.app.state.config:
-                    request.app.state.llm_service.config = request.app.state.config['vllm']
-                services_refreshed.append("llm_service")
-                logger.info("Refreshed LLM service configuration")
+            logger.info(f"DEFAULT_LLM_PROVIDER 업데이트: {provider_request.value}")
 
-        except (AttributeError, KeyError) as service_error:
-            logger.warning(f"Failed to refresh some services after VLLM config update: {service_error}")
+        except KeyError:
+            logger.warning("DEFAULT_LLM_PROVIDER 설정을 찾을 수 없습니다")
+            raise HTTPException(status_code=404, detail="DEFAULT_LLM_PROVIDER 설정을 찾을 수 없습니다")
 
-        logger.info("Successfully updated VLLM configuration")
+
+        logger.info("Successfully updated VLLM configuration using update_persistent_config")
+        logger.info(f"VLLM 설정 업데이트: API Base URL = {api_base_url_result}, 모델명 = {model_name_result}")
 
         return {
             "success": True,
             "message": "VLLM 설정이 성공적으로 업데이트되었습니다",
-            "updated_configs": updated_configs,
-            "updated_in_memory": True,
-            "services_refreshed": services_refreshed,
             "api_base_url": vllm_config.api_base_url,
-            "model_name": vllm_config.model_name
+            "model_name": vllm_config.model_name,
+            "method": "update_persistent_config"
         }
 
     except HTTPException:

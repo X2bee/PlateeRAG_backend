@@ -373,12 +373,12 @@ class VastService:
         logger.info(f"오퍼 선택 완료: {selected_offer.get('id')} (${selected_offer.get('dph_total')}/h)")
         return selected_offer
 
-    def create_vllm_instance(self, offer_id: str = None, template_name: str = None, create_request = None) -> Optional[str]:
+    def create_vllm_instance(self, offer_id: str = None, template_name: str = None, create_request = None, vast_config_request = None) -> Optional[str]:
         """vLLM 인스턴스 생성 (템플릿 지원)"""
         logger.info("vLLM 인스턴스 생성 시작")
 
         start_time = time.time()
-        instance_id = self.vast_manager.create_instance_fallback(offer_id)
+        instance_id = self.vast_manager.create_instance_fallback(offer_id, vast_config_request)
 
         if not instance_id:
             self._log_execution(

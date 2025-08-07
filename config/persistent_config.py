@@ -210,15 +210,26 @@ class PersistentConfig(Generic[T]):
     환경 변수와 저장된 설정을 관리합니다.
     """
 
-    def __init__(self, env_name: str, config_path: str, env_value: T):
+    def __init__(self, env_name: str, config_path: str, env_value: T, type_converter: Optional[callable] = None):
         self.env_name = env_name
         self.config_path = config_path
         self.env_value = env_value
+        self.type_converter = type_converter
         self.config_value = get_config_value(config_path)
 
         if self.config_value is not None:
             logger.info("'%s' loaded from database: %s", env_name, self.config_value)
-            self.value = self.config_value
+            # type_converter가 있고 config_value가 문자열인 경우 변환 적용
+            if self.type_converter and isinstance(self.config_value, str):
+                try:
+                    self.value = self.type_converter(self.config_value)
+                    logger.debug("Applied type converter to loaded value for '%s': %s -> %s",
+                               env_name, self.config_value, self.value)
+                except (ValueError, TypeError) as e:
+                    logger.warning("Failed to convert loaded value for '%s': %s, using original value", env_name, e)
+                    self.value = self.config_value
+            else:
+                self.value = self.config_value
         else:
             logger.info("'%s' using default value: %s", env_name, env_value)
             self.value = env_value

@@ -94,13 +94,13 @@ class VastConfig(BaseConfig):
         self.DEFAULT_PORTS = self.create_persistent_config(
             env_name="VAST_DEFAULT_PORTS",
             config_path="vast.network.default_ports",
-            default_value="1111,6006,8080,8384,72299,12434,12435",
+            default_value=[1111, 6006, 8080, 8384, 72299, 12434, 12435],  # 리스트로 저장
             type_converter=convert_to_int_list,
         )
         self.DEFAULT_TRAIN_PORTS = self.create_persistent_config(
             env_name="VAST_DEFAULT_TRAIN_PORTS",
             config_path="vast.network.default_train_ports",
-            default_value="1111,6006,8080,8384,72299,8010",
+            default_value=[1111, 6006, 8080, 8384, 72299, 8010],  # 리스트로 저장
             type_converter=convert_to_int_list,
         )
         self.VLLM_HOST_IP = self.create_persistent_config(

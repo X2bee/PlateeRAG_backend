@@ -89,11 +89,14 @@ class BaseConfig(ABC):
         PersistentConfig 객체 생성
         """
         env_value = self.get_env_value(env_name, default_value, file_path, type_converter)
+
         config = PersistentConfig(
             env_name=env_name,
             config_path=config_path,
-            env_value=env_value
+            env_value=env_value,
+            type_converter=type_converter
         )
+
         self.configs[env_name] = config
         return config
 
@@ -142,6 +145,14 @@ def convert_to_list(value: str, separator: str = ',') -> List[str]:
     """문자열을 리스트로 변환"""
     return [item.strip() for item in value.split(separator) if item.strip()]
 
-def convert_to_int_list(value: str, separator: str = ',') -> List[int]:
-    """문자열을 정수 리스트로 변환"""
-    return [int(p.strip()) for p in value.split(separator) if p.strip().isdigit()]
+def convert_to_int_list(value: Union[str, List[int]], separator: str = ',') -> List[int]:
+    """문자열 또는 리스트를 정수 리스트로 변환"""
+    if isinstance(value, list):
+        # 이미 리스트인 경우, 모든 요소를 int로 변환
+        return [int(item) for item in value if str(item).strip().isdigit() or isinstance(item, int)]
+    elif isinstance(value, str):
+        # 문자열인 경우 분리해서 변환
+        return [int(p.strip()) for p in value.split(separator) if p.strip().isdigit()]
+    else:
+        # 다른 타입인 경우 빈 리스트 반환
+        return []

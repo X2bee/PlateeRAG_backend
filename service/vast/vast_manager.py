@@ -560,7 +560,7 @@ class VastAIManager:
         logger.info(f"선택된 오퍼: ID={selected.get('id')}, 가격=${selected.get('dph_total')}/h")
         return selected
 
-    def create_instance(self, offer_id: str) -> Optional[str]:
+    def create_instance(self, offer_id: str, vast_config_request=None) -> Optional[str]:
         logger.info(f"📦 인스턴스를 생성 중... (Offer ID: {offer_id})")
 
         name = self.config_composer.get_config_by_name("VAST_IMAGE_NAME").value
@@ -593,16 +593,16 @@ class VastAIManager:
             "-e DATA_DIRECTORY=/vllm/",
             f"-e PORTAL_CONFIG=\"localhost:1111:11111:/:Instance Portal|localhost:8080:18080:/:Jupyter|localhost:8080:8080:/terminals/1:Jupyter Terminal|localhost:8384:18384:/:Syncthing|localhost:6006:16006:/:Tensorboard\"",
             "-e NVIDIA_VISIBLE_DEVICES=all",
-            f"-e VLLM_MODEL_NAME={self.config_composer.get_config_by_name('VLLM_MODEL_NAME').value}",
             f"-e VLLM_PORT={vllm_port}",
             f"-e VLLM_HOST_IP={vllm_host}",
             f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
-            f"-e VLLM_MAX_MODEL_LEN={self.config_composer.get_config_by_name('VLLM_MAX_MODEL_LEN').value}",
-            f"-e VLLM_GPU_MEMORY_UTILIZATION={self.config_composer.get_config_by_name('VLLM_GPU_MEMORY_UTILIZATION').value}",
-            f"-e VLLM_PIPELINE_PARALLEL_SIZE={self.config_composer.get_config_by_name('VLLM_PIPELINE_PARALLEL_SIZE').value}",
-            f"-e VLLM_TENSOR_PARALLEL_SIZE={self.config_composer.get_config_by_name('VLLM_TENSOR_PARALLEL_SIZE').value}",
-            f"-e VLLM_DTYPE={self.config_composer.get_config_by_name('VLLM_DTYPE').value}",
-            f"-e VLLM_TOOL_CALL_PARSER={self.config_composer.get_config_by_name('VLLM_TOOL_CALL_PARSER').value}",
+            f"-e VLLM_MODEL_NAME={vast_config_request.get('VLLM_MODEL_NAME').value}",
+            f"-e VLLM_MAX_MODEL_LEN={vast_config_request.get('VLLM_MAX_MODEL_LEN').value}",
+            f"-e VLLM_GPU_MEMORY_UTILIZATION={vast_config_request.get('VLLM_GPU_MEMORY_UTILIZATION').value}",
+            f"-e VLLM_PIPELINE_PARALLEL_SIZE={vast_config_request.get('VLLM_PIPELINE_PARALLEL_SIZE').value}",
+            f"-e VLLM_TENSOR_PARALLEL_SIZE={vast_config_request.get('VLLM_TENSOR_PARALLEL_SIZE').value}",
+            f"-e VLLM_DTYPE={vast_config_request.get('VLLM_DTYPE').value}",
+            f"-e VLLM_TOOL_CALL_PARSER={vast_config_request.get('VLLM_TOOL_CALL_PARSER').value}",
         ])
 
         # 환경 변수 문자열로 결합
@@ -742,8 +742,8 @@ class VastAIManager:
 
         return None
 
-    def create_instance_fallback(self, offer_id: str) -> Optional[str]:
-        instance_id = self.create_instance(offer_id)
+    def create_instance_fallback(self, offer_id: str, vast_config_request = None) -> Optional[str]:
+        instance_id = self.create_instance(offer_id, vast_config_request)
 
         if not instance_id:
             logger.info("기본 인스턴스 생성 실패, 간단한 버전으로 재시도")
@@ -757,13 +757,13 @@ class VastAIManager:
                 f"-e VLLM_HOST_IP={vllm_host}",
                 f"-e VLLM_PORT={vllm_port}",
                 f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
-                f"-e VLLM_MODEL_NAME={self.config_composer.get_config_by_name('VLLM_MODEL_NAME').value}",
-                f"-e VLLM_MAX_MODEL_LEN={self.config_composer.get_config_by_name('VLLM_MAX_MODEL_LEN').value}",
-                f"-e VLLM_GPU_MEMORY_UTILIZATION={self.config_composer.get_config_by_name('VLLM_GPU_MEMORY_UTILIZATION').value}",
-                f"-e VLLM_PIPELINE_PARALLEL_SIZE={self.config_composer.get_config_by_name('VLLM_PIPELINE_PARALLEL_SIZE').value}",
-                f"-e VLLM_TENSOR_PARALLEL_SIZE={self.config_composer.get_config_by_name('VLLM_TENSOR_PARALLEL_SIZE').value}",
-                f"-e VLLM_DTYPE={self.config_composer.get_config_by_name('VLLM_DTYPE').value}",
-                f"-e VLLM_TOOL_CALL_PARSER={self.config_composer.get_config_by_name('VLLM_TOOL_CALL_PARSER').value}",
+                f"-e VLLM_MODEL_NAME={vast_config_request.get('VLLM_MODEL_NAME').value}",
+                f"-e VLLM_MAX_MODEL_LEN={vast_config_request.get('VLLM_MAX_MODEL_LEN').value}",
+                f"-e VLLM_GPU_MEMORY_UTILIZATION={vast_config_request.get('VLLM_GPU_MEMORY_UTILIZATION').value}",
+                f"-e VLLM_PIPELINE_PARALLEL_SIZE={vast_config_request.get('VLLM_PIPELINE_PARALLEL_SIZE').value}",
+                f"-e VLLM_TENSOR_PARALLEL_SIZE={vast_config_request.get('VLLM_TENSOR_PARALLEL_SIZE').value}",
+                f"-e VLLM_DTYPE={vast_config_request.get('VLLM_DTYPE').value}",
+                f"-e VLLM_TOOL_CALL_PARSER={vast_config_request.get('VLLM_TOOL_CALL_PARSER').value}",
             ]
             env_string = " ".join(env_params).strip()
             name = self.config_composer.get_config_by_name("VAST_IMAGE_NAME").value
