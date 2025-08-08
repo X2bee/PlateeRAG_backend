@@ -23,7 +23,7 @@ enhance_prompt = """You are an AI assistant that must strictly follow these guid
 Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
 
 class QdrantRetrievalTool(Node):
-    categoryId = "langchain"
+    categoryId = "xgen"
     functionId = "document_loaders"
     nodeId = "document_loaders/QdrantRetrievalTool"
     nodeName = "Qdrant Retrieval Tool"

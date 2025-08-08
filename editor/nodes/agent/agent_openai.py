@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 default_prompt = """You are a helpful AI assistant."""
 
 class AgentOpenAINode(Node):
-    categoryId = "langchain"
+    categoryId = "xgen"
     functionId = "agents"
     nodeId = "agents/openai"
     nodeName = "Agent OpenAI"

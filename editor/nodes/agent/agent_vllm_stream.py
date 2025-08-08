@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 default_prompt = """You are a helpful AI assistant."""
 
 class AgentVLLMStreamNode(Node):
-    categoryId = "langchain"
+    categoryId = "xgen"
     functionId = "agents"
     nodeId = "agents/vllm_stream"
     nodeName = "Agent VLLM Stream"

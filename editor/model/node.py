@@ -42,14 +42,14 @@ class NodeSpec(TypedDict):
 
 CATEGORIES_LABEL_MAP = {
     'langchain': 'LangChain',
-    'polar': 'POLAR',
+    'xgen': 'XGen',
     'utilities': 'Utilities',
     'math': 'Math'
 }
 
 ICON_LABEL_MAP = {
     'langchain': 'SiLangchain',
-    'polar': 'POLAR',
+    'xgen': 'GiRollingEnergy',
     'utilities': 'LuWrench',
     'math': 'LuWrench'
 }

@@ -22,25 +22,26 @@ enhance_prompt = """You are an AI assistant that must strictly follow these guid
 
 Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
 
-class QdrantRetrievalTool(Node):
+class APICallingTool(Node):
     categoryId = "xgen"
-    functionId = "document_loaders"
-    nodeId = "document_loaders/Qdrant"
-    nodeName = "Qdrant Search"
-    description = "RAG 서비스와 검색 파라미터를 설정하여 다음 노드로 전달하는 노드"
-    tags = ["document_loader", "qdrant", "vector_db", "rag", "setup"]
+    functionId = "api_loader"
+    nodeId = "api_loader/APICallingTool"
+    nodeName = "API Calling Tool"
+    description = "API 호출을 위한 Tool을 전달"
+    tags = ["api", "rag", "setup"]
 
     inputs = []
     outputs = [
-        {"id": "rag_context", "name": "RAG Context", "type": "DICT"},
+        {"id": "tools", "name": "Tools", "type": "TOOL"},
     ]
 
     parameters = [
+        {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "api_calling_tool", "required": True},
+        {"id": "description", "name": "Description", "type": "STR", "value": "--", "required": True},
         {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
         {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
-        {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "RAG 컨텍스트를 사용하여 응답을 향상시키기 위한 프롬프트입니다."},
-
+        {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "검색된 자료를 어떻게 사용할 것인지 지시합니다."},
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
@@ -55,42 +56,39 @@ class QdrantRetrievalTool(Node):
         )
         return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
-    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
-        rag_service = AppServiceManager.get_rag_service()
+    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
+        def create_vectordb_tool():
+            @tool(tool_name, description=description)
+            def vectordb_retrieval_tool(query: str) -> str:
+                rag_service = AppServiceManager.get_rag_service()
+                try:
+                    search_result = sync_run_async(rag_service.search_documents(
+                        collection_name=collection_name,
+                        query_text=query,
+                        limit=top_k,
+                        score_threshold=score_threshold
+                    ))
 
-        try:
-            if not collection_name:
-                return {
-                    "error": "컬렉션 이름이 제공되지 않았습니다.",
-                    "rag_service": None,
-                    "search_params": None,
-                    "status": "error"
-                }
+                    results = search_result.get("results", [])
+                    if not results:
+                        return query
 
-            if not rag_service:
-                return {
-                    "error": "RAG 서비스를 사용할 수 없습니다.",
-                    "rag_service": None,
-                    "search_params": None,
-                    "status": "error"
-                }
+                    context_parts = []
+                    for i, item in enumerate(results, 1):
+                        if "chunk_text" in item and item["chunk_text"]:
+                            score = item.get("score", 0.0)
+                            chunk_text = item["chunk_text"]
+                            context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
+                    if context_parts:
+                        context_text = "\n".join(context_parts)
+                        enhanced_prompt = f"""{enhance_prompt}:
+[참고 문서]
+{context_text}"""
+                        return enhanced_prompt
+                except Exception as e:
+                    logger.error(f"RAG 검색 수행 중 오류: {e}")
+                    return {"error": str(e)}
 
-            rag_context = {
-                "rag_service": rag_service,
-                "search_params": {
-                    "collection_name": collection_name,
-                    "top_k": top_k,
-                    "score_threshold": score_threshold,
-                    "enhance_prompt": enhance_prompt
-                },
-                "status": "ready"
-            }
-            return rag_context
+            return vectordb_retrieval_tool
 
-        except Exception as e:
-            return {
-                "error": f"RAG 컨텍스트 설정 중 오류: {str(e)}",
-                "rag_service": None,
-                "search_params": None,
-                "status": "error"
-            }
+        return create_vectordb_tool()

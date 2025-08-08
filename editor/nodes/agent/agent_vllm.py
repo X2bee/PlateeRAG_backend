@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 default_prompt = """You are a helpful AI assistant."""
 
 class AgentVLLMNode(Node):
-    categoryId = "langchain"
+    categoryId = "xgen"
     functionId = "agents"
     nodeId = "agents/vllm"
     nodeName = "Agent VLLM"
