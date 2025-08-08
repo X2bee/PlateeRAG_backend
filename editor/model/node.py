@@ -23,6 +23,10 @@ class Parameter(TypedDict):
     options: Optional[Union[List[dict[str, Any]], Callable]] = None
     is_api: bool = False  # API 호출 여부
     api_name: Optional[str] = None  # API 호출 시 사용할 이름
+    handle_id: Optional[bool] = False  # True이면 id를 키로 사용
+    expandable: Optional[bool] = False  # True이면 확장 가능한 파라미터
+    description: Optional[str] = None  # 파라미터 설명
+    is_added: Optional[bool] = False  # True이면 추가된
 
 
 class NodeSpec(TypedDict):
@@ -67,6 +71,7 @@ FUNCTION_LABEL_MAP = {
     'moderation': 'Moderation',
     'output_parsers': 'Output Parser',
     'tools': 'Tool',
+    'api_loader': 'API Loader',
     'arithmetic':'Arithmetic',
     'endnode': 'End Node',
     'startnode': 'Start Node',

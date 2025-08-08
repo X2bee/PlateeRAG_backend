@@ -1,26 +1,11 @@
-import os
 import logging
-import asyncio
-from typing import Optional, Dict, Any
+import requests
+from typing import Any, Dict
+from pydantic import BaseModel, create_model, Field
 from editor.node_composer import Node
 from langchain.agents import tool
-from editor.utils.helper.service_helper import AppServiceManager
-from editor.utils.helper.async_helper import sync_run_async
-from service.database.models.vectordb import VectorDB
-from fastapi import Request
-from controller.controller_helper import extract_user_id_from_request
-
+import json
 logger = logging.getLogger(__name__)
-enhance_prompt = """You are an AI assistant that must strictly follow these guidelines when using the provided document context:
-
-1. ANSWER ONLY BASED ON PROVIDED CONTEXT: Use only the information from the retrieved documents to answer questions. Do not add information from your general knowledge.
-2. BE PRECISE AND ACCURATE: Quote specific facts, numbers, and details exactly as they appear in the documents. Include relevant quotes when appropriate.
-3. ACKNOWLEDGE LIMITATIONS: If the provided documents do not contain sufficient information to answer the user's question, clearly state "I don't have enough information in the provided documents to answer this question" or "The provided documents don't contain information about [specific topic]."
-4. STAY FOCUSED: Answer only what the user asked. Do not provide additional information beyond what was requested unless it's directly relevant to the question.
-5. CITE SOURCES: When possible, reference which document number contains the information you're using (e.g., "According to Document 1..." or "As mentioned in Document 2...").
-6. BE CONCISE: Provide clear, direct answers without unnecessary elaboration. Focus on delivering exactly what the user needs.
-
-Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
 
 class APICallingTool(Node):
     categoryId = "xgen"
@@ -30,7 +15,9 @@ class APICallingTool(Node):
     description = "API 호출을 위한 Tool을 전달"
     tags = ["api", "rag", "setup"]
 
-    inputs = []
+    inputs = [
+        {"id": "args_schema", "name": "ArgsSchema", "type": "BaseModel"},
+    ]
     outputs = [
         {"id": "tools", "name": "Tools", "type": "TOOL"},
     ]
@@ -39,17 +26,98 @@ class APICallingTool(Node):
         {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "api_calling_tool", "required": True},
         {"id": "description", "name": "Description", "type": "STR", "value": "Use this tool when you need to call an external API to retrieve specific data or perform an operation. Call this tool when the user requests information that requires an API call to external services.", "required": True, "description": "이 도구를 언제 사용하여야 하는지 설명합니다. AI는 해당 설명을 통해, 해당 도구를 언제 호출해야할지 결정할 수 있습니다."},
         {"id": "api_endpoint", "name": "API Endpoint", "type": "STR", "value": "", "required": True, "description": "해당 도구의 실행으로 호출할 API의 엔드포인트 URL입니다."},
+        {"id": "method", "name": "HTTP Method", "type": "STR", "value": "GET", "required": True, "options": [
+            {"value": "GET", "label": "GET"},
+            {"value": "POST", "label": "POST"},
+            {"value": "PUT", "label": "PUT"},
+            {"value": "DELETE", "label": "DELETE"},
+            {"value": "PATCH", "label": "PATCH"}
+        ]},
+        {"id": "timeout", "name": "Timeout (seconds)", "type": "INT", "value": 30, "min": 1, "max": 300},
     ]
 
-    def execute(self, tool_name, description):
+    def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30, args_schema: BaseModel=None, *args, **kwargs):
         def create_api_tool():
-            @tool(tool_name, description=description)
-            def api_tool() -> str:
+            if args_schema is None:
+                # 빈 스키마를 명시적으로 생성
+                from pydantic import BaseModel
+                class EmptySchema(BaseModel):
+                    def json(self, **kwargs):
+                        return "{}"
+                actual_args_schema = EmptySchema
+            else:
+                actual_args_schema = args_schema
+
+            @tool(tool_name, description=description, args_schema=actual_args_schema)
+            def api_tool(**kwargs) -> str:
+                if not kwargs:
+                    kwargs = {}
+                request_data = kwargs if kwargs else {}
+
                 try:
-                    # Placeholder for API call logic
-                    return "API call executed successfully."
-                except Exception as e:
-                    return f"Failed to execute API call: {e}"
+                    # HTTP 메서드에 따라 요청 방식 결정
+                    method_upper = method.upper()
+
+                    # 공통 헤더 설정
+                    headers = {
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'PlateeRAG-APICallingTool/1.0'
+                    }
+
+                    # API 호출
+                    if method_upper == "GET":
+                        # GET 요청의 경우 빈 params는 전송하지 않음
+                        params = request_data if request_data else None
+                        response = requests.get(
+                            api_endpoint,
+                            params=params,
+                            headers=headers,
+                            timeout=timeout
+                        )
+                    elif method_upper in ["POST", "PUT", "PATCH"]:
+                        # POST/PUT/PATCH 요청의 경우 빈 json은 전송하지 않음
+                        json_data = request_data if request_data else None
+                        response = requests.request(
+                            method_upper,
+                            api_endpoint,
+                            json=json_data,
+                            headers=headers,
+                            timeout=timeout
+                        )
+                    elif method_upper == "DELETE":
+                        # DELETE 요청의 경우 빈 params는 전송하지 않음
+                        params = request_data if request_data else None
+                        response = requests.delete(
+                            api_endpoint,
+                            params=params,
+                            headers=headers,
+                            timeout=timeout
+                        )
+                    else:
+                        return f"Unsupported HTTP method: {method}"
+
+                    # 응답 상태 코드 확인
+                    if response.status_code == 200:
+                        try:
+                            result = response.json()
+                            logger.info(f"API call successful: {result}")
+
+                            return str(json.dumps(result, ensure_ascii=False, indent=2))
+                        except ValueError:
+                            logger.info(f"API call successful, but response is not JSON: {response.text}")
+                            return response.text
+                    else:
+                        logger.error(f"API call failed with status code {response.status_code}. Response: {response.text}")
+                        return response.text
+
+                except requests.exceptions.Timeout:
+                    return f"API call timed out after {timeout} seconds"
+                except requests.exceptions.ConnectionError:
+                    return f"Failed to connect to API endpoint: {api_endpoint}"
+                except requests.exceptions.RequestException as e:
+                    return f"Request failed: {str(e)}"
+                except (ValueError, TypeError) as e:
+                    return f"Invalid data format: {str(e)}"
 
             return api_tool
 
