@@ -227,6 +227,7 @@ class ConfigComposer:
         """
         if config_name in self.all_configs:
             self.all_configs[config_name].value = new_value
+            self.all_configs[config_name].save()
         else:
             raise KeyError(f"Configuration '{config_name}' not found")
 

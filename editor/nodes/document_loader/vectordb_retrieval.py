@@ -1,18 +1,30 @@
 import os
 import logging
+import asyncio
 from typing import Optional, Dict, Any
 from editor.node_composer import Node
+from langchain.agents import tool
 from editor.utils.helper.service_helper import AppServiceManager
+from editor.utils.tools.async_helper import sync_run_async
+from service.database.models.vectordb import VectorDB
 from fastapi import Request
 from controller.controller_helper import extract_user_id_from_request
-from service.database.models.vectordb import VectorDB
 
 logger = logging.getLogger(__name__)
+enhance_prompt = """You are an AI assistant that must strictly follow these guidelines when using the provided document context:
 
-class QdrantNode(Node):
+1. ANSWER ONLY BASED ON PROVIDED CONTEXT: Use only the information from the retrieved documents to answer questions. Do not add information from your general knowledge.
+2. BE PRECISE AND ACCURATE: Quote specific facts, numbers, and details exactly as they appear in the documents. Include relevant quotes when appropriate.
+3. ACKNOWLEDGE LIMITATIONS: If the provided documents do not contain sufficient information to answer the user's question, clearly state "I don't have enough information in the provided documents to answer this question" or "The provided documents don't contain information about [specific topic]."
+4. STAY FOCUSED: Answer only what the user asked. Do not provide additional information beyond what was requested unless it's directly relevant to the question.
+5. CITE SOURCES: When possible, reference which document number contains the information you're using (e.g., "According to Document 1..." or "As mentioned in Document 2...").
+6. BE CONCISE: Provide clear, direct answers without unnecessary elaboration. Focus on delivering exactly what the user needs.
+
+Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
+
+class QdrantRetrievalTool(Node):
     categoryId = "langchain"
     functionId = "document_loaders"
-
     nodeId = "document_loaders/Qdrant"
     nodeName = "Qdrant Search"
     description = "RAG 서비스와 검색 파라미터를 설정하여 다음 노드로 전달하는 노드"
@@ -26,7 +38,9 @@ class QdrantNode(Node):
     parameters = [
         {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
-        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.5, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1}
+        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
+        {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "RAG 컨텍스트를 사용하여 응답을 향상시키기 위한 프롬프트입니다."},
+
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
@@ -41,22 +55,11 @@ class QdrantNode(Node):
         )
         return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
-    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.2) -> Dict[str, Any]:
-        """
-        RAG 서비스와 검색 파라미터를 준비하여 다음 노드로 전달합니다.
-        Args:
-            collection_name: 검색할 컬렉션 이름
-            top_k: 반환할 최대 결과 수
-            score_threshold: 최소 점수 임계값
-
-        Returns:
-            RAG 컨텍스트 딕셔너리 (rag_service와 파라미터 포함)
-        """
+    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
         rag_service = AppServiceManager.get_rag_service()
 
         try:
             if not collection_name:
-                logger.error("컬렉션 이름이 제공되지 않았습니다.")
                 return {
                     "error": "컬렉션 이름이 제공되지 않았습니다.",
                     "rag_service": None,
@@ -64,10 +67,7 @@ class QdrantNode(Node):
                     "status": "error"
                 }
 
-            logger.info(f"RAG 컨텍스트 설정: collection='{collection_name}', top_k={top_k}, score_threshold={score_threshold}")
-
             if not rag_service:
-                logger.warning("RAG 서비스를 사용할 수 없습니다.")
                 return {
                     "error": "RAG 서비스를 사용할 수 없습니다.",
                     "rag_service": None,
@@ -80,16 +80,14 @@ class QdrantNode(Node):
                 "search_params": {
                     "collection_name": collection_name,
                     "top_k": top_k,
-                    "score_threshold": score_threshold
+                    "score_threshold": score_threshold,
+                    "enhance_prompt": enhance_prompt
                 },
                 "status": "ready"
             }
-
-            logger.info(f"RAG 컨텍스트 준비 완료: {rag_context['search_params']}")
             return rag_context
 
         except Exception as e:
-            logger.error(f"RAG 컨텍스트 설정 중 오류 발생: {str(e)}")
             return {
                 "error": f"RAG 컨텍스트 설정 중 오류: {str(e)}",
                 "rag_service": None,

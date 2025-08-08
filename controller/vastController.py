@@ -34,6 +34,8 @@ class OfferSearchRequest(BaseModel):
     max_price: Optional[float] = Field(None, description="최대 시간당 가격 ($)", example=2.0, ge=0)
     min_gpu_ram: Optional[int] = Field(None, description="최소 GPU RAM (GB)", example=16, ge=1)
     num_gpus: Optional[int] = Field(None, description="GPU 개수", example=1, ge=1)
+    inet_down: Optional[float] = Field(None, description="최소 다운로드 속도 (Mbps)", example=100.0, ge=0)
+    inet_up: Optional[float] = Field(None, description="최소 업로드 속도 (Mbps)", example=100.0, ge=0)
     rentable: Optional[bool] = Field(None, description="렌트 가능 여부", example=True)
     sort_by: SortBy = Field(SortBy.price, description="정렬 기준")
     limit: Optional[int] = Field(20, description="결과 제한 개수", example=10, ge=1, le=100)
@@ -300,6 +302,10 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
             query_parts.append(f"gpu_ram>={search_request.min_gpu_ram}")
         if search_request.num_gpus:
             query_parts.append(f"num_gpus={search_request.num_gpus}")
+        if search_request.inet_down:
+            query_parts.append(f"inet_down>={search_request.inet_down}")
+        if search_request.inet_up:
+            query_parts.append(f"inet_up>={search_request.inet_up}")
         if search_request.rentable is not None:
             query_parts.append(f"rentable={str(search_request.rentable).lower()}")
 

@@ -1,8 +1,11 @@
+from typing import Dict, Any
 import logging
 from typing import Any, Optional, Generator
 from editor.node_composer import Node
+from editor.nodes.agent.helper import EnhancedAgentStreamingHandler, execute_agent_streaming
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
+from editor.utils.tools.async_helper import sync_run_async
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 
@@ -21,7 +24,8 @@ class AgentOpenAIStreamNode(Node):
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
         {"id": "tools", "name": "Tools", "type": "TOOL", "multi": True, "required": False, "value": []},
-        {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False}
+        {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
+        {"id": "rag_context", "name": "RAG Context", "type": "DICT", "multi": False, "required": False}
     ]
     outputs = [
         {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}
@@ -36,40 +40,96 @@ class AgentOpenAIStreamNode(Node):
             ]
         },
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "min": 0.0, "max": 2.0, "step": 0.1},
-        {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 4096, "min": 1, "max": 8192, "step": 1},
+        {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
-        {"id": "base_url", "name": "Base URL", "type": "STRING", "value": "https://api.openai.com/v1", "optional": True},
+        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "optional": True},
+        {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
     ]
 
-    def execute(self, text: str, tools: Optional[Any] = None, memory: Optional[Any] = None,
-                model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 4096, n_messages: int = 3, base_url: str = "https://api.openai.com/v1") -> Generator[str, None, None]:
+    def execute(
+        self,
+        text: str,
+        tools: Optional[Any] = None,
+        memory: Optional[Any] = None,
+        rag_context: Optional[Dict[str, Any]] = None,
+        model: str = "gpt-4o",
+        temperature: float = 0.7,
+        max_tokens: int = 8192,
+        n_messages: int = 3,
+        base_url: str = "https://api.openai.com/v1",
+        default_prompt: str = default_prompt,
+    ) -> Generator[str, None, None]:
 
         try:
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
 
-            inputs = {"input": text, "chat_history": chat_history}
+            additional_rag_context = ""
+            if rag_context:
+                search_result = sync_run_async(rag_context['rag_service'].search_documents(
+                    collection_name=rag_context['search_params']['collection_name'],
+                    query_text=text,
+                    limit=rag_context['search_params']['top_k'],
+                    score_threshold=rag_context['search_params']['score_threshold']
+                ))
+                results = search_result.get("results", [])
+                if results:
+                    context_parts = []
+                    for i, item in enumerate(results, 1):
+                        if "chunk_text" in item and item["chunk_text"]:
+                            score = item.get("score", 0.0)
+                            chunk_text = item["chunk_text"]
+                            context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
+                    if context_parts:
+                        context_text = "\n".join(context_parts)
+                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
+[Context]
+{context_text}"""
+            inputs = {"input": text, "chat_history": chat_history, "additional_rag_context": additional_rag_context if rag_context else ""}
+
 
             if tools_list:
-                final_prompt = ChatPromptTemplate.from_messages([
-                    ("system", default_prompt),
-                    MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                    ("user", "{input}"),
-                    MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
-                ])
+                if additional_rag_context and additional_rag_context.strip():
+                    final_prompt = ChatPromptTemplate.from_messages([
+                        ("system", default_prompt),
+                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
+                        ("user", "{input}"),
+                        ("user", "{additional_rag_context}"),
+                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                    ])
+                else:
+                    final_prompt = ChatPromptTemplate.from_messages([
+                        ("system", default_prompt),
+                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
+                        ("user", "{input}"),
+                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                    ])
+
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(agent=agent, tools=tools_list, verbose=True, handle_parsing_errors=True)
+                handler = EnhancedAgentStreamingHandler()
 
-                # stream() 메소드를 사용하여 스트리밍 응답 생성
-                for chunk in agent_executor.stream(inputs):
-                    if "output" in chunk:
-                        yield chunk["output"]
+                # Helper 함수를 사용하여 Agent 실행을 스트리밍으로 처리
+                async_executor = lambda: agent_executor.ainvoke(inputs, {"callbacks": [handler]})
+
+                try:
+                    for token in execute_agent_streaming(async_executor, handler):
+                        yield token
+                except Exception as e:
+                    yield f"\nStreaming Error: {str(e)}\n"
             else:
-                # 도구가 없을 경우 간단한 체인으로 스트리밍
-                final_prompt = ChatPromptTemplate.from_messages([
-                    ("system", default_prompt),
-                    MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                    ("user", "{input}")
-                ])
+                if additional_rag_context and additional_rag_context.strip():
+                    final_prompt = ChatPromptTemplate.from_messages([
+                        ("system", default_prompt),
+                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
+                        ("user", "{input}"),
+                        ("user", "{additional_rag_context}"),
+                    ])
+                else:
+                    final_prompt = ChatPromptTemplate.from_messages([
+                        ("system", default_prompt),
+                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
+                        ("user", "{input}")
+                    ])
                 chain = final_prompt | llm
                 for chunk in chain.stream(inputs):
                     yield chunk.content
