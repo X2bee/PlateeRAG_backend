@@ -37,58 +37,20 @@ class APICallingTool(Node):
 
     parameters = [
         {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "api_calling_tool", "required": True},
-        {"id": "description", "name": "Description", "type": "STR", "value": "--", "required": True},
-        {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
-        {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
-        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
-        {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "검색된 자료를 어떻게 사용할 것인지 지시합니다."},
+        {"id": "description", "name": "Description", "type": "STR", "value": "Use this tool when you need to call an external API to retrieve specific data or perform an operation. Call this tool when the user requests information that requires an API call to external services.", "required": True, "description": "이 도구를 언제 사용하여야 하는지 설명합니다. AI는 해당 설명을 통해, 해당 도구를 언제 호출해야할지 결정할 수 있습니다."},
+        {"id": "api_endpoint", "name": "API Endpoint", "type": "STR", "value": "", "required": True, "description": "해당 도구의 실행으로 호출할 API의 엔드포인트 URL입니다."},
     ]
 
-    def api_collection(self, request: Request) -> Dict[str, Any]:
-        user_id = extract_user_id_from_request(request)
-        db_service = request.app.state.app_db
-        collections = db_service.find_by_condition(
-            VectorDB,
-            {
-            "user_id": user_id
-            },
-            limit=1000,
-        )
-        return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
-
-    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
-        def create_vectordb_tool():
+    def execute(self, tool_name, description):
+        def create_api_tool():
             @tool(tool_name, description=description)
-            def vectordb_retrieval_tool(query: str) -> str:
-                rag_service = AppServiceManager.get_rag_service()
+            def api_tool() -> str:
                 try:
-                    search_result = sync_run_async(rag_service.search_documents(
-                        collection_name=collection_name,
-                        query_text=query,
-                        limit=top_k,
-                        score_threshold=score_threshold
-                    ))
-
-                    results = search_result.get("results", [])
-                    if not results:
-                        return query
-
-                    context_parts = []
-                    for i, item in enumerate(results, 1):
-                        if "chunk_text" in item and item["chunk_text"]:
-                            score = item.get("score", 0.0)
-                            chunk_text = item["chunk_text"]
-                            context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
-                    if context_parts:
-                        context_text = "\n".join(context_parts)
-                        enhanced_prompt = f"""{enhance_prompt}:
-[참고 문서]
-{context_text}"""
-                        return enhanced_prompt
+                    # Placeholder for API call logic
+                    return "API call executed successfully."
                 except Exception as e:
-                    logger.error(f"RAG 검색 수행 중 오류: {e}")
-                    return {"error": str(e)}
+                    return f"Failed to execute API call: {e}"
 
-            return vectordb_retrieval_tool
+            return api_tool
 
-        return create_vectordb_tool()
+        return create_api_tool()
