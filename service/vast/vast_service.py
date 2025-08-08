@@ -528,6 +528,7 @@ class VastService:
                 execution_time=time.time() - start_time,
                 error_message="인스턴스 실행 대기 타임아웃"
             )
+            self._update_instance(instance_id, {"status": "failed"})
             return False
 
         # 상태 업데이트

@@ -2,6 +2,7 @@ from typing import Dict, Any
 import logging
 from typing import Any, Optional, Generator
 from editor.node_composer import Node
+from editor.nodes.agent.helper import EnhancedAgentStreamingHandler, execute_agent_streaming
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.tools.async_helper import sync_run_async
@@ -105,11 +106,16 @@ class AgentOpenAIStreamNode(Node):
 
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(agent=agent, tools=tools_list, verbose=True, handle_parsing_errors=True)
+                handler = EnhancedAgentStreamingHandler()
 
-                # stream() 메소드를 사용하여 스트리밍 응답 생성
-                for chunk in agent_executor.stream(inputs):
-                    if "output" in chunk:
-                        yield chunk["output"]
+                # Helper 함수를 사용하여 Agent 실행을 스트리밍으로 처리
+                async_executor = lambda: agent_executor.ainvoke(inputs, {"callbacks": [handler]})
+
+                try:
+                    for token in execute_agent_streaming(async_executor, handler):
+                        yield token
+                except Exception as e:
+                    yield f"\nStreaming Error: {str(e)}\n"
             else:
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
