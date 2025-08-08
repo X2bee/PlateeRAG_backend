@@ -5,7 +5,7 @@ from editor.node_composer import Node
 from langchain.schema.output_parser import StrOutputParser
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
-from editor.utils.tools.async_helper import sync_run_async
+from editor.utils.helper.async_helper import sync_run_async
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from fastapi import Request

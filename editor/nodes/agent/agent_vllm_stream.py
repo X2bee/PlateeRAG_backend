@@ -3,12 +3,12 @@ import asyncio
 import logging
 from typing import Any, Optional, Generator
 from editor.node_composer import Node
-from editor.nodes.agent.helper import EnhancedAgentStreamingHandler, execute_agent_streaming
+from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, execute_agent_streaming
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.callbacks import AsyncIteratorCallbackHandler
 from langchain.callbacks.base import AsyncCallbackHandler
 from editor.utils.helper.service_helper import AppServiceManager
-from editor.utils.tools.async_helper import sync_run_async
+from editor.utils.helper.async_helper import sync_run_async
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from fastapi import Request
