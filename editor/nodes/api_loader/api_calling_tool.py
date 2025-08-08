@@ -42,8 +42,7 @@ class APICallingTool(Node):
                 # 빈 스키마를 명시적으로 생성
                 from pydantic import BaseModel
                 class EmptySchema(BaseModel):
-                    def json(self, **kwargs):
-                        return "{}"
+                    pass
                 actual_args_schema = EmptySchema
             else:
                 actual_args_schema = args_schema
