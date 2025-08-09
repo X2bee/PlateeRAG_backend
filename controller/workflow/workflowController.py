@@ -10,7 +10,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from editor.workflow_executor import WorkflowExecutor
+from editor.async_workflow_executor import AsyncWorkflowExecutor, execution_manager
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 from controller.controller_helper import extract_user_id_from_request
 
@@ -639,7 +639,7 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
 @router.post("/execute", response_model=Dict[str, Any])
 async def execute_workflow(request: Request, workflow: WorkflowData):
     """
-    주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
+    주어진 노드와 엣지 정보로 워크플로우를 비동기적으로 실행합니다.
     """
 
     # print("DEBUG: 워크플로우 실행 요청\n", workflow)
@@ -649,8 +649,18 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
         workflow_data = workflow.dict()
         app_db = get_db_manager(request)
 
-        executor = WorkflowExecutor(workflow_data, app_db, workflow.interaction_id, user_id)
-        final_outputs = executor.execute_workflow()
+        # 비동기 실행기 생성
+        executor = execution_manager.create_executor(
+            workflow_data=workflow_data,
+            db_manager=app_db,
+            interaction_id=workflow.interaction_id,
+            user_id=user_id
+        )
+
+        # 백그라운드에서 비동기 실행
+        final_outputs = []
+        async for output in executor.execute_workflow_async():
+            final_outputs.append(output)
 
         return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
 
@@ -660,17 +670,20 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    finally:
+        # 완료된 실행들 정리
+        execution_manager.cleanup_completed_executions()
 
 @router.post("/execute/stream")
 async def execute_workflow_stream(request: Request, workflow: WorkflowData):
     """
-    주어진 워크플로우를 실행하고, 각 노드의 실행 결과를 SSE로 스트리밍합니다.
+    주어진 워크플로우를 비동기적으로 실행하고, 각 노드의 실행 결과를 SSE로 스트리밍합니다.
     """
 
-    async def stream_generator(result_generator):
+    async def stream_generator(async_result_generator):
         full_response_chunks = []
         try:
-            for chunk in result_generator:
+            async for chunk in async_result_generator:
                 # 클라이언트에 보낼 데이터 형식 정의 (JSON)
                 full_response_chunks.append(str(chunk))
                 response_chunk = {"type": "data", "content": chunk}
@@ -684,13 +697,25 @@ async def execute_workflow_stream(request: Request, workflow: WorkflowData):
             logger.error(f"스트리밍 중 오류 발생: {e}", exc_info=True)
             error_message = {"type": "error", "detail": f"스트리밍 중 오류가 발생했습니다: {str(e)}"}
             yield f"data: {json.dumps(error_message)}\n\n"
+        finally:
+            # 완료된 실행들 정리
+            execution_manager.cleanup_completed_executions()
+
     try:
         user_id = extract_user_id_from_request(request)
         workflow_data = workflow.dict()
         app_db = get_db_manager(request)
 
-        executor = WorkflowExecutor(workflow_data, app_db, workflow.interaction_id, user_id)
-        result_generator = executor.execute_workflow()
+        # 비동기 실행기 생성
+        executor = execution_manager.create_executor(
+            workflow_data=workflow_data,
+            db_manager=app_db,
+            interaction_id=workflow.interaction_id,
+            user_id=user_id
+        )
+
+        # 비동기 제너레이터 시작 (스트리밍용)
+        result_generator = executor.execute_workflow_async_streaming()
 
     except Exception as e:
         # 스트림 시작 전 초기 설정에서 에러 발생 시
@@ -698,6 +723,7 @@ async def execute_workflow_stream(request: Request, workflow: WorkflowData):
         raise HTTPException(status_code=400, detail=f"Error setting up workflow: {e}")
 
     # StreamingResponse를 사용하여 제너레이터가 생성하는 이벤트를 클라이언트로 전송
+    return StreamingResponse(stream_generator(result_generator), media_type="text/event-stream")
     return StreamingResponse(stream_generator(result_generator), media_type="text/event-stream")
 
 @router.post("/execute/based_id", response_model=Dict[str, Any])
@@ -770,13 +796,22 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
                 request_body.input_data
             )
 
-        ## 워크플로우를 실질적으로 실행 (가장중요)
-        ## 워크플로우 실행 관련 로직은 WorkflowExecutor 클래스에 정의되어 있음.
-        ## WorkflowExecutor 클래스는 워크플로우의 노드와 엣지를 기반으로 워크플로우를 실행하는 역할을 함.
+        ## 워크플로우를 실질적으로 비동기 실행 (가장중요)
+        ## 비동기 워크플로우 실행 관련 로직은 AsyncWorkflowExecutor 클래스에 정의되어 있음.
+        ## AsyncWorkflowExecutor 클래스는 워크플로우의 노드와 엣지를 기반으로 워크플로우를 백그라운드에서 실행하는 역할을 함.
         ## 워크플로우 실행 시, interaction_id를 전달하여 대화형 실행을 지원함. (이렇게 되는 경우, interaction_id는 대화형 실행의 ID로 사용되어 DB에 저장됨)
         ## 워크플로우 실행 결과는 final_outputs에 저장됨.
-        executor = WorkflowExecutor(workflow_data, app_db, request_body.interaction_id, user_id)
-        final_outputs = executor.execute_workflow()
+        executor = execution_manager.create_executor(
+            workflow_data=workflow_data,
+            db_manager=app_db,
+            interaction_id=request_body.interaction_id,
+            user_id=user_id
+        )
+
+        # 비동기 실행 및 결과 수집
+        final_outputs = []
+        async for output in executor.execute_workflow_async():
+            final_outputs.append(output)
 
         ## 대화형 실행인 경우 execution_meta의 값을 가지고, 이 경우에는 대화 count를 증가.
         if execution_meta:
@@ -800,6 +835,9 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    finally:
+        # 완료된 실행들 정리
+        execution_manager.cleanup_completed_executions()
 
 @router.post("/execute/based_id/stream")
 async def execute_workflow_with_id_stream(request: Request, request_body: WorkflowRequest):
@@ -809,11 +847,11 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
 
-    async def stream_generator(result_generator, db_manager, user_id, workflow_req):
+    async def stream_generator(async_result_generator, db_manager, user_id, workflow_req):
         """결과 제너레이터를 SSE 형식으로 변환하는 비동기 제너레이터"""
         full_response_chunks = []
         try:
-            for chunk in result_generator:
+            async for chunk in async_result_generator:
                 # 클라이언트에 보낼 데이터 형식 정의 (JSON)
                 full_response_chunks.append(str(chunk))
                 response_chunk = {"type": "data", "content": chunk}
@@ -864,7 +902,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 if 'inputs' in output_data_dict and isinstance(output_data_dict['inputs'], dict):
                     for key, value in output_data_dict['inputs'].items():
                         if value == "<generator_output>":
-                             output_data_dict['inputs'][key] = final_text
+                            output_data_dict['inputs'][key] = final_text
 
                 # 수정된 JSON으로 레코드를 업데이트
                 log_to_update.output_data = json.dumps(output_data_dict, ensure_ascii=False)
@@ -874,6 +912,9 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
 
             except Exception as db_error:
                 logger.error(f"ExecutionIO 로그 업데이트 중 DB 오류 발생: {db_error}", exc_info=True)
+            finally:
+                # 완료된 실행들 정리
+                execution_manager.cleanup_completed_executions()
 
 
     try:
@@ -919,8 +960,16 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
         if execution_meta:
             await update_execution_meta_count(app_db, execution_meta)
 
-        executor = WorkflowExecutor(workflow_data, app_db, request_body.interaction_id, user_id)
-        result_generator = executor.execute_workflow()
+        # 비동기 실행기 생성
+        executor = execution_manager.create_executor(
+            workflow_data=workflow_data,
+            db_manager=app_db,
+            interaction_id=request_body.interaction_id,
+            user_id=user_id
+        )
+
+        # 비동기 제너레이터 시작 (스트리밍용)
+        result_generator = executor.execute_workflow_async_streaming()
 
         # StreamingResponse를 사용하여 SSE 스트림 반환
         return StreamingResponse(
@@ -1157,16 +1206,17 @@ async def execute_single_workflow_for_batch(
                         break
 
         # ========== 워크플로우 실행 ==========
-        executor = WorkflowExecutor(workflow_data, app_db, interaction_id, user_id)
-        result_generator = executor.execute_workflow()
+        executor = execution_manager.create_executor(
+            workflow_data=workflow_data,
+            db_manager=app_db,
+            interaction_id=interaction_id,
+            user_id=user_id
+        )
 
-        # Generator에서 모든 결과를 수집
+        # 비동기 실행 및 결과 수집
         final_outputs = []
-        try:
-            for chunk in result_generator:
-                final_outputs.append(chunk)
-        except Exception as e:
-            raise e
+        async for chunk in executor.execute_workflow_async():
+            final_outputs.append(chunk)
 
         # ========== 결과 처리 ==========
         if len(final_outputs) == 1:
@@ -1392,3 +1442,67 @@ async def get_batch_status(batch_id: str):
         raise HTTPException(status_code=404, detail="배치를 찾을 수 없습니다")
 
     return JSONResponse(content=batch_status_storage[batch_id])
+
+@router.get("/execution/status")
+async def get_all_execution_status():
+    """
+    현재 실행 중인 모든 워크플로우의 상태를 반환합니다.
+
+    Returns:
+        모든 활성 워크플로우 실행 상태
+    """
+    try:
+        status_data = execution_manager.get_all_execution_status()
+        return JSONResponse(content={
+            "active_executions": len(status_data),
+            "executions": status_data
+        })
+    except Exception as e:
+        logger.error(f"실행 상태 조회 중 오류: {e}")
+        raise HTTPException(status_code=500, detail="실행 상태 조회 실패")
+
+@router.get("/execution/status/{execution_id}")
+async def get_execution_status(execution_id: str):
+    """
+    특정 워크플로우 실행의 상태를 반환합니다.
+
+    Args:
+        execution_id: 실행 ID (interaction_id_workflow_id_user_id 형태)
+
+    Returns:
+        워크플로우 실행 상태
+    """
+    try:
+        status = execution_manager.get_execution_status(execution_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail="실행을 찾을 수 없습니다")
+        return JSONResponse(content=status)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"실행 상태 조회 중 오류: {e}")
+        raise HTTPException(status_code=500, detail="실행 상태 조회 실패")
+
+@router.post("/execution/cleanup")
+async def cleanup_completed_executions():
+    """
+    완료된 워크플로우 실행들을 정리합니다.
+
+    Returns:
+        정리 결과
+    """
+    try:
+        before_count = len(execution_manager.get_all_execution_status())
+        execution_manager.cleanup_completed_executions()
+        after_count = len(execution_manager.get_all_execution_status())
+        cleaned_count = before_count - after_count
+
+        return JSONResponse(content={
+            "message": f"{cleaned_count}개의 완료된 실행이 정리되었습니다",
+            "before_count": before_count,
+            "after_count": after_count,
+            "cleaned_count": cleaned_count
+        })
+    except Exception as e:
+        logger.error(f"실행 정리 중 오류: {e}")
+        raise HTTPException(status_code=500, detail="실행 정리 실패")
