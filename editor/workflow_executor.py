@@ -3,7 +3,7 @@ import inspect
 import logging
 import json
 from typing import Dict, Any, Generator, List, Optional
-from editor.node_composer import NODE_CLASS_REGISTRY, run_discovery
+from editor.node_composer import NODE_CLASS_REGISTRY
 from service.monitoring.performance_logger import PerformanceLogger
 
 from service.database.models.executor import ExecutionIO
@@ -21,10 +21,6 @@ class WorkflowExecutor:
         self.edges: List[Dict[str, Any]] = workflow_data['edges']
         self.graph: Dict[str, List[str]] = {node_id: [] for node_id in self.nodes}
         self.in_degree: Dict[str, int] = {node_id: 0 for node_id in self.nodes}
-
-        if not NODE_CLASS_REGISTRY:
-            print("Node class registry is empty. Running discovery...")
-            run_discovery()
 
     def _build_graph(self) -> None:
         """워크플로우 데이터로부터 그래프와 진입 차수를 계산합니다."""
@@ -153,12 +149,12 @@ class WorkflowExecutor:
 
             if function_id == 'endnode':
                 is_generator = inspect.isgenerator(result)
-                
+
                 end_node_result_for_db = "<streaming_output>" if is_generator else result
                 end_node_data = {'node_id': node_id, 'node_name': node_info['data']['nodeName'], 'inputs': kwargs, 'result': end_node_result_for_db}
                 input_data_for_db = start_node_data if start_node_data else {}
                 self._save_execution_io(input_data_for_db, end_node_data)
-                
+
                 if is_generator:
                     print(f" -> endnode 스트리밍 출력 시작.")
                     streaming_output_started = True
@@ -190,7 +186,7 @@ class WorkflowExecutor:
                 if self.nodes[node_id]['data']['functionId'] == 'endnode':
                     final_output = output_data.get('result')
                     break
-            
+
             if final_output is not None:
                 print("최종 출력:", final_output)
                 yield final_output
@@ -203,7 +199,7 @@ class WorkflowExecutor:
         if not self.db_manager:
             logger.warning("DB manager가 없어 ExecutionIO 데이터를 저장할 수 없습니다.")
             return
-        
+
         def safe_json_dumps(data: Any) -> str:
             """순환 참조 및 미지원 타입을 처리하여 안전하게 JSON으로 직렬화하는 함수"""
             def default_encoder(o: Any) -> Any:
@@ -225,7 +221,7 @@ class WorkflowExecutor:
             # JSON 형태로 변환하여 저장
             input_json = safe_json_dumps(input_data)
             output_json = safe_json_dumps(output_data)
-            
+
             insert_data = ExecutionIO(
                 user_id=self.user_id,
                 interaction_id=self.interaction_id,
@@ -235,23 +231,6 @@ class WorkflowExecutor:
                 output_data=output_json
             )
             self.db_manager.insert(insert_data)
-            # DB 타입에 따른 쿼리 준비
-            # db_type = self.db_manager.config_db_manager.db_type
-            # if db_type == "postgresql":
-            #     query = """
-            #         INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
-            #         VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            #     """
-            # else:  # SQLite
-            #     query = """
-            #         INSERT INTO execution_io (interaction_id, workflow_id, workflow_name, input_data, output_data, created_at)
-            #         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            #     """
-
-            # self.db_manager.config_db_manager.execute_query(
-            #     query,
-            #     (self.interaction_id, self.workflow_id, self.workflow_name, input_json, output_json)
-            # )
 
             logger.info("ExecutionIO 데이터가 성공적으로 저장되었습니다. workflow_id: %s", self.workflow_id)
 

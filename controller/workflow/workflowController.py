@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -660,7 +660,7 @@ async def execute_workflow(request: Request, workflow: WorkflowData):
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-    
+
 @router.post("/execute/stream")
 async def execute_workflow_stream(request: Request, workflow: WorkflowData):
     """
@@ -676,10 +676,10 @@ async def execute_workflow_stream(request: Request, workflow: WorkflowData):
                 response_chunk = {"type": "data", "content": chunk}
                 yield f"data: {json.dumps(response_chunk, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.01) # 짧은 딜레이로 이벤트 스트림 안정화
-            
+
             end_message = {"type": "end", "message": "Stream finished"}
             yield f"data: {json.dumps(end_message)}\n\n"
-        
+
         except Exception as e:
             logger.error(f"스트리밍 중 오류 발생: {e}", exc_info=True)
             error_message = {"type": "error", "detail": f"스트리밍 중 오류가 발생했습니다: {str(e)}"}
@@ -696,7 +696,7 @@ async def execute_workflow_stream(request: Request, workflow: WorkflowData):
         # 스트림 시작 전 초기 설정에서 에러 발생 시
         logging.error(f"Workflow pre-execution error: {e}")
         raise HTTPException(status_code=400, detail=f"Error setting up workflow: {e}")
-    
+
     # StreamingResponse를 사용하여 제너레이터가 생성하는 이벤트를 클라이언트로 전송
     return StreamingResponse(stream_generator(result_generator), media_type="text/event-stream")
 

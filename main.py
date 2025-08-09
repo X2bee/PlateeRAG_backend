@@ -177,8 +177,8 @@ if __name__ == "__main__":
         debug = os.environ.get("DEBUG_MODE", "false").lower() in ('true', '1', 'yes', 'on')
 
         print(f"Starting server on {host}:{port} (debug={debug})")
-        uvicorn.run("main:app", host=host, port=port, reload=debug)
+        uvicorn.run("main:app", host=host, port=port, reload=debug, workers=4)
     except Exception as e:
         logger.warning(f"Failed to load config for uvicorn: {e}")
         logger.info("Using default values for uvicorn")
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, workers=4)

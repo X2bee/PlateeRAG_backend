@@ -37,6 +37,7 @@ class APICallingTool(Node):
     ]
 
     def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30, args_schema: BaseModel=None, *args, **kwargs):
+
         def create_api_tool():
             if args_schema is None:
                 # 빈 스키마를 명시적으로 생성
@@ -49,6 +50,8 @@ class APICallingTool(Node):
 
             @tool(tool_name, description=description, args_schema=actual_args_schema)
             def api_tool(**kwargs) -> str:
+                logger.info(f"Creating API tool with name: {tool_name}, endpoint: {api_endpoint}, method: {method}, timeout: {timeout}")
+
                 if not kwargs:
                     kwargs = {}
                 request_data = kwargs if kwargs else {}
@@ -67,15 +70,17 @@ class APICallingTool(Node):
                     if method_upper == "GET":
                         # GET 요청의 경우 빈 params는 전송하지 않음
                         params = request_data if request_data else None
+                        logger.info(f"Making GET request to {api_endpoint} with params: {params}")
                         response = requests.get(
                             api_endpoint,
-                            params=params,
+                            # params=params,
                             headers=headers,
                             timeout=timeout
                         )
+                        logger.info(f"GET request to {api_endpoint} completed with status code: {response}")
                     elif method_upper in ["POST", "PUT", "PATCH"]:
-                        # POST/PUT/PATCH 요청의 경우 빈 json은 전송하지 않음
                         json_data = request_data if request_data else None
+                        logger.info(f"Making {method_upper} request to {api_endpoint} with data: {json_data}")
                         response = requests.request(
                             method_upper,
                             api_endpoint,
@@ -84,8 +89,8 @@ class APICallingTool(Node):
                             timeout=timeout
                         )
                     elif method_upper == "DELETE":
-                        # DELETE 요청의 경우 빈 params는 전송하지 않음
                         params = request_data if request_data else None
+                        logger.info(f"Making DELETE request to {api_endpoint} with params: {params}")
                         response = requests.delete(
                             api_endpoint,
                             params=params,
