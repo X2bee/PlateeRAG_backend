@@ -37,7 +37,7 @@ class APICallingTool(Node):
     ]
 
     def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30, args_schema: BaseModel=None, *args, **kwargs):
-
+        description = description + "\n명시적인 요청이 없다면, return_dict를 False로 하여 STR 형태의 응답을 받으려고 시도하십시오."
         def create_api_tool():
             if args_schema is None:
                 # 빈 스키마를 명시적으로 생성
@@ -49,7 +49,7 @@ class APICallingTool(Node):
                 actual_args_schema = args_schema
 
             @tool(tool_name, description=description, args_schema=actual_args_schema)
-            def api_tool(**kwargs) -> str:
+            def api_tool(return_dict: bool = False, **kwargs) -> str:
                 logger.info(f"Creating API tool with name: {tool_name}, endpoint: {api_endpoint}, method: {method}, timeout: {timeout}")
 
                 if not kwargs:
@@ -68,12 +68,11 @@ class APICallingTool(Node):
 
                     # API 호출
                     if method_upper == "GET":
-                        # GET 요청의 경우 빈 params는 전송하지 않음
                         params = request_data if request_data else None
                         logger.info(f"Making GET request to {api_endpoint} with params: {params}")
                         response = requests.get(
                             api_endpoint,
-                            # params=params,
+                            params=params,
                             headers=headers,
                             timeout=timeout
                         )
@@ -105,8 +104,10 @@ class APICallingTool(Node):
                         try:
                             result = response.json()
                             logger.info(f"API call successful: {result}")
-
-                            return str(json.dumps(result, ensure_ascii=False, indent=2))
+                            if return_dict:
+                                return result
+                            else:
+                                return str(json.dumps(result, ensure_ascii=False, indent=2))
                         except ValueError:
                             logger.info(f"API call successful, but response is not JSON: {response.text}")
                             return response.text
