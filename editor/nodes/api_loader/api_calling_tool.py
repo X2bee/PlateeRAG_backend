@@ -38,6 +38,7 @@ class APICallingTool(Node):
 
     def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30, args_schema: BaseModel=None, *args, **kwargs):
         description = description + "\n명시적인 요청이 없다면, return_dict를 False로 하여 STR 형태의 응답을 받으려고 시도하십시오."
+        additional_params = kwargs.get("additional_params", {})
         def create_api_tool():
             if args_schema is None:
                 # 빈 스키마를 명시적으로 생성
@@ -55,6 +56,11 @@ class APICallingTool(Node):
                 if not kwargs:
                     kwargs = {}
                 request_data = kwargs if kwargs else {}
+
+                if additional_params and additional_params != {}:
+                    request_data.update(additional_params)
+                    logger.info(f"Additional parameters provided: {additional_params}")
+                    logger.info(f"Request data after merging additional parameters: {request_data}")
 
                 try:
                     # HTTP 메서드에 따라 요청 방식 결정
