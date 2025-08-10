@@ -26,8 +26,6 @@ async def load_workflow(request: Request, user_id: str, workflow_id: str):
     특정 workflow를 로드합니다.
     """
     try:
-        user_id = user_id
-
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
 

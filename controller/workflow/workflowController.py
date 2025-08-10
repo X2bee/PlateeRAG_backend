@@ -13,6 +13,8 @@ from datetime import datetime
 from editor.async_workflow_executor import AsyncWorkflowExecutor, execution_manager
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 from controller.controller_helper import extract_user_id_from_request
+from controller.workflow.helper import _workflow_parameter_helper, _default_workflow_parameter_helper
+from controller.workflow.model import WorkflowRequest, WorkflowData, SaveWorkflowRequest, ConversationRequest
 
 from service.database.models.user import User
 from service.database.models.executor import ExecutionMeta, ExecutionIO
@@ -44,34 +46,6 @@ def extract_collection_name(collection_full_name: str) -> str:
     clean_name = re.sub(uuid_pattern, '', collection_full_name, flags=re.IGNORECASE)
 
     return clean_name
-
-class WorkflowRequest(BaseModel):
-    workflow_name: str
-    workflow_id: str
-    input_data: str = ""
-    interaction_id: str = "default"
-    selected_collections: Optional[List[str]] = None
-
-class WorkflowData(BaseModel):
-    workflow_name: str
-    workflow_id: str
-    view: Dict[str, Any]
-    nodes: List[Dict[str, Any]]
-    edges: List[Dict[str, Any]]
-    interaction_id: str = "default"
-
-class SaveWorkflowRequest(BaseModel):
-    workflow_name: str
-    content: WorkflowData
-
-class ConversationRequest(BaseModel):
-    """통합 대화/워크플로우 실행 요청 모델"""
-    user_input: str
-    interaction_id: str
-    execution_type: str = "default_mode"  # "default_mode" 또는 "workflow"
-    workflow_id: Optional[str] = None
-    workflow_name: Optional[str] = None
-    selected_collections: Optional[List[str]] = None
 
 def get_db_manager(request: Request):
     """데이터베이스 매니저 의존성 주입"""
@@ -636,95 +610,93 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
         logger.error(f"Error deleting workflow logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")
 
-@router.post("/execute", response_model=Dict[str, Any])
-async def execute_workflow(request: Request, workflow: WorkflowData):
-    """
-    주어진 노드와 엣지 정보로 워크플로우를 비동기적으로 실행합니다.
-    """
+# @router.post("/execute", response_model=Dict[str, Any])
+# async def execute_workflow(request: Request, workflow: WorkflowData):
+#     """
+#     주어진 노드와 엣지 정보로 워크플로우를 비동기적으로 실행합니다.
+#     """
 
-    # print("DEBUG: 워크플로우 실행 요청\n", workflow)
+#     # print("DEBUG: 워크플로우 실행 요청\n", workflow)
 
-    try:
-        user_id = extract_user_id_from_request(request)
-        workflow_data = workflow.dict()
-        app_db = get_db_manager(request)
+#     try:
+#         user_id = extract_user_id_from_request(request)
+#         workflow_data = workflow.dict()
+#         app_db = get_db_manager(request)
 
-        # 비동기 실행기 생성
-        executor = execution_manager.create_executor(
-            workflow_data=workflow_data,
-            db_manager=app_db,
-            interaction_id=workflow.interaction_id,
-            user_id=user_id
-        )
+#         # 비동기 실행기 생성
+#         executor = execution_manager.create_executor(
+#             workflow_data=workflow_data,
+#             db_manager=app_db,
+#             interaction_id=workflow.interaction_id,
+#             user_id=user_id
+#         )
 
-        # 백그라운드에서 비동기 실행
-        final_outputs = []
-        async for output in executor.execute_workflow_async():
-            final_outputs.append(output)
+#         # 백그라운드에서 비동기 실행
+#         final_outputs = []
+#         async for output in executor.execute_workflow_async():
+#             final_outputs.append(output)
 
-        return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
+#         return {"status": "success", "message": "워크플로우 실행 완료", "outputs": final_outputs}
 
-    except ValueError as e:
-        logging.error(f"Workflow execution error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-    finally:
-        # 완료된 실행들 정리
-        execution_manager.cleanup_completed_executions()
+#     except ValueError as e:
+#         logging.error(f"Workflow execution error: {e}")
+#         raise HTTPException(status_code=400, detail=str(e))
+#     except Exception as e:
+#         logging.error(f"An unexpected error occurred: {e}")
+#         raise HTTPException(status_code=500, detail="Internal Server Error")
+#     finally:
+#         # 완료된 실행들 정리
+#         execution_manager.cleanup_completed_executions()
 
-@router.post("/execute/stream")
-async def execute_workflow_stream(request: Request, workflow: WorkflowData):
-    """
-    주어진 워크플로우를 비동기적으로 실행하고, 각 노드의 실행 결과를 SSE로 스트리밍합니다.
-    """
+# @router.post("/execute/stream")
+# async def execute_workflow_stream(request: Request, workflow: WorkflowData):
+#     """
+#     주어진 워크플로우를 비동기적으로 실행하고, 각 노드의 실행 결과를 SSE로 스트리밍합니다.
+#     """
 
-    async def stream_generator(async_result_generator):
-        full_response_chunks = []
-        try:
-            async for chunk in async_result_generator:
-                # 클라이언트에 보낼 데이터 형식 정의 (JSON)
-                full_response_chunks.append(str(chunk))
-                response_chunk = {"type": "data", "content": chunk}
-                yield f"data: {json.dumps(response_chunk, ensure_ascii=False)}\n\n"
-                await asyncio.sleep(0.01) # 짧은 딜레이로 이벤트 스트림 안정화
+#     async def stream_generator(async_result_generator):
+#         full_response_chunks = []
+#         try:
+#             async for chunk in async_result_generator:
+#                 # 클라이언트에 보낼 데이터 형식 정의 (JSON)
+#                 full_response_chunks.append(str(chunk))
+#                 response_chunk = {"type": "data", "content": chunk}
+#                 yield f"data: {json.dumps(response_chunk, ensure_ascii=False)}\n\n"
+#                 await asyncio.sleep(0.01) # 짧은 딜레이로 이벤트 스트림 안정화
 
-            end_message = {"type": "end", "message": "Stream finished"}
-            yield f"data: {json.dumps(end_message)}\n\n"
+#             end_message = {"type": "end", "message": "Stream finished"}
+#             yield f"data: {json.dumps(end_message)}\n\n"
 
-        except Exception as e:
-            logger.error(f"스트리밍 중 오류 발생: {e}", exc_info=True)
-            error_message = {"type": "error", "detail": f"스트리밍 중 오류가 발생했습니다: {str(e)}"}
-            yield f"data: {json.dumps(error_message)}\n\n"
-        finally:
-            # 완료된 실행들 정리
-            execution_manager.cleanup_completed_executions()
+#         except Exception as e:
+#             logger.error(f"스트리밍 중 오류 발생: {e}", exc_info=True)
+#             error_message = {"type": "error", "detail": f"스트리밍 중 오류가 발생했습니다: {str(e)}"}
+#             yield f"data: {json.dumps(error_message)}\n\n"
+#         finally:
+#             # 완료된 실행들 정리
+#             execution_manager.cleanup_completed_executions()
 
-    try:
-        user_id = extract_user_id_from_request(request)
-        workflow_data = workflow.dict()
-        app_db = get_db_manager(request)
+#     try:
+#         user_id = extract_user_id_from_request(request)
+#         workflow_data = workflow.dict()
+#         app_db = get_db_manager(request)
 
-        # 비동기 실행기 생성
-        executor = execution_manager.create_executor(
-            workflow_data=workflow_data,
-            db_manager=app_db,
-            interaction_id=workflow.interaction_id,
-            user_id=user_id
-        )
+#         # 비동기 실행기 생성
+#         executor = execution_manager.create_executor(
+#             workflow_data=workflow_data,
+#             db_manager=app_db,
+#             interaction_id=workflow.interaction_id,
+#             user_id=user_id
+#         )
 
-        # 비동기 제너레이터 시작 (스트리밍용)
-        result_generator = executor.execute_workflow_async_streaming()
+#         # 비동기 제너레이터 시작 (스트리밍용)
+#         result_generator = executor.execute_workflow_async_streaming()
 
-    except Exception as e:
-        # 스트림 시작 전 초기 설정에서 에러 발생 시
-        logging.error(f"Workflow pre-execution error: {e}")
-        raise HTTPException(status_code=400, detail=f"Error setting up workflow: {e}")
+#     except Exception as e:
+#         # 스트림 시작 전 초기 설정에서 에러 발생 시
+#         logging.error(f"Workflow pre-execution error: {e}")
+#         raise HTTPException(status_code=400, detail=f"Error setting up workflow: {e}")
 
-    # StreamingResponse를 사용하여 제너레이터가 생성하는 이벤트를 클라이언트로 전송
-    return StreamingResponse(stream_generator(result_generator), media_type="text/event-stream")
-    return StreamingResponse(stream_generator(result_generator), media_type="text/event-stream")
+#     return StreamingResponse(stream_generator(result_generator), media_type="text/event-stream")
 
 @router.post("/execute/based_id", response_model=Dict[str, Any])
 async def execute_workflow_with_id(request: Request, request_body: WorkflowRequest):
@@ -770,7 +742,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
 
         ## 모든 워크플로우는 startnode가 있어야 하며, 입력 데이터는 startnode의 첫 번째 파라미터로 설정되어야 함.
         ## 사용자의 인풋은 여기에 입력되고, 워크플로우가 실행됨.
-        if request_body.input_data is not None:
+        if request_body.input_data is not None and request_body.input_data != "" and len(request_body.input_data) > 0:
             for node in workflow_data.get('nodes', []):
                 if node.get('data', {}).get('functionId') == 'startnode':
                     parameters = node.get('data', {}).get('parameters', [])
@@ -885,7 +857,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                     },
                     limit=1,
                     orderby="created_at",
-                    orderby_asc=False # 최신순 정렬
+                    orderby_asc=False
                 )
 
                 if not log_to_update_list:
@@ -941,7 +913,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
 
-        if request_body.input_data is not None:
+        if request_body.input_data is not None and request_body.input_data != "" and len(request_body.input_data) > 0:
             for node in workflow_data.get('nodes', []):
                 if node.get('data', {}).get('functionId') == 'startnode':
                     parameters = node.get('data', {}).get('parameters', [])
@@ -985,109 +957,141 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-# Helper Functions
+# # Helper Functions
 
-async def _workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Updates the workflow data by setting the interaction ID in the parameters of nodes
-    with a function ID of 'memory', if applicable.
+# async def _workflow_parameter_helper(request_body: WorkflowRequest, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+#     """
+#     Updates the workflow data by setting the interaction ID in the parameters of nodes
+#     with a function ID of 'memory', if applicable.
 
-    Args:
-        request_body: An object containing the interaction ID to be applied.
-        workflow_data: A dictionary representing the workflow's nodes and their parameters.
+#     Args:
+#         request_body: An object containing the interaction ID to be applied.
+#         workflow_data: A dictionary representing the workflow's nodes and their parameters.
 
-    Returns:
-        The updated workflow data with the interaction ID applied where necessary.
-    """
-    if (request_body.interaction_id) and (request_body.interaction_id != "default"):
-        for node in workflow_data.get('nodes', []):
-            if node.get('data', {}).get('functionId') == 'memory':
-                parameters = node.get('data', {}).get('parameters', [])
-                for parameter in parameters:
-                    if parameter.get('id') == 'interaction_id':
-                        parameter['value'] = request_body.interaction_id
+#     Returns:
+#         The updated workflow data with the interaction ID applied where necessary.
+#     """
+#     if (request_body.interaction_id) and (request_body.interaction_id != "default"):
+#         for node in workflow_data.get('nodes', []):
+#             if node.get('data', {}).get('functionId') == 'memory':
+#                 parameters = node.get('data', {}).get('parameters', [])
+#                 for parameter in parameters:
+#                     if parameter.get('id') == 'interaction_id':
+#                         parameter['value'] = request_body.interaction_id
 
-    return workflow_data
+#     if request_body.additional_params:
+#         for node in workflow_data.get('nodes', []):
+#             node_id = node.get('id')
+#             if node_id and node_id in request_body.additional_params:
+#                 node_params = request_body.additional_params[node_id]
+#                 parameters = node.get('data', {}).get('parameters', [])
 
-async def _default_workflow_parameter_helper(request, request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Updates the workflow data with default parameters based on the request body.
+#                 # additional_params를 parameters에 추가
+#                 additional_params = {
+#                     "id": "additional_params",
+#                     "name": "additional_params",
+#                     "type": "DICT",
+#                     "value": node_params
+#                 }
+#                 parameters.append(additional_params)
 
-    This function modifies the `workflow_data` dictionary by setting specific parameter values
-    for nodes in the workflow. It updates the `collection_name` parameter for nodes with the
-    `document_loaders` function ID and the `interaction_id` parameter for nodes with the
-    `memory` function ID, based on the values provided in the `request_body`.
+#     return workflow_data
 
-    Parameters:
-        request_body: An object containing the request data. It should have attributes
-            `selected_collection` (optional) and `interaction_id` (optional).
-        workflow_data: A dictionary representing the workflow structure. It contains a list
-            of nodes, each of which may have a `data` dictionary with `functionId` and `parameters`.
+# async def _default_workflow_parameter_helper(request, request_body: WorkflowRequest, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+#     """
+#     Updates the workflow data with default parameters based on the request body.
 
-    Returns:
-        A dictionary representing the updated workflow data with modified parameters.
-    """
-    config_composer = request.app.state.config_composer
-    if not config_composer:
-        raise HTTPException(status_code=500, detail="Config composer not available")
+#     This function modifies the `workflow_data` dictionary by setting specific parameter values
+#     for nodes in the workflow. It updates the `collection_name` parameter for nodes with the
+#     `document_loaders` function ID and the `interaction_id` parameter for nodes with the
+#     `memory` function ID, based on the values provided in the `request_body`.
 
-    llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
+#     Parameters:
+#         request_body: An object containing the request data. It should have attributes
+#             `selected_collection` (optional) and `interaction_id` (optional).
+#         workflow_data: A dictionary representing the workflow structure. It contains a list
+#             of nodes, each of which may have a `data` dictionary with `functionId` and `parameters`.
 
-    if llm_provider == "openai":
-        model = config_composer.get_config_by_name("OPENAI_MODEL_DEFAULT").value
-        url = config_composer.get_config_by_name("OPENAI_API_BASE_URL").value
-    elif llm_provider == "vllm":
-        model = config_composer.get_config_by_name("VLLM_MODEL_NAME").value
-        url = config_composer.get_config_by_name("VLLM_API_BASE_URL").value
-    else:
-        raise HTTPException(status_code=500, detail="Unsupported LLM provider")
+#     Returns:
+#         A dictionary representing the updated workflow data with modified parameters.
+#     """
+#     config_composer = request.app.state.config_composer
+#     if not config_composer:
+#         raise HTTPException(status_code=500, detail="Config composer not available")
 
-    for node in workflow_data.get('nodes', []):
-        if node.get('data', {}).get('functionId') == 'agents':
-            parameters = node.get('data', {}).get('parameters', [])
-            for parameter in parameters:
-                if parameter.get('id') == 'model':
-                    parameter['value'] = model
-                if parameter.get('id') == 'base_url':
-                    parameter['value'] = url
+#     llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
 
-    if request_body.selected_collections:
-        constant_folder = os.path.join(os.getcwd(), "constants")
-        collection_file_path = os.path.join(constant_folder, "collection_node_template.json")
-        edge_template_path = os.path.join(constant_folder, "base_edge_template.json")
-        with open(collection_file_path, 'r', encoding='utf-8') as f:
-            collection_node_template = json.load(f)
-        with open(edge_template_path, 'r', encoding='utf-8') as f:
-            edge_template = json.load(f)
+#     if llm_provider == "openai":
+#         model = config_composer.get_config_by_name("OPENAI_MODEL_DEFAULT").value
+#         url = config_composer.get_config_by_name("OPENAI_API_BASE_URL").value
+#     elif llm_provider == "vllm":
+#         model = config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+#         url = config_composer.get_config_by_name("VLLM_API_BASE_URL").value
+#     else:
+#         raise HTTPException(status_code=500, detail="Unsupported LLM provider")
 
-        for collection in request_body.selected_collections:
-            # UUID 부분을 제거하고 깨끗한 컬렉션 이름 추출
-            collection_name = extract_collection_name(collection)
-            coleection_code = hashlib.sha1(collection_name.encode('utf-8')).hexdigest()[:8]
+#     for node in workflow_data.get('nodes', []):
+#         if node.get('data', {}).get('functionId') == 'agents':
+#             parameters = node.get('data', {}).get('parameters', [])
+#             for parameter in parameters:
+#                 if parameter.get('id') == 'model':
+#                     parameter['value'] = model
+#                 if parameter.get('id') == 'base_url':
+#                     parameter['value'] = url
 
-            print(f"Adding collection node for: {collection} (clean name: {collection_name})")
-            collection_node = copy.deepcopy(collection_node_template)
-            edge = copy.deepcopy(edge_template)
-            collection_node['id'] = f"document_loaders_{collection}"
-            collection_node['data']['parameters'][0]['value'] = collection # collection에서 collection_name으로 수정함. uuid 제거 위해서 수정
-            collection_node['data']['parameters'][1]['value'] = f"retrieval_search_tool_for_{coleection_code}"
-            collection_node['data']['parameters'][2]['value'] = f"Use when a search is needed for the given question related to {collection_name}."
-            workflow_data['nodes'].append(collection_node)
+#     if request_body.selected_collections:
+#         constant_folder = os.path.join(os.getcwd(), "constants")
+#         collection_file_path = os.path.join(constant_folder, "collection_node_template.json")
+#         edge_template_path = os.path.join(constant_folder, "base_edge_template.json")
+#         with open(collection_file_path, 'r', encoding='utf-8') as f:
+#             collection_node_template = json.load(f)
+#         with open(edge_template_path, 'r', encoding='utf-8') as f:
+#             edge_template = json.load(f)
 
-            edge_id = f"{collection_node['id']}:tools-default_agents:tools-{coleection_code}"
-            edge['id'] = edge_id
-            edge['source']['nodeId'] = collection_node['id']
-            workflow_data['edges'].append(edge)
+#         for collection in request_body.selected_collections:
+#             # UUID 부분을 제거하고 깨끗한 컬렉션 이름 추출
+#             collection_name = extract_collection_name(collection)
+#             coleection_code = hashlib.sha1(collection_name.encode('utf-8')).hexdigest()[:8]
 
-    if (request_body.interaction_id) and (request_body.interaction_id != "default"):
-        for node in workflow_data.get('nodes', []):
-            if node.get('data', {}).get('functionId') == 'memory':
-                parameters = node.get('data', {}).get('parameters', [])
-                for parameter in parameters:
-                    if parameter.get('id') == 'interaction_id':
-                        parameter['value'] = request_body.interaction_id
+#             print(f"Adding collection node for: {collection} (clean name: {collection_name})")
+#             collection_node = copy.deepcopy(collection_node_template)
+#             edge = copy.deepcopy(edge_template)
+#             collection_node['id'] = f"document_loaders_{collection}"
+#             collection_node['data']['parameters'][0]['value'] = collection # collection에서 collection_name으로 수정함. uuid 제거 위해서 수정
+#             collection_node['data']['parameters'][1]['value'] = f"retrieval_search_tool_for_{coleection_code}"
+#             collection_node['data']['parameters'][2]['value'] = f"Use when a search is needed for the given question related to {collection_name}."
+#             workflow_data['nodes'].append(collection_node)
 
-    return workflow_data
+#             edge_id = f"{collection_node['id']}:tools-default_agents:tools-{coleection_code}"
+#             edge['id'] = edge_id
+#             edge['source']['nodeId'] = collection_node['id']
+#             workflow_data['edges'].append(edge)
+
+#     if (request_body.interaction_id) and (request_body.interaction_id != "default"):
+#         for node in workflow_data.get('nodes', []):
+#             if node.get('data', {}).get('functionId') == 'memory':
+#                 parameters = node.get('data', {}).get('parameters', [])
+#                 for parameter in parameters:
+#                     if parameter.get('id') == 'interaction_id':
+#                         parameter['value'] = request_body.interaction_id
+
+#     if request_body.additional_params:
+#         for node in workflow_data.get('nodes', []):
+#             node_id = node.get('id')
+#             if node_id and node_id in request_body.additional_params:
+#                 node_params = request_body.additional_params[node_id]
+#                 parameters = node.get('data', {}).get('parameters', [])
+
+#                 # additional_params를 parameters에 추가
+#                 additional_param = {
+#                     "id": "additional_params",
+#                     "name": "additional_params",
+#                     "type": "DICT",
+#                     "value": node_params
+#                 }
+#                 parameters.append(additional_param)
+
+#     return workflow_data
 
 
 # ==================================================
