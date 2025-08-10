@@ -3,6 +3,7 @@ import requests
 from typing import Any, Dict
 from pydantic import BaseModel, create_model, Field
 from editor.node_composer import Node
+from editor.utils.helper.parse_helper import parse_param_value
 from langchain.agents import tool
 import json
 logger = logging.getLogger(__name__)
@@ -58,7 +59,10 @@ class APICallingTool(Node):
                 request_data = kwargs if kwargs else {}
 
                 if additional_params and additional_params != {}:
-                    request_data.update(additional_params)
+                    parsed_additional_params = {}
+                    for key, value in additional_params.items():
+                        parsed_additional_params[key] = parse_param_value(value)
+                    request_data.update(parsed_additional_params)
                     logger.info(f"Additional parameters provided: {additional_params}")
                     logger.info(f"Request data after merging additional parameters: {request_data}")
 
