@@ -17,7 +17,7 @@ class APICallingTool(Node):
     tags = ["api", "rag", "setup"]
 
     inputs = [
-        {"id": "args_schema", "name": "ArgsSchema", "type": "BaseModel"},
+        {"id": "args_schema", "name": "ArgsSchema", "type": "InputSchema"},
     ]
     outputs = [
         {"id": "tools", "name": "Tools", "type": "TOOL"},

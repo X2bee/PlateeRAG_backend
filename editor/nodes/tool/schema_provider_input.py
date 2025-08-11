@@ -1,21 +1,22 @@
 from editor.node_composer import Node
 import json
-from typing import Any, Type
+from typing import Dict, Any, Type
 from pydantic import BaseModel, create_model, Field
 
-class OutputSchemaProviderNode(Node):
+class InputSchemaProviderNode(Node):
     categoryId = "xgen"
     functionId = "tools"
-    nodeId = "output_schema_provider"
-    nodeName = "Schema Provider(Output)"
-    description = "BaseModel을 사용하여 handle_id가 true인 파라미터들의 id를 키로, 입력된 값을 값으로 하는 JSON 딕셔너리를 출력하는 노드입니다. 이 노드는 출력 스키마를 생성합니다."
+    nodeId = "input_schema_provider"
+    nodeName = "Schema Provider(Input)"
+    description = "사용자 입력에 따라 동적으로 Pydantic 모델을 생성하는 노드입니다."
     tags = ["input", "json", "dict", "parameter", "source", "user_input", "key_value"]
 
     inputs = []
     outputs = [
-        {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
+        {"id": "args_schema", "name": "ArgsSchema", "type": "InputSchema"},
     ]
     parameters = [
+        # {"id": "key", "name": "Key", "type": "STR", "value": "value", "required": True, "handle_id": True},
     ]
 
     def execute(self, *args, **kwargs) -> BaseModel:
