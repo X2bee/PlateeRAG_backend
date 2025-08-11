@@ -6,6 +6,7 @@ from langchain.schema.output_parser import StrOutputParser
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
+from editor.utils.prefix_prompt import prefix_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from fastapi import Request
@@ -137,7 +138,7 @@ class AgentVLLMNode(Node):
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 [Context]
 {context_text}"""
-            prompt = default_prompt
+            prompt = prefix_prompt+default_prompt
 
             # OpenAI API를 사용하여 응답 생성
             response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, additional_rag_context)
