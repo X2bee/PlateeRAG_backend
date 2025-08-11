@@ -27,8 +27,10 @@ async def get_models(request: Request):
     hugging_face_user_id = config_composer.get_config_by_name("HUGGING_FACE_USER_ID").value
     hugging_face_hub_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value
 
-    if not hugging_face_user_id or not hugging_face_hub_token:
-        raise HTTPException(status_code=500, detail="Hugging Face user ID or token not configured")
+    if not hugging_face_user_id:
+        raise HTTPException(status_code=422, detail="HUGGING_FACE_USER_ID_NOT_CONFIGURED")
+    if not hugging_face_hub_token:
+        raise HTTPException(status_code=422, detail="HUGGING_FACE_HUB_TOKEN_NOT_CONFIGURED")
 
     api = HfApi(token=hugging_face_hub_token)
     models = api.list_models(author=hugging_face_user_id)
@@ -59,8 +61,10 @@ async def get_datasets(request: Request):
     hugging_face_user_id = config_composer.get_config_by_name("HUGGING_FACE_USER_ID").value
     hugging_face_hub_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value
 
-    if not hugging_face_user_id or not hugging_face_hub_token:
-        raise HTTPException(status_code=500, detail="Hugging Face user ID or token not configured")
+    if not hugging_face_user_id:
+        raise HTTPException(status_code=422, detail="HUGGING_FACE_USER_ID_NOT_CONFIGURED")
+    if not hugging_face_hub_token:
+        raise HTTPException(status_code=422, detail="HUGGING_FACE_HUB_TOKEN_NOT_CONFIGURED")
 
     api = HfApi(token=hugging_face_hub_token)
     datasets = api.list_datasets(author=hugging_face_user_id)
