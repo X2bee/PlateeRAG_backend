@@ -15,10 +15,10 @@ class InputStringNode(Node):
         {"id": "args_schema", "name": "ArgsSchema", "type": "BaseModel", "required": False},
     ]
     outputs = [
-        {"id": "result", "name": "Result", "type": "STR"},
+        {"id": "text", "name": "Text", "type": "STR"},
     ]
     parameters = [
-        {"id": "input_str", "name": "String", "type": "STR", "value": "", "required": False},
+        {"id": "input_str", "name": "INPUT", "type": "STR", "value": "", "required": False},
     ]
 
     def execute(self, input_str: str, args_schema: Optional[BaseModel] = None, **kwargs) -> str:
@@ -37,16 +37,7 @@ class InputStringNode(Node):
                         "input": error.get("input", "N/A")
                     })
 
-                return f"""Input: {input_str}
-
-Validation Error: The provided parameters do not match the expected schema.
-Errors: {json.dumps(error_details, ensure_ascii=False, indent=2)}
-Provided parameters: {json.dumps(kwargs, ensure_ascii=False)}"""
-            except Exception as e:
-                return f"""Input: {input_str}
-
-Schema Error: {str(e)}
-Provided parameters: {json.dumps(kwargs, ensure_ascii=False)}"""
+                return "Validation Error: " + json.dumps(error_details, ensure_ascii=False)
         else:
             # ArgsSchema가 없는 경우 기존 로직 사용
             for param_id, param_value in kwargs.items():

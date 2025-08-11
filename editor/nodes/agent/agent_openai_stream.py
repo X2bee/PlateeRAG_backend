@@ -26,8 +26,8 @@ class AgentOpenAIStreamNode(Node):
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
         {"id": "tools", "name": "Tools", "type": "TOOL", "multi": True, "required": False, "value": []},
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
-        {"id": "rag_context", "name": "RAG Context", "type": "DICT", "multi": False, "required": False},
-        {"id": "args_schema", "name": "ArgsSchema", "type": "BaseModel"},
+        {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
+        {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
     ]
     outputs = [
         {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}

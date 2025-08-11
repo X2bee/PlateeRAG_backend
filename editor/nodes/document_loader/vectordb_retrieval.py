@@ -32,7 +32,7 @@ class QdrantRetrievalTool(Node):
 
     inputs = []
     outputs = [
-        {"id": "rag_context", "name": "RAG Context", "type": "DICT"},
+        {"id": "rag_context", "name": "RAG Context", "type": "DocsContext"},
     ]
 
     parameters = [
