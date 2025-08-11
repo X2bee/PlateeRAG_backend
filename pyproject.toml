@@ -116,4 +116,5 @@ dependencies = [
     "yarl==1.20.1",
     "zstandard==0.23.0",
     "vastai==0.3.1",
+    "huggingface_hub==0.33.4",
 ]

@@ -49,6 +49,13 @@ class AppConfig(BaseConfig):
             default_value="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
 
+        self.HUGGING_FACE_USER_ID = self.create_persistent_config(
+            env_name="HUGGING_FACE_USER_ID",
+            config_path="app.hf_user_id",
+            default_value="",
+            file_path="hf_user_id.txt",
+        )
+
         self.HUGGING_FACE_HUB_TOKEN = self.create_persistent_config(
             env_name="HUGGING_FACE_HUB_TOKEN",
             config_path="app.hf_hub_token",
