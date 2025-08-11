@@ -1,6 +1,6 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Generator
+from pydantic import BaseModel
 import logging
-from typing import Any, Optional, Generator
 from editor.node_composer import Node
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, execute_agent_streaming
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -8,6 +8,7 @@ from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
+from langchain_core.output_parsers import JsonOutputParser
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,8 @@ class AgentOpenAIStreamNode(Node):
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
         {"id": "tools", "name": "Tools", "type": "TOOL", "multi": True, "required": False, "value": []},
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
-        {"id": "rag_context", "name": "RAG Context", "type": "DICT", "multi": False, "required": False}
+        {"id": "rag_context", "name": "RAG Context", "type": "DICT", "multi": False, "required": False},
+        {"id": "args_schema", "name": "ArgsSchema", "type": "BaseModel"},
     ]
     outputs = [
         {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}
@@ -52,6 +54,7 @@ class AgentOpenAIStreamNode(Node):
         tools: Optional[Any] = None,
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
+        args_schema: Optional[BaseModel] = None,
         model: str = "gpt-4o",
         temperature: float = 0.7,
         max_tokens: int = 8192,
@@ -86,6 +89,11 @@ class AgentOpenAIStreamNode(Node):
 {context_text}"""
             inputs = {"input": text, "chat_history": chat_history, "additional_rag_context": additional_rag_context if rag_context else ""}
 
+            if args_schema:
+                parser = JsonOutputParser(pydantic_object=args_schema)
+                format_instructions = parser.get_format_instructions()
+                escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
+                default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
                 if additional_rag_context and additional_rag_context.strip():
@@ -130,6 +138,7 @@ class AgentOpenAIStreamNode(Node):
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}")
                     ])
+
                 chain = final_prompt | llm
                 for chunk in chain.stream(inputs):
                     yield chunk.content

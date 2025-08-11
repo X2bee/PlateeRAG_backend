@@ -2,7 +2,7 @@ from typing import Generator, Any
 from editor.node_composer import Node
 
 class PrintAnyStreamNode(Node):
-    categoryId = "utilities"
+    categoryId = "xgen"
     functionId = "endnode"
     nodeId = "tools/print_any_stream"
     nodeName = "Print Any (Stream)"

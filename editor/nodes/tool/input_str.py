@@ -4,7 +4,7 @@ from typing import Dict, Any, Type, Optional
 from pydantic import BaseModel, ValidationError
 
 class InputStringNode(Node):
-    categoryId = "utilities"
+    categoryId = "xgen"
     functionId = "startnode"
     nodeId = "input_string"
     nodeName = "Input String"
@@ -54,13 +54,20 @@ Provided parameters: {json.dumps(kwargs, ensure_ascii=False)}"""
                     parsed_value = self._parse_value(param_value)
                     kwargs_result[param_id] = parsed_value
 
-        if input_str:
+        # input_str이 존재하고 빈 문자열이 아닌 경우
+        if input_str and input_str.strip():
             parsed_input_str = f"""Input: {input_str}
 
 parameters: {json.dumps(kwargs_result, ensure_ascii=False)}"""
             return parsed_input_str
-        elif (input_str is None or input_str == "") and kwargs_result:
-            parsed_input_str = "No input string provided."
+
+        # input_str이 없거나 빈 문자열이지만 kwargs가 존재하는 경우
+        elif (not input_str or input_str.strip() == "") and kwargs_result:
+            return json.dumps(kwargs_result, ensure_ascii=False)
+
+        # 둘 다 없는 경우 에러 출력
+        else:
+            return "Error: No input string or parameters provided. At least one of them must be provided."
 
 
     def _parse_value(self, value: str) -> Any:

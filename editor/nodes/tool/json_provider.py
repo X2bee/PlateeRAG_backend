@@ -3,7 +3,7 @@ import json
 from typing import Dict, Any
 
 class JsonProviderNode(Node):
-    categoryId = "utilities"
+    categoryId = "xgen"
     functionId = "tools"
     nodeId = "json_provider"
     nodeName = "JSON Provider"

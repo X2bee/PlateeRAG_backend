@@ -4,7 +4,7 @@ from typing import Dict, Any, Type
 from pydantic import BaseModel, create_model, Field
 
 class SchemaProviderNode(Node):
-    categoryId = "utilities"
+    categoryId = "xgen"
     functionId = "tools"
     nodeId = "schema_provider"
     nodeName = "Schema Provider"
@@ -16,7 +16,7 @@ class SchemaProviderNode(Node):
         {"id": "args_schema", "name": "ArgsSchema", "type": "BaseModel"},
     ]
     parameters = [
-        {"id": "key", "name": "Key", "type": "STR", "value": "value", "required": True, "handle_id": True},
+        # {"id": "key", "name": "Key", "type": "STR", "value": "value", "required": True, "handle_id": True},
     ]
 
     def execute(self, *args, **kwargs) -> BaseModel:
@@ -27,10 +27,25 @@ class SchemaProviderNode(Node):
             return EmptySchema
 
         fields = {}
+
+        # key와 key_description을 매칭하기 위한 딕셔너리
+        key_values = {}
+        key_descriptions = {}
+
+        # kwargs를 순회하면서 key와 key_description을 분류
         for param_id, param_value in kwargs.items():
             if param_value is not None:
-                field_type = self._infer_type(param_value)
-                fields[param_id] = (field_type, Field(description=""))
+                if param_id.endswith('_description'):
+                    key_name = param_id[:-12]
+                    key_descriptions[key_name] = param_value
+                else:
+                    # 일반 key
+                    key_values[param_id] = param_value
+
+        for key_name, key_value in key_values.items():
+            field_type = self._infer_type(key_value)
+            description = key_descriptions.get(key_name, "")
+            fields[key_name] = (field_type, Field(description=description))
 
         ArgsSchema = create_model('DynamicArgsSchema', **fields)
         return ArgsSchema
