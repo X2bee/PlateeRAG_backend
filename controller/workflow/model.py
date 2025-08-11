@@ -7,7 +7,8 @@ class WorkflowRequest(BaseModel):
     input_data: str = ""
     interaction_id: str = "default"
     selected_collections: Optional[List[str]] = None
-    user_id: Optional[int | str]
+    user_id: Optional[int | str] = None
+    additional_params: Optional[Dict[str, Dict[str, Any]]] = None
 
 class WorkflowData(BaseModel):
     workflow_name: str

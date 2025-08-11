@@ -1,11 +1,11 @@
 import logging
-import asyncio
 from typing import Dict, Any, Optional
+from pydantic import BaseModel
 from editor.node_composer import Node
 from langchain.schema.output_parser import StrOutputParser
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
-from editor.utils.tools.async_helper import sync_run_async
+from editor.utils.helper.async_helper import sync_run_async
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from fastapi import Request
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 default_prompt = """You are a helpful AI assistant."""
 
 class AgentVLLMNode(Node):
-    categoryId = "langchain"
+    categoryId = "xgen"
     functionId = "agents"
     nodeId = "agents/vllm"
     nodeName = "Agent VLLM"
@@ -26,7 +26,8 @@ class AgentVLLMNode(Node):
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
         {"id": "tools", "name": "Tools", "type": "TOOL", "multi": True, "required": False, "value": []},
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
-        {"id": "rag_context", "name": "RAG Context", "type": "DICT", "multi": False, "required": False}
+        {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
+        {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
     ]
     outputs = [
         {"id": "result", "name": "Result", "type": "STR"},
@@ -69,6 +70,7 @@ class AgentVLLMNode(Node):
         tools: Optional[Any] = None,
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
+        args_schema: Optional[BaseModel] = None,
         model: str = "",
         temperature: float = None,
         max_tokens: int = 8192,

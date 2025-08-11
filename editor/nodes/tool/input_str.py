@@ -1,20 +1,131 @@
 from editor.node_composer import Node
+import json
+from typing import Dict, Any, Type, Optional
+from pydantic import BaseModel, ValidationError
 
 class InputStringNode(Node):
-    categoryId = "utilities"
+    categoryId = "xgen"
     functionId = "startnode"
     nodeId = "input_string"
     nodeName = "Input String"
-    description = "사용자가 설정한 문자열 값을 출력하는 입력 노드입니다. 워크플로우에서 텍스트 데이터의 시작점으로 사용됩니다."
+    description = "사용자가 설정한 문자열 값을 출력하는 입력 노드입니다. 워크플로우에서 텍스트 데이터의 시작점으로 사용됩니다. ArgsSchema가 제공되면 입력값들을 스키마에 따라 검증합니다."
     tags = ["input", "string", "text", "parameter", "source", "start_node", "user_input"]
 
-    inputs = []
+    inputs = [
+        {"id": "args_schema", "name": "ArgsSchema", "type": "BaseModel", "required": False},
+    ]
     outputs = [
-        {"id": "result", "name": "Result", "type": "STR"},
+        {"id": "text", "name": "Text", "type": "STR"},
     ]
     parameters = [
-        {"id": "input_str", "name": "String", "type": "STR", "value": ""},
+        {"id": "input_str", "name": "INPUT", "type": "STR", "value": "", "required": False},
     ]
 
-    def execute(self, input_str: str) -> str:
-        return input_str
+    def execute(self, input_str: str, args_schema: Optional[BaseModel] = None, **kwargs) -> str:
+        kwargs_result = {}
+        if args_schema is not None:
+            try:
+                validated_data = args_schema(**kwargs)
+                kwargs_result = validated_data.model_dump()
+            except ValidationError as e:
+                # 검증 실패 시 에러 정보를 포함한 결과 반환
+                error_details = []
+                for error in e.errors():
+                    error_details.append({
+                        "field": error.get("loc", ["unknown"])[0] if error.get("loc") else "unknown",
+                        "message": error.get("msg", "Validation error"),
+                        "input": error.get("input", "N/A")
+                    })
+
+                return "Validation Error: " + json.dumps(error_details, ensure_ascii=False)
+        else:
+            # ArgsSchema가 없는 경우 기존 로직 사용
+            for param_id, param_value in kwargs.items():
+                if param_value is not None:
+                    parsed_value = self._parse_value(param_value)
+                    kwargs_result[param_id] = parsed_value
+
+        # input_str이 존재하고 빈 문자열이 아닌 경우
+        if input_str and input_str.strip():
+            parsed_input_str = f"""Input: {input_str}
+
+parameters: {json.dumps(kwargs_result, ensure_ascii=False)}"""
+            return parsed_input_str
+
+        # input_str이 없거나 빈 문자열이지만 kwargs가 존재하는 경우
+        elif (not input_str or input_str.strip() == "") and kwargs_result:
+            return json.dumps(kwargs_result, ensure_ascii=False)
+
+        # 둘 다 없는 경우 에러 출력
+        else:
+            return "Error: No input string or parameters provided. At least one of them must be provided."
+
+
+    def _parse_value(self, value: str) -> Any:
+        if not isinstance(value, str):
+            return value
+
+        if not value.strip():
+            return ""
+
+        value = value.strip()
+        if value.lower() in ('true', 'false'):
+            return value.lower() == 'true'
+        if value.lower() in ('null', 'none'):
+            return None
+        if value.startswith('[') and value.endswith(']'):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return [self._parse_value(str(item)) if isinstance(item, str) else item for item in parsed]
+                return parsed
+            except (json.JSONDecodeError, ValueError):
+                return value
+
+        if value.startswith('{') and value.endswith('}'):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                return value
+        if value.lstrip('-').isdigit():
+            return int(value)
+
+        try:
+            float_val = float(value)
+            if float_val.is_integer():
+                return int(float_val)
+            return float_val
+        except ValueError:
+            pass
+
+        if 'e' in value.lower():
+            try:
+                float_val = float(value)
+                if float_val.is_integer():
+                    return int(float_val)
+                return float_val
+            except ValueError:
+                pass
+
+        if value.lower().startswith('0x'):
+            try:
+                return int(value, 16)
+            except ValueError:
+                pass
+
+        if value.lower().startswith('0o'):
+            try:
+                return int(value, 8)
+            except ValueError:
+                pass
+
+        if value.lower().startswith('0b'):
+            try:
+                return int(value, 2)
+            except ValueError:
+                pass
+
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            return value[1:-1]
+
+        return value

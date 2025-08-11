@@ -7,12 +7,12 @@ from editor.utils.helper.service_helper import AppServiceManager
 logger = logging.getLogger(__name__)
 
 class DBMemoryNode(Node):
-    categoryId = "utilities"
+    categoryId = "xgen"
     functionId = "memory"
     nodeId = "memory/db_memory"
     nodeName = "DB Memory"
     description = "DB에서 대화 기록을 로드하여 ConversationBufferMemory로 반환하는 노드입니다."
-    tags = ["memory", "database", "chat_history", "langchain"]
+    tags = ["memory", "database", "chat_history", "xgen"]
 
     inputs = []
     outputs = [

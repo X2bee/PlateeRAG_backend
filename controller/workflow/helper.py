@@ -7,8 +7,9 @@ from typing import Dict, Any
 
 from controller.workflow.utils import extract_collection_name
 from fastapi import HTTPException
+from controller.workflow.model import WorkflowRequest
 
-async def _workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+async def _workflow_parameter_helper(request_body: WorkflowRequest, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Updates the workflow data by setting the interaction ID in the parameters of nodes
     with a function ID of 'memory', if applicable.
@@ -28,9 +29,26 @@ async def _workflow_parameter_helper(request_body, workflow_data: Dict[str, Any]
                     if parameter.get('id') == 'interaction_id':
                         parameter['value'] = request_body.interaction_id
 
+    if request_body.additional_params:
+        request_body.input_data = f"{request_body.input_data}\n\nAdditional Parameters: {json.dumps(request_body.additional_params, ensure_ascii=False)}"
+        for node in workflow_data.get('nodes', []):
+            node_id = node.get('id')
+            if node_id and node_id in request_body.additional_params:
+                node_params = request_body.additional_params[node_id]
+                parameters = node.get('data', {}).get('parameters', [])
+
+                # additional_params를 parameters에 추가
+                additional_params = {
+                    "id": "additional_params",
+                    "name": "additional_params",
+                    "type": "DICT",
+                    "value": node_params
+                }
+                parameters.append(additional_params)
+
     return workflow_data
 
-async def _default_workflow_parameter_helper(request, request_body, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+async def _default_workflow_parameter_helper(request, request_body: WorkflowRequest, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Updates the workflow data with default parameters based on the request body.
 
@@ -107,5 +125,21 @@ async def _default_workflow_parameter_helper(request, request_body, workflow_dat
                 for parameter in parameters:
                     if parameter.get('id') == 'interaction_id':
                         parameter['value'] = request_body.interaction_id
+
+    if request_body.additional_params:
+        for node in workflow_data.get('nodes', []):
+            node_id = node.get('id')
+            if node_id and node_id in request_body.additional_params:
+                node_params = request_body.additional_params[node_id]
+                parameters = node.get('data', {}).get('parameters', [])
+
+                # additional_params를 parameters에 추가
+                additional_param = {
+                    "id": "additional_params",
+                    "name": "additional_params",
+                    "type": "DICT",
+                    "value": node_params
+                }
+                parameters.append(additional_param)
 
     return workflow_data

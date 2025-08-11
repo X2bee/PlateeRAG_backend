@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any
 from editor.node_composer import Node
 from langchain.agents import tool
 from editor.utils.helper.service_helper import AppServiceManager
-from editor.utils.tools.async_helper import sync_run_async
+from editor.utils.helper.async_helper import sync_run_async
 from service.database.models.vectordb import VectorDB
 from fastapi import Request
 from controller.controller_helper import extract_user_id_from_request
@@ -23,7 +23,7 @@ enhance_prompt = """You are an AI assistant that must strictly follow these guid
 Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
 
 class QdrantRetrievalTool(Node):
-    categoryId = "langchain"
+    categoryId = "xgen"
     functionId = "document_loaders"
     nodeId = "document_loaders/QdrantRetrievalTool"
     nodeName = "Qdrant Retrieval Tool"
@@ -37,7 +37,7 @@ class QdrantRetrievalTool(Node):
 
     parameters = [
         {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "tool_name", "required": True},
-        {"id": "description", "name": "Description", "type": "STR", "value": "주어진 질문에 대해 검색을 수행하는 Tool입니다.", "required": True},
+        {"id": "description", "name": "Description", "type": "STR", "value": "주어진 질문에 대해 검색을 수행하는 Tool입니다.", "required": True, "expandable": True, "description": "이 도구를 언제 사용하여야 하는지 설명합니다. AI는 해당 설명을 통해, 해당 도구를 언제 호출해야할지 결정할 수 있습니다."},
         {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
         {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},

@@ -1,7 +1,7 @@
 from editor.node_composer import Node
 
 class InputIntegersNode(Node):
-    categoryId = "utilities"
+    categoryId = "xgen"
     functionId = "startnode"
     nodeId = "input_integer"
     nodeName = "Input Integer"

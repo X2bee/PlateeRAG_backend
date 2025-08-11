@@ -8,7 +8,7 @@ from typing import Dict, Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from editor.workflow_executor import WorkflowExecutor
+from editor.async_workflow_executor import AsyncWorkflowExecutor, execution_manager
 
 from service.database.models.executor import ExecutionIO
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
@@ -26,8 +26,6 @@ async def load_workflow(request: Request, user_id: str, workflow_id: str):
     특정 workflow를 로드합니다.
     """
     try:
-        user_id = user_id
-
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
 
@@ -119,13 +117,22 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
                 request_body.input_data
             )
 
-        ## 워크플로우를 실질적으로 실행 (가장중요)
-        ## 워크플로우 실행 관련 로직은 WorkflowExecutor 클래스에 정의되어 있음.
-        ## WorkflowExecutor 클래스는 워크플로우의 노드와 엣지를 기반으로 워크플로우를 실행하는 역할을 함.
+        ## 워크플로우를 실질적으로 비동기 실행 (가장중요)
+        ## 비동기 워크플로우 실행 관련 로직은 AsyncWorkflowExecutor 클래스에 정의되어 있음.
+        ## AsyncWorkflowExecutor 클래스는 워크플로우의 노드와 엣지를 기반으로 워크플로우를 백그라운드에서 실행하는 역할을 함.
         ## 워크플로우 실행 시, interaction_id를 전달하여 대화형 실행을 지원함. (이렇게 되는 경우, interaction_id는 대화형 실행의 ID로 사용되어 DB에 저장됨)
         ## 워크플로우 실행 결과는 final_outputs에 저장됨.
-        executor = WorkflowExecutor(workflow_data, app_db, request_body.interaction_id, user_id)
-        final_outputs = executor.execute_workflow()
+        executor = execution_manager.create_executor(
+            workflow_data=workflow_data,
+            db_manager=app_db,
+            interaction_id=request_body.interaction_id,
+            user_id=user_id
+        )
+
+        # 비동기 실행 및 결과 수집
+        final_outputs = []
+        async for output in executor.execute_workflow_async():
+            final_outputs.append(output)
 
         ## 대화형 실행인 경우 execution_meta의 값을 가지고, 이 경우에는 대화 count를 증가.
         if execution_meta:
@@ -149,6 +156,9 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    finally:
+        # 완료된 실행들 정리
+        execution_manager.cleanup_completed_executions()
 
 @router.post("/execute/based_id/stream")
 async def execute_workflow_with_id_stream(request: Request, request_body: WorkflowRequest):
@@ -160,11 +170,11 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
     user_id=str(user_id)
     app_db = get_db_manager(request)
 
-    async def stream_generator(result_generator, db_manager, user_id, workflow_req):
+    async def stream_generator(async_result_generator, db_manager, user_id, workflow_req):
         """결과 제너레이터를 SSE 형식으로 변환하는 비동기 제너레이터"""
         full_response_chunks = []
         try:
-            for chunk in result_generator:
+            async for chunk in async_result_generator:
                 # 클라이언트에 보낼 데이터 형식 정의 (JSON)
                 full_response_chunks.append(str(chunk))
                 response_chunk = {"type": "data", "content": chunk}
@@ -215,7 +225,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 if 'inputs' in output_data_dict and isinstance(output_data_dict['inputs'], dict):
                     for key, value in output_data_dict['inputs'].items():
                         if value == "<generator_output>":
-                             output_data_dict['inputs'][key] = final_text
+                            output_data_dict['inputs'][key] = final_text
 
                 # 수정된 JSON으로 레코드를 업데이트
                 log_to_update.output_data = json.dumps(output_data_dict, ensure_ascii=False)
@@ -225,6 +235,9 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
 
             except Exception as db_error:
                 logger.error(f"ExecutionIO 로그 업데이트 중 DB 오류 발생: {db_error}", exc_info=True)
+            finally:
+                # 완료된 실행들 정리
+                execution_manager.cleanup_completed_executions()
 
 
     try:
@@ -272,8 +285,16 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
         if execution_meta:
             await update_execution_meta_count(app_db, execution_meta)
 
-        executor = WorkflowExecutor(workflow_data, app_db, request_body.interaction_id, user_id)
-        result_generator = executor.execute_workflow()
+        # 비동기 실행기 생성
+        executor = execution_manager.create_executor(
+            workflow_data=workflow_data,
+            db_manager=app_db,
+            interaction_id=request_body.interaction_id,
+            user_id=user_id
+        )
+
+        # 비동기 제너레이터 시작 (스트리밍용)
+        result_generator = executor.execute_workflow_async_streaming()
 
         # StreamingResponse를 사용하여 SSE 스트림 반환
         return StreamingResponse(
@@ -287,3 +308,6 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
     except Exception as e:
         logger.error(f"An unexpected error occurred during workflow setup: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
+    finally:
+        # 완료된 실행들 정리
+        execution_manager.cleanup_completed_executions()

@@ -1,7 +1,7 @@
 from editor.node_composer import Node
 
 class PrintAnyNode(Node):
-    categoryId = "utilities"
+    categoryId = "xgen"
     functionId = "endnode"
     nodeId = "tools/print_any"
     nodeName = "Print Any"

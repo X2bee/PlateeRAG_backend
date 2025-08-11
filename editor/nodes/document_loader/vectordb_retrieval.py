@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any
 from editor.node_composer import Node
 from langchain.agents import tool
 from editor.utils.helper.service_helper import AppServiceManager
-from editor.utils.tools.async_helper import sync_run_async
+from editor.utils.helper.async_helper import sync_run_async
 from service.database.models.vectordb import VectorDB
 from fastapi import Request
 from controller.controller_helper import extract_user_id_from_request
@@ -23,7 +23,7 @@ enhance_prompt = """You are an AI assistant that must strictly follow these guid
 Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
 
 class QdrantRetrievalTool(Node):
-    categoryId = "langchain"
+    categoryId = "xgen"
     functionId = "document_loaders"
     nodeId = "document_loaders/Qdrant"
     nodeName = "Qdrant Search"
@@ -32,7 +32,7 @@ class QdrantRetrievalTool(Node):
 
     inputs = []
     outputs = [
-        {"id": "rag_context", "name": "RAG Context", "type": "DICT"},
+        {"id": "rag_context", "name": "RAG Context", "type": "DocsContext"},
     ]
 
     parameters = [

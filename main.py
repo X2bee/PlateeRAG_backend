@@ -19,6 +19,7 @@ from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
 from controller.nodeApiController import router as nodeApiRouter, register_node_api_routes
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
+from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
 from service.database import AppDatabaseManager
 from service.database.models import APPLICATION_MODELS
@@ -93,6 +94,11 @@ async def lifespan(app: FastAPI):
         # 5. vast_service Instance 생성
         app.state.vast_service = VastService(app.state.app_db, config_composer)
 
+        # 6. 워크플로우 실행 매니저 초기화
+        logger.info("Initializing workflow execution manager...")
+        app.state.execution_manager = execution_manager
+        logger.info("Workflow execution manager initialized successfully")
+
         config_composer.ensure_directories()
         validation_result = config_composer.validate_critical_configs()
         if not validation_result["valid"]:
@@ -128,6 +134,12 @@ async def lifespan(app: FastAPI):
 
     logger.info("Application shutdown...")
     try:
+        # 워크플로우 실행 매니저 정리
+        if hasattr(app.state, 'execution_manager') and app.state.execution_manager:
+            logger.info("Shutting down workflow execution manager...")
+            app.state.execution_manager.shutdown()
+            logger.info("Workflow execution manager shutdown complete")
+
         # 애플리케이션 데이터베이스 정리
         if hasattr(app.state, 'app_db') and app.state.app_db:
             app.state.app_db.close()
@@ -177,8 +189,8 @@ if __name__ == "__main__":
         debug = os.environ.get("DEBUG_MODE", "false").lower() in ('true', '1', 'yes', 'on')
 
         print(f"Starting server on {host}:{port} (debug={debug})")
-        uvicorn.run("main:app", host=host, port=port, reload=debug)
+        uvicorn.run("main:app", host=host, port=port, reload=debug, workers=4)
     except Exception as e:
         logger.warning(f"Failed to load config for uvicorn: {e}")
         logger.info("Using default values for uvicorn")
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, workers=4)
