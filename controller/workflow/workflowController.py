@@ -468,6 +468,38 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
         logger.error(f"Error deleting performance data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete performance data: {str(e)}")
 
+def parse_input_data(input_data_str: str) -> str:
+    """
+    input_data에서 실제 입력 텍스트만 파싱합니다.
+
+    Args:
+        input_data_str: 파싱할 입력 데이터 문자열
+
+    Returns:
+        파싱된 입력 텍스트
+    """
+    if not input_data_str or not isinstance(input_data_str, str):
+        return input_data_str
+
+    # "Input: " 패턴으로 시작하는지 확인
+    if input_data_str.startswith("Input: "):
+        # "Input: " 이후의 텍스트 추출
+        after_input = input_data_str[7:]  # "Input: " 길이만큼 자르기
+
+        # "\n\nparameters:" 또는 "\n\nAdditional Parameters:" 패턴 찾기
+        patterns = ["\n\nparameters:", "\n\nAdditional Parameters:", "\n\nValidation Error:"]
+
+        for pattern in patterns:
+            if pattern in after_input:
+                # 패턴 앞까지의 텍스트 반환
+                return after_input.split(pattern)[0].strip()
+
+        # 패턴이 없으면 전체 텍스트 반환 (Input: 이후)
+        return after_input.strip()
+
+    # "Input: " 패턴이 없으면 원본 반환
+    return input_data_str
+
 @router.get("/io_logs")
 async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = 'default'):
     """
@@ -509,12 +541,16 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
 
         performance_stats = []
         for idx, row in enumerate(result):
+            # input_data 파싱
+            raw_input_data = json.loads(row['input_data']).get('result', None) if row['input_data'] else None
+            parsed_input_data = parse_input_data(raw_input_data) if raw_input_data else None
+
             log_entry = {
                 "log_id": idx + 1,
                 "interaction_id": row['interaction_id'],
                 "workflow_name": row['workflow_name'],
                 "workflow_id": row['workflow_id'],
-                "input_data": json.loads(row['input_data']).get('result', None) if row['input_data'] else None,
+                "input_data": parsed_input_data,
                 "output_data": json.loads(row['output_data']).get('result', None) if row['output_data'] else None,
                 "updated_at": row['updated_at'].isoformat() if isinstance(row['updated_at'], datetime) else row['updated_at']
             }

@@ -3,6 +3,8 @@ import json
 from typing import Dict, Any, Type, Optional
 from pydantic import BaseModel, ValidationError
 
+#Notice: 이거 바꾸면 io_logs 파싱 로직도 바꿔야 함.
+
 class InputStringNode(Node):
     categoryId = "xgen"
     functionId = "startnode"
@@ -24,11 +26,33 @@ class InputStringNode(Node):
     def execute(self, input_str: str, args_schema: Optional[BaseModel] = None, **kwargs) -> str:
         kwargs_result = {}
         if args_schema is not None:
+            # args_schema에 정의된 필드명들 가져오기
+            schema_fields = set(args_schema.model_fields.keys())
+
+            # kwargs에서 schema에 정의되지 않은 키들 찾기
+            invalid_keys = set(kwargs.keys()) - schema_fields
+
+            if invalid_keys:
+                # 정의되지 않은 키가 있는 경우에만 오류 반환
+                error_details = []
+                for key in invalid_keys:
+                    error_details.append({
+                        "field": key,
+                        "message": f"Field '{key}' is not defined in the schema",
+                        "input": kwargs.get(key, "N/A")
+                    })
+
+                return f"Input: {input_str}\n\nValidation Error: " + json.dumps(error_details, ensure_ascii=False)
+
+            # 스키마에 정의된 키들만 필터링해서 사용 (partial validation)
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in schema_fields}
+
             try:
-                validated_data = args_schema(**kwargs)
+                # 부분적 검증 시도 (스키마에 정의된 키들만)
+                validated_data = args_schema(**filtered_kwargs)
                 kwargs_result = validated_data.model_dump()
             except ValidationError as e:
-                # 검증 실패 시 에러 정보를 포함한 결과 반환
+                # 타입 변환 등의 오류가 있는 경우에만 오류 반환
                 error_details = []
                 for error in e.errors():
                     error_details.append({
@@ -37,7 +61,7 @@ class InputStringNode(Node):
                         "input": error.get("input", "N/A")
                     })
 
-                return "Validation Error: " + json.dumps(error_details, ensure_ascii=False)
+                return f"Input: {input_str}\n\nValidation Error: " + json.dumps(error_details, ensure_ascii=False)
         else:
             # ArgsSchema가 없는 경우 기존 로직 사용
             for param_id, param_value in kwargs.items():

@@ -1,16 +1,6 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, Union, List
-import threading
-import logging
-import os
-import signal
-import subprocess
-import json
-from datetime import datetime
-import glob
-from pathlib import Path
+from fastapi import APIRouter, HTTPException, Request
 from controller.controller_helper import extract_user_id_from_request
+from huggingface_hub import HfApi
 
 router = APIRouter(
     prefix="/api/huggingface",
@@ -19,7 +9,6 @@ router = APIRouter(
 )
 
 def get_config_composer(request: Request):
-    """request.app.state에서 config_composer 가져오기"""
     if hasattr(request.app.state, 'config_composer') and request.app.state.config_composer:
         return request.app.state.config_composer
     else:
@@ -38,42 +27,140 @@ async def get_models(request: Request):
     hugging_face_user_id = config_composer.get_config_by_name("HUGGING_FACE_USER_ID").value
     hugging_face_hub_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value
 
-    if not hugging_face_user_id or not hugging_face_hub_token:
-        raise HTTPException(status_code=500, detail="Hugging Face user ID or token not configured")
-
-    # 실제 Hugging Face Hub API를 통해 모델 리스트 조회
-    try:
-        from huggingface_hub import HfApi
-    except ImportError:
-        raise HTTPException(status_code=500, detail="huggingface_hub 라이브러리가 설치되어 있지 않습니다.")
+    if not hugging_face_user_id:
+        raise HTTPException(status_code=422, detail="HUGGING_FACE_USER_ID_NOT_CONFIGURED")
+    if not hugging_face_hub_token:
+        raise HTTPException(status_code=422, detail="HUGGING_FACE_HUB_TOKEN_NOT_CONFIGURED")
 
     api = HfApi(token=hugging_face_hub_token)
-    try:
-        models = api.list_models(author=hugging_face_user_id)
-        model_ids = [model.id for model in models]
-        logging.info(f"[INFO] SUCCESS: Load Model List from UserID: {hugging_face_user_id}")
-    except Exception as e:
-        logging.warning(f"[WARNING] FAIL: Load Model List from UserID: {hugging_face_user_id}")
-        logging.warning(f"[WARNING] RETURN Empty List. Error: {e}")
-        model_ids = []
+    formatted_models = []
 
-    return {"models": model_ids}
+    trending_models = api.list_models(limit=20, sort="trending_score", task='text-generation')
+    for model in trending_models:
+        main_fields = {
+            "id": model.id,
+            "author": model.author,
+            "private": model.private,
+            "downloads": model.downloads,
+            "created_at": model.created_at.isoformat() if model.created_at else None
+        }
 
+        additional_info = {}
+        for attr_name in dir(model):
+            if not attr_name.startswith('_') and attr_name not in ['id', 'author', 'private', 'downloads', 'created_at']:
+                try:
+                    attr_value = getattr(model, attr_name)
+                    if not callable(attr_value):
+                        if hasattr(attr_value, 'isoformat'):
+                            additional_info[attr_name] = attr_value.isoformat()
+                        else:
+                            additional_info[attr_name] = attr_value
+                except:
+                    pass
+
+        formatted_model = {**main_fields, "additional_info": additional_info}
+        formatted_models.append(formatted_model)
+
+    models = api.list_models(author=hugging_face_user_id)
+    for model in models:
+        main_fields = {
+            "id": model.id,
+            "author": model.author,
+            "private": model.private,
+            "downloads": model.downloads,
+            "created_at": model.created_at.isoformat() if model.created_at else None
+        }
+
+        additional_info = {}
+        for attr_name in dir(model):
+            if not attr_name.startswith('_') and attr_name not in ['id', 'author', 'private', 'downloads', 'created_at']:
+                try:
+                    attr_value = getattr(model, attr_name)
+                    if not callable(attr_value):
+                        if hasattr(attr_value, 'isoformat'):
+                            additional_info[attr_name] = attr_value.isoformat()
+                        else:
+                            additional_info[attr_name] = attr_value
+                except:
+                    pass
+
+        formatted_model = {**main_fields, "additional_info": additional_info}
+        formatted_models.append(formatted_model)
+
+    return {"models": formatted_models}
 
 @router.get("/datasets")
 async def get_datasets(request: Request):
     user_id = extract_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
+    config_composer = get_config_composer(request)
+    if not config_composer:
+        raise HTTPException(status_code=500, detail="Config composer not found in request state")
 
-    try:
-        datasets = []
-        dataset_files = glob.glob(f"datasets/{user_id}/*.json")
-        for file_path in dataset_files:
-            with open(file_path, 'r') as file:
-                dataset_data = json.load(file)
-                datasets.append(dataset_data)
-        return {"datasets": datasets}
-    except Exception as e:
-        logging.error(f"Error retrieving datasets: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+    hugging_face_user_id = config_composer.get_config_by_name("HUGGING_FACE_USER_ID").value
+    hugging_face_hub_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value
+
+    if not hugging_face_user_id:
+        raise HTTPException(status_code=422, detail="HUGGING_FACE_USER_ID_NOT_CONFIGURED")
+    if not hugging_face_hub_token:
+        raise HTTPException(status_code=422, detail="HUGGING_FACE_HUB_TOKEN_NOT_CONFIGURED")
+
+    api = HfApi(token=hugging_face_hub_token)
+    formatted_datasets = []
+    trending_datasets = api.list_datasets(limit=20, sort="trending_score")
+    for dataset in trending_datasets:
+        main_fields = {
+            "id": dataset.id,
+            "author": dataset.author,
+            "private": dataset.private,
+            "downloads": dataset.downloads,
+            "created_at": dataset.created_at.isoformat() if dataset.created_at else None
+        }
+
+        additional_info = {}
+        for attr_name in dir(dataset):
+            if not attr_name.startswith('_') and attr_name not in ['id', 'author', 'private', 'downloads', 'created_at']:
+                try:
+                    attr_value = getattr(dataset, attr_name)
+                    if not callable(attr_value):
+                        if hasattr(attr_value, 'isoformat'):
+                            additional_info[attr_name] = attr_value.isoformat()
+                        else:
+                            additional_info[attr_name] = attr_value
+                except:
+                    pass
+
+        formatted_dataset = {**main_fields, "additional_info": additional_info}
+        formatted_datasets.append(formatted_dataset)
+
+    datasets = api.list_datasets(author=hugging_face_user_id)
+    for dataset in datasets:
+        # Extract main fields
+        main_fields = {
+            "id": dataset.id,
+            "author": dataset.author,
+            "private": dataset.private,
+            "downloads": dataset.downloads,
+            "created_at": dataset.created_at.isoformat() if dataset.created_at else None
+        }
+
+        # Create additional_info with all other fields
+        additional_info = {}
+        for attr_name in dir(dataset):
+            if not attr_name.startswith('_') and attr_name not in ['id', 'author', 'private', 'downloads', 'created_at']:
+                try:
+                    attr_value = getattr(dataset, attr_name)
+                    if not callable(attr_value):
+                        # Convert datetime objects to ISO format
+                        if hasattr(attr_value, 'isoformat'):
+                            additional_info[attr_name] = attr_value.isoformat()
+                        else:
+                            additional_info[attr_name] = attr_value
+                except:
+                    pass
+
+        formatted_dataset = {**main_fields, "additional_info": additional_info}
+        formatted_datasets.append(formatted_dataset)
+
+    return {"datasets": formatted_datasets}

@@ -14,6 +14,7 @@ from controller.performanceController import router as performanceRouter
 from controller.embeddingController import router as embeddingRouter
 from controller.retrievalController import router as retrievalRouter
 from controller.interactionController import router as interactionRouter
+from controller.huggingface.huggingfaceController import router as huggingfaceRouter
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
@@ -179,6 +180,7 @@ app.include_router(interactionRouter)
 app.include_router(appRouter)
 app.include_router(nodeApiRouter)
 app.include_router(vastRouter)
+app.include_router(huggingfaceRouter)
 
 # 기존 /app 엔드포인트들은 appController로 이동했으므로 여기서 제거
 
