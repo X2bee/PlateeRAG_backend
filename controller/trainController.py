@@ -210,10 +210,16 @@ def get_train_node_config(request: Request):
     trainer_host = config_composer.get_config_by_name("TRAINER_HOST").value
     trainer_port = config_composer.get_config_by_name("TRAINER_PORT").value
 
-    return {
-        "base_url": f"http://{trainer_host}:{trainer_port}",
-        "timeout": 30
-    }
+    if trainer_port:
+        return {
+            "base_url": f"http://{trainer_host}:{trainer_port}",
+            "timeout": 30
+        }
+    else:
+        return {
+            "base_url": f"https://{trainer_host}",
+            "timeout": 30
+        }
 
 def make_external_api_call(url: str, method: str = "GET", data: Dict[str, Any] = None, timeout: int = 30):
     """외부 API 호출 헬퍼 함수"""
