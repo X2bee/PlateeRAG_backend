@@ -136,19 +136,7 @@ async def create_collection(request: Request, collection_request: CollectionCrea
     print(collection_name)
 
     try:
-        # 1. DB 먼저 등록
-        vector_db = VectorDB(
-            user_id=user_id,
-            collection_make_name=collection_request.collection_make_name,
-            collection_name=collection_name,
-            description=collection_request.description,
-            registered_at=datetime.datetime.now(),
-            updated_at=datetime.datetime.now()
-        )
-        app_db.insert(vector_db)
-
-
-        # 2. Qdrant에 컬렉션 생성
+        # 1. Qdrant에 컬렉션 생성 먼저
         result = vector_manager.create_collection(
             collection_name=collection_name,  # 실제 Qdrant 컬렉션 이름은 UUID
             vector_size=vector_size,
@@ -160,6 +148,18 @@ async def create_collection(request: Request, collection_request: CollectionCrea
                 "original_name": collection_request.collection_make_name,
             }
         )
+
+
+        if result.get("status") == "created":
+            vector_db = VectorDB(
+                user_id=user_id,
+                collection_make_name=collection_request.collection_make_name,
+                collection_name=collection_name,
+                description=collection_request.description,
+                registered_at=datetime.datetime.now(),
+                updated_at=datetime.datetime.now()
+            )
+            app_db.insert(vector_db)
 
         return {
             "message": "Collection created",
@@ -175,19 +175,24 @@ async def create_collection(request: Request, collection_request: CollectionCrea
 async def delete_collection(request: Request, collection_request: CollectionDeleteRequest):
     """컬렉션 삭제"""
     try:
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
         rag_service = get_rag_service(request)
         vector_manager = rag_service.vector_manager
 
-        app_db.delete_by_condition(VectorDB, {
-            "collection_name": collection_request.collection_name
-        })
-        vector_manager.delete_collection(collection_request.collection_name)
+        result = vector_manager.delete_collection(collection_request.collection_name)
+
+        if result.get("status") == "success":
+            app_db = request.app.state.app_db
+            if not app_db:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Database connection not available"
+                )
+            rag_service = get_rag_service(request)
+            vector_manager = rag_service.vector_manager
+
+            app_db.delete_by_condition(VectorDB, {
+                "collection_name": collection_request.collection_name
+            })
 
         return {"message": "Collection deleted"}
     except Exception as e:
