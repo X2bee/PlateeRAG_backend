@@ -71,7 +71,7 @@ dependencies = [
     "orjson==3.11.0",
     "packaging==25.0",
     "pdf2image>=1.17.0",
-    "pdfminer>=20191125",
+    "pdfminer.six>=20201018",
     "pillow==11.3.0",
     "portalocker==2.10.1",
     "propcache==0.3.2",
@@ -117,4 +117,5 @@ dependencies = [
     "zstandard==0.23.0",
     "vastai==0.3.1",
     "huggingface_hub==0.33.4",
+    "pymupdf==1.26.3",
 ]

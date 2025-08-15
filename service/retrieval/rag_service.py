@@ -578,64 +578,116 @@ class RAGService:
                     text, file_extension, chunk_size, chunk_overlap
                 )
             except AttributeError:
-                # 서버가 재시작되지 않아 오래된 DocumentProcessor 인스턴스일 수 있음
-                logger.warning("DocumentProcessor.chunk_text_with_metadata not found, using fallback chunking+metadata")
-                chunks = self.document_processor.chunk_text(text, chunk_size, chunk_overlap)
+                # 서버 재시작 없이 코드가 변경되어 현재 인스턴스에 메서드가 없을 수 있음.
+                logger.warning("DocumentProcessor.chunk_text_with_metadata not found on current instance. Attempting to reinitialize DocumentProcessor and retry.")
+                reinitialized = False
+                try:
+                    # 모듈이 디스크에서 업데이트되었을 수 있으므로 런타임에서 모듈을 리로드한 뒤 인스턴스 생성
+                    import importlib
+                    import service.retrieval.document_processor as dp_mod
 
-                # build line starts using document_processor helper if available
-                if hasattr(self.document_processor, '_build_line_starts'):
-                    line_starts = self.document_processor._build_line_starts(text)
-                    pos_to_line = getattr(self.document_processor, '_pos_to_line')
-                    find_pos = getattr(self.document_processor, '_find_chunk_position')
-                    get_page = getattr(self.document_processor, '_get_page_number_for_chunk', None)
-                else:
-                    # 최소한의 대체 구현
-                    line_starts = [0]
-                    def pos_to_line(p, ls=line_starts):
-                        return 1
-                    def find_pos(chunk, full_text, sp=0):
-                        return full_text.find(chunk, sp)
-                    find_pos = find_pos
-                    get_page = None
+                    importlib.reload(dp_mod)
+                    DocumentProcessorClass = getattr(dp_mod, 'DocumentProcessor', None)
 
-                chunks_with_metadata = []
-                search_pos = 0
-                last_line_end = 0
-                for i, chunk in enumerate(chunks):
-                    chunk_pos = find_pos(chunk, text, search_pos)
-                    if chunk_pos != -1:
-                        start_pos = chunk_pos
-                        end_pos = min(chunk_pos + len(chunk) - 1, len(text) - 1)
-                        try:
-                            line_start = pos_to_line(start_pos, line_starts)
-                            line_end = pos_to_line(end_pos, line_starts)
-                        except Exception:
-                            # fallback simple estimate
-                            line_start = text[:start_pos].count('\n') + 1
-                            line_end = text[:end_pos].count('\n') + 1
-                        search_pos = chunk_pos + len(chunk)
-                        last_line_end = line_end
+                    if DocumentProcessorClass is None:
+                        raise RuntimeError('DocumentProcessor class not found after reload')
+
+                    collection_config = getattr(self.document_processor, 'collection_config', None)
+                    self.document_processor = DocumentProcessorClass(collection_config)
+                    logger.info("Reinitialized DocumentProcessor instance from reloaded module; retrying chunk_text_with_metadata")
+                    chunks_with_metadata = self.document_processor.chunk_text_with_metadata(
+                        text, file_extension, chunk_size, chunk_overlap
+                    )
+                    reinitialized = True
+                except Exception as e:
+                    logger.warning(f"Reinitialization failed or method still unavailable: {e}. Trying explicit file-load fallback.")
+
+                    # 시나리오: package와 top-level module명이 충돌하여 패키지 내부 모듈이 사용될 수 있음.
+                    # 이 경우 프로젝트의 최상위 document_processor.py 파일을 명시적 경로로 로드해 시도해본다.
+                    try:
+                        import importlib.util, sys
+
+                        # use top-level Path imported at module scope
+                        base_path = Path(__file__).resolve().parents[3]
+                        target_path = base_path / 'service' / 'retrieval' / 'document_processor.py'
+
+                        if target_path.exists():
+                            spec = importlib.util.spec_from_file_location("plateerag_document_processor_file", str(target_path))
+                            module = importlib.util.module_from_spec(spec)
+                            spec.loader.exec_module(module)
+                            DocumentProcessorClass = getattr(module, 'DocumentProcessor', None)
+                            if DocumentProcessorClass is not None:
+                                collection_config = getattr(self.document_processor, 'collection_config', None)
+                                self.document_processor = DocumentProcessorClass(collection_config)
+                                logger.info("Loaded DocumentProcessor class from file path and reinitialized instance; retrying chunk_text_with_metadata")
+                                chunks_with_metadata = self.document_processor.chunk_text_with_metadata(
+                                    text, file_extension, chunk_size, chunk_overlap
+                                )
+                                reinitialized = True
+                            else:
+                                logger.warning("DocumentProcessor not found in file-loaded module")
+                        else:
+                            logger.warning(f"Top-level document_processor.py not found at {target_path}")
+                    except Exception as e2:
+                        logger.warning(f"File-load fallback failed: {e2}. Falling back to chunk_text + metadata builder.")
+
+                if not reinitialized:
+                    chunks = self.document_processor.chunk_text(text, chunk_size, chunk_overlap)
+
+                    # build line starts using document_processor helper if available
+                    if hasattr(self.document_processor, '_build_line_starts'):
+                        line_starts = self.document_processor._build_line_starts(text)
+                        pos_to_line = getattr(self.document_processor, '_pos_to_line')
+                        find_pos = getattr(self.document_processor, '_find_chunk_position')
+                        get_page = getattr(self.document_processor, '_get_page_number_for_chunk', None)
                     else:
-                        lines_in_chunk = chunk.count('\n') or 1
-                        line_start = last_line_end + 1
-                        line_end = line_start + lines_in_chunk - 1
-                        last_line_end = line_end
+                        # 최소한의 대체 구현
+                        line_starts = [0]
+                        def pos_to_line(p, ls=line_starts):
+                            return 1
+                        def find_pos(chunk, full_text, sp=0):
+                            return full_text.find(chunk, sp)
+                        find_pos = find_pos
+                        get_page = None
 
-                    if get_page is not None:
-                        try:
-                            page_number = get_page(chunk, chunk_pos, [])
-                        except Exception:
+                    chunks_with_metadata = []
+                    search_pos = 0
+                    last_line_end = 0
+                    for i, chunk in enumerate(chunks):
+                        chunk_pos = find_pos(chunk, text, search_pos)
+                        if chunk_pos != -1:
+                            start_pos = chunk_pos
+                            end_pos = min(chunk_pos + len(chunk) - 1, len(text) - 1)
+                            try:
+                                line_start = pos_to_line(start_pos, line_starts)
+                                line_end = pos_to_line(end_pos, line_starts)
+                            except Exception:
+                                # fallback simple estimate
+                                line_start = text[:start_pos].count('\n') + 1
+                                line_end = text[:end_pos].count('\n') + 1
+                            search_pos = chunk_pos + len(chunk)
+                            last_line_end = line_end
+                        else:
+                            lines_in_chunk = chunk.count('\n') or 1
+                            line_start = last_line_end + 1
+                            line_end = line_start + lines_in_chunk - 1
+                            last_line_end = line_end
+
+                        if get_page is not None:
+                            try:
+                                page_number = get_page(chunk, chunk_pos, [])
+                            except Exception:
+                                page_number = 1
+                        else:
                             page_number = 1
-                    else:
-                        page_number = 1
 
-                    chunks_with_metadata.append({
-                        "text": chunk,
-                        "page_number": page_number,
-                        "line_start": line_start,
-                        "line_end": line_end,
-                        "chunk_index": i
-                    })
+                        chunks_with_metadata.append({
+                            "text": chunk,
+                            "page_number": page_number,
+                            "line_start": line_start,
+                            "line_end": line_end,
+                            "chunk_index": i
+                        })
             
             # 청크 텍스트만 추출하여 임베딩 생성
             chunks = [chunk_data["text"] for chunk_data in chunks_with_metadata]
