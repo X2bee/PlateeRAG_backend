@@ -9,8 +9,8 @@ from datetime import datetime
 from editor.workflow_executor import WorkflowExecutor
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 from controller.controller_helper import extract_user_id_from_request
-
 from service.database.models.executor import ExecutionMeta
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("interaction-controller")
 router = APIRouter(prefix="/api/interaction", tags=["interaction"])

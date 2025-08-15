@@ -21,6 +21,7 @@ import requests
 from requests.exceptions import RequestException
 import asyncio
 from service.llm.llm_service import LLMService
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 router = APIRouter(
     prefix="/api/config",

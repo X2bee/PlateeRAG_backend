@@ -22,9 +22,8 @@ from service.vector_db.vector_manager import VectorManager
 logger = logging.getLogger("rag-service")
 
 class RAGService:
-
     _instance = None
-    _instance_ref = None  # WeakReference로 인스턴스 추적
+    _instance_ref = None
 
     def __new__(cls, vectordb_config, collection_config, openai_config=None):
         """싱글톤 패턴으로 인스턴스 생성 및 기존 인스턴스 완전 정리"""

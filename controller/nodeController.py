@@ -11,6 +11,7 @@ from datetime import datetime
 import glob
 from pathlib import Path
 from controller.controller_helper import extract_user_id_from_request
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 from editor.node_composer import (
     run_discovery,

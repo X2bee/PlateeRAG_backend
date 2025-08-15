@@ -17,6 +17,7 @@ import datetime
 import uuid
 from service.database.models.vectordb import VectorDB
 from controller.controller_helper import extract_user_id_from_request
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("retrieval-controller")
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
@@ -67,27 +68,6 @@ class DocumentSearchRequest(BaseModel):
     limit: int = 5
     score_threshold: Optional[float] = 0.7
     filter: Optional[Dict[str, Any]] = None
-
-def get_vector_manager(request: Request):
-    """벡터 매니저 의존성 주입"""
-    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
-        return request.app.state.rag_service.vector_manager
-    else:
-        raise HTTPException(status_code=500, detail="Vector manager not available")
-
-def get_rag_service(request: Request):
-    """RAG 서비스 의존성 주입"""
-    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
-        return request.app.state.rag_service
-    else:
-        raise HTTPException(status_code=500, detail="RAG service not available")
-
-def get_document_processor(request: Request):
-    """문서 처리기 의존성 주입"""
-    if hasattr(request.app.state, 'document_processor') and request.app.state.document_processor:
-        return request.app.state.document_processor
-    else:
-        raise HTTPException(status_code=500, detail="Document processor not available")
 
 # Collection Management Endpoints
 @router.get("/collections")

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from service.database.connection import AppDatabaseManager
 from service.database.models.performance import NodePerformance
 from collections import defaultdict
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/api/performance", tags=["performance"])
@@ -32,7 +33,7 @@ class PerformanceController:
         """
         try:
             db_type = self.db_manager.config_db_manager.db_type
-            
+
             if db_type == "postgresql":
                 # PostgreSQL은 서브쿼리에 별칭(alias)이 필요합니다. (e.g., AS recent_logs)
                 query = """
@@ -56,25 +57,25 @@ class PerformanceController:
                     ORDER BY timestamp ASC
                 """
                 params = (workflow_name, workflow_id, limit)
-            
+
             results = self.db_manager.config_db_manager.execute_query(query, params)
             return [dict(row) for row in results] if results else []
 
         except Exception as e:
             print(f"Error fetching recent performance logs: {e}")
             return []
-    
-    def get_performance_data(self, workflow_name: str = None, workflow_id: str = None, 
+
+    def get_performance_data(self, workflow_name: str = None, workflow_id: str = None,
                            node_id: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """성능 데이터를 조회합니다."""
         try:
             conditions = []
             params = []
             param_counter = 1
-            
+
             # 데이터베이스 타입 확인
             db_type = self.db_manager.config_db_manager.db_type
-            
+
             if workflow_name:
                 if db_type == "postgresql":
                     conditions.append(f"workflow_name = %s")
@@ -82,7 +83,7 @@ class PerformanceController:
                     conditions.append("workflow_name = ?")
                 params.append(workflow_name)
                 param_counter += 1
-            
+
             if workflow_id:
                 if db_type == "postgresql":
                     conditions.append(f"workflow_id = %s")
@@ -90,7 +91,7 @@ class PerformanceController:
                     conditions.append("workflow_id = ?")
                 params.append(workflow_id)
                 param_counter += 1
-                
+
             if node_id:
                 if db_type == "postgresql":
                     conditions.append(f"node_id = %s")
@@ -98,14 +99,14 @@ class PerformanceController:
                     conditions.append("node_id = ?")
                 params.append(node_id)
                 param_counter += 1
-            
+
             where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-            
+
             if db_type == "postgresql":
                 limit_clause = f"LIMIT %s"
             else:
                 limit_clause = "LIMIT ?"
-            
+
             query = f"""
                 SELECT * FROM node_performance
                 {where_clause}
@@ -113,22 +114,22 @@ class PerformanceController:
                 {limit_clause}
             """
             params.append(limit)
-            
+
             results = self.db_manager.config_db_manager.execute_query(query, params)
             return [dict(row) for row in results] if results else []
-            
+
         except Exception as e:
             print(f"Error fetching performance data: {e}")
             return []
-    
+
     def get_performance_average(self, workflow_name: str, workflow_id: str) -> Dict[str, Any]:
         """동일한 workflow_name과 workflow_id를 가진 성능 데이터들의 평균을 계산합니다."""
         try:
             db_type = self.db_manager.config_db_manager.db_type
-            
+
             if db_type == "postgresql":
                 query = """
-                    SELECT 
+                    SELECT
                         COUNT(*) as execution_count,
                         AVG(processing_time_ms) as avg_processing_time_ms,
                         AVG(cpu_usage_percent) as avg_cpu_usage_percent,
@@ -137,12 +138,12 @@ class PerformanceController:
                         AVG(CASE WHEN gpu_memory_mb IS NOT NULL THEN gpu_memory_mb END) as avg_gpu_memory_mb,
                         MIN(timestamp) as first_execution,
                         MAX(timestamp) as last_execution
-                    FROM node_performance 
+                    FROM node_performance
                     WHERE workflow_name = %s AND workflow_id = %s
                 """
             else:
                 query = """
-                    SELECT 
+                    SELECT
                         COUNT(*) as execution_count,
                         AVG(processing_time_ms) as avg_processing_time_ms,
                         AVG(cpu_usage_percent) as avg_cpu_usage_percent,
@@ -151,12 +152,12 @@ class PerformanceController:
                         AVG(CASE WHEN gpu_memory_mb IS NOT NULL THEN gpu_memory_mb END) as avg_gpu_memory_mb,
                         MIN(timestamp) as first_execution,
                         MAX(timestamp) as last_execution
-                    FROM node_performance 
+                    FROM node_performance
                     WHERE workflow_name = ? AND workflow_id = ?
                 """
-            
+
             results = self.db_manager.config_db_manager.execute_query(query, [workflow_name, workflow_id])
-            
+
             if results and results[0]['execution_count'] > 0:  # execution_count > 0
                 row = results[0]
                 return {
@@ -182,21 +183,21 @@ class PerformanceController:
                     "execution_count": 0,
                     "message": "No performance data found"
                 }
-                
+
         except Exception as e:
             print(f"Error calculating performance average: {e}")
             return {
                 "error": f"Failed to calculate performance average: {str(e)}"
             }
-    
+
     def get_node_performance_summary(self, workflow_name: str, workflow_id: str) -> Dict[str, Any]:
         """워크플로우 내 각 노드별 성능 요약을 제공합니다."""
         try:
             db_type = self.db_manager.config_db_manager.db_type
-            
+
             if db_type == "postgresql":
                 query = """
-                    SELECT 
+                    SELECT
                         node_id,
                         node_name,
                         COUNT(*) as execution_count,
@@ -205,14 +206,14 @@ class PerformanceController:
                         AVG(ram_usage_mb) as avg_ram_usage_mb,
                         MIN(processing_time_ms) as min_processing_time_ms,
                         MAX(processing_time_ms) as max_processing_time_ms
-                    FROM node_performance 
+                    FROM node_performance
                     WHERE workflow_name = %s AND workflow_id = %s
                     GROUP BY node_id, node_name
                     ORDER BY avg_processing_time_ms DESC
                 """
             else:
                 query = """
-                    SELECT 
+                    SELECT
                         node_id,
                         node_name,
                         COUNT(*) as execution_count,
@@ -221,14 +222,14 @@ class PerformanceController:
                         AVG(ram_usage_mb) as avg_ram_usage_mb,
                         MIN(processing_time_ms) as min_processing_time_ms,
                         MAX(processing_time_ms) as max_processing_time_ms
-                    FROM node_performance 
+                    FROM node_performance
                     WHERE workflow_name = ? AND workflow_id = ?
                     GROUP BY node_id, node_name
                     ORDER BY avg_processing_time_ms DESC
                 """
-            
+
             results = self.db_manager.config_db_manager.execute_query(query, [workflow_name, workflow_id])
-            
+
             nodes_summary = []
             for row in results:
                 nodes_summary.append({
@@ -241,20 +242,20 @@ class PerformanceController:
                     "min_processing_time_ms": round(row['min_processing_time_ms'], 2) if row['min_processing_time_ms'] else 0,
                     "max_processing_time_ms": round(row['max_processing_time_ms'], 2) if row['max_processing_time_ms'] else 0
                 })
-            
+
             return {
                 "workflow_name": workflow_name,
                 "workflow_id": workflow_id,
                 "nodes_summary": nodes_summary,
                 "total_nodes": len(nodes_summary)
             }
-            
+
         except Exception as e:
             print(f"Error getting node performance summary: {e}")
             return {
                 "error": f"Failed to get node performance summary: {str(e)}"
             }
-        
+
     def get_node_log_counts(self, workflow_name: str, workflow_id: str) -> Dict[str, Any]:
         """워크플로우의 각 노드별 로그 개수를 조회합니다."""
         try:
@@ -300,7 +301,7 @@ class PerformanceController:
             if node_name:
                 node_times[node_name]['total_time'] += safe_float(log.get('processing_time_ms'))
                 node_times[node_name]['count'] += 1
-        
+
         labels = list(node_times.keys())
         avg_times = [node_times[name]['total_time'] / node_times[name]['count'] for name in labels]
 
@@ -309,7 +310,7 @@ class PerformanceController:
             'labels': labels,
             'datasets': [{'label': 'Average Processing Time (ms)', 'data': avg_times}]
         }
-    
+
     def get_bar_chart_data(self, workflow_name: str, workflow_id: str, limit: int) -> Dict[str, Any]:
         """바 차트 데이터를 생성합니다."""
         logs = self._get_recent_performance_logs(workflow_name, workflow_id, limit)
@@ -326,7 +327,7 @@ class PerformanceController:
         labels = list(node_metrics.keys())
         avg_time = [sum(m['time']) / len(m['time']) if m['time'] else 0 for m in node_metrics.values()]
         avg_cpu = [sum(m['cpu']) / len(m['cpu']) if m['cpu'] else 0 for m in node_metrics.values()]
-        
+
         return {
             'processingTime': {
                 'title': f'Average Processing Time (Last {limit} logs)',
@@ -339,7 +340,7 @@ class PerformanceController:
                 'datasets': [{'label': 'Avg. CPU (%)', 'data': avg_cpu}]
             }
         }
-    
+
     def get_line_chart_data(self, workflow_name: str, workflow_id: str, limit: int) -> Dict[str, Any]:
         """라인 차트 데이터를 생성합니다."""
         logs = self._get_recent_performance_logs(workflow_name, workflow_id, limit)
@@ -366,18 +367,18 @@ class PerformanceController:
                 'datasets': [{'label': name, 'data': data} for name, data in datasets_time.items()]
             }
         }
-    
+
     def delete_old_performance_data(self, days_to_keep: int = 30) -> bool:
         """지정된 일수보다 오래된 성능 데이터를 삭제합니다."""
         try:
             query = """
-                DELETE FROM node_performance 
+                DELETE FROM node_performance
                 WHERE timestamp < datetime('now', '-{} days')
             """.format(days_to_keep)
-            
+
             self.db_manager.config_db_manager.execute_query(query)
             return True
-            
+
         except Exception as e:
             print(f"Error deleting old performance data: {e}")
             return False
@@ -403,7 +404,7 @@ async def get_performance_data(
     try:
         controller = get_performance_controller(request)
         data = controller.get_performance_data(workflow_name, workflow_id, node_id, limit)
-        
+
         return {
             "success": True,
             "data": data,
@@ -422,7 +423,7 @@ async def get_performance_average(
     try:
         controller = get_performance_controller(request)
         average_data = controller.get_performance_average(workflow_name, workflow_id)
-        
+
         return {
             "success": True,
             "data": average_data
@@ -440,7 +441,7 @@ async def get_node_performance_summary(
     try:
         controller = get_performance_controller(request)
         summary_data = controller.get_node_performance_summary(workflow_name, workflow_id)
-        
+
         return {
             "success": True,
             "data": summary_data
@@ -504,7 +505,7 @@ async def cleanup_old_performance_data(
     try:
         controller = get_performance_controller(request)
         success = controller.delete_old_performance_data(days_to_keep)
-        
+
         return {
             "success": success,
             "message": f"Old performance data cleanup {'completed' if success else 'failed'}"

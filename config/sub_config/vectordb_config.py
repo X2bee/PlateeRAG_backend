@@ -117,6 +117,12 @@ class VectorDBConfig(BaseConfig):
             default_value="cpu"
         )
 
+        self.HUGGINGFACE_API_KEY = self.create_persistent_config(
+            env_name="HUGGINGFACE_API_KEY",
+            config_path="vectordb.embedding.huggingface_api_key",
+            default_value=""
+        )
+
         # Custom HTTP API 임베딩 설정 (vLLM 등)
         self.CUSTOM_EMBEDDING_URL = self.create_persistent_config(
             env_name="CUSTOM_EMBEDDING_URL",

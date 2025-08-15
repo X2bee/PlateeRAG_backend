@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from service.embedding import EmbeddingFactory
 import logging
+from controller.singletonHelper import get_embedding_client, get_rag_service
 
 logger = logging.getLogger("embedding-controller")
 router = APIRouter(prefix="/api/embedding", tags=["embedding"])
@@ -19,20 +20,6 @@ class EmbeddingProviderSwitchRequest(BaseModel):
 
 class EmbeddingTestRequest(BaseModel):
     query_text: str = "Hello, world!"
-
-def get_embedding_client(request: Request):
-    """임베딩 클라이언트 의존성 주입"""
-    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
-        return request.app.state.rag_service.embeddings_client
-    else:
-        raise HTTPException(status_code=500, detail="Embedding client not available")
-
-def get_rag_service(request: Request):
-    """RAG 서비스 의존성 주입"""
-    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
-        return request.app.state.rag_service
-    else:
-        raise HTTPException(status_code=500, detail="RAG service not available")
 
 def get_config(request: Request):
     """설정 의존성 주입"""
