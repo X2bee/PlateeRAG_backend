@@ -77,6 +77,7 @@ class VectorDBChunkEdge(BaseModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.user_id: Optional[int] = kwargs.get('user_id')
+        self.collection_name: str = kwargs.get('collection_name', '')
         self.target: str = kwargs.get('target', '')
         self.source: str = kwargs.get('source', '')
         self.relation_type: str = kwargs.get('relation_type', '')
@@ -89,6 +90,7 @@ class VectorDBChunkEdge(BaseModel):
     def get_schema(self) -> Dict[str, str]:
         return {
             'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
+            'collection_name': 'VARCHAR(500) NOT NULL',
             'target': 'VARCHAR(500) NOT NULL',
             'source': 'VARCHAR(500) NOT NULL',
             'relation_type': 'VARCHAR(50) NOT NULL',

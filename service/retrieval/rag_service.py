@@ -997,12 +997,14 @@ class RAGService:
                 app_db.insert(vectordb_chunk_meta)
                 app_db.insert(VectorDBChunkEdge(
                     user_id=user_id,
+                    collection_name=collection_name,
                     target=point['id'],
                     source=collection_name,
-                    relation_type="chunk"
+                    relation_type="chunk",
                 ))
                 app_db.insert(VectorDBChunkEdge(
                     user_id=user_id,
+                    collection_name=collection_name,
                     target=payload.get("document_type"),
                     source=point['id'],
                     relation_type="document_type"
@@ -1010,6 +1012,7 @@ class RAGService:
                 for keyword in safe_parse_to_list(payload.get("keywords")):
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
+                        collection_name=collection_name,
                         target=keyword,
                         source=point['id'],
                         relation_type="keyword"
@@ -1017,6 +1020,7 @@ class RAGService:
                 for topic in safe_parse_to_list(payload.get("topics")):
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
+                        collection_name=collection_name,
                         target=topic,
                         source=point['id'],
                         relation_type="topic"
@@ -1024,6 +1028,7 @@ class RAGService:
                 for entity in safe_parse_to_list(payload.get("entities")):
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
+                        collection_name=collection_name,
                         target=entity,
                         source=point['id'],
                         relation_type="entity"
@@ -1031,6 +1036,7 @@ class RAGService:
                 for main_concept in safe_parse_to_list(payload.get("main_concepts")):
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
+                        collection_name=collection_name,
                         target=main_concept,
                         source=point['id'],
                         relation_type="main_concept"
