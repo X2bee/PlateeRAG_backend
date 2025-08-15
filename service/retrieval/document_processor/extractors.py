@@ -10,7 +10,7 @@ import PyPDF2
 from docx import Document
 
 from .dependencies import (
-    PDFMINER_AVAILABLE, PANDAS_AVAILABLE, PYTHON_PPTX_AVAILABLE
+    PDFMINER_AVAILABLE, XLRD_AVAILABLE, OPENPYXL_AVAILABLE, PYTHON_PPTX_AVAILABLE
 )
 from .text_utils import TextUtils
 from .constants import ENCODINGS
@@ -18,8 +18,9 @@ from .constants import ENCODINGS
 if PDFMINER_AVAILABLE:
     from pdfminer.high_level import extract_text
 
-if PANDAS_AVAILABLE:
-    import pandas as pd
+if OPENPYXL_AVAILABLE and XLRD_AVAILABLE :
+    from openpyxl import load_workbook
+    import xlrd
 
 if PYTHON_PPTX_AVAILABLE:
     from pptx import Presentation
@@ -524,37 +525,134 @@ class DocumentExtractor:
 
     # 기타 파일 형식 처리
     async def extract_text_from_excel(self, file_path: str) -> str:
-        """Excel 파일에서 텍스트 추출"""
-        if not PANDAS_AVAILABLE:
-            raise Exception("pandas is required for Excel file processing but is not available")
+        """Excel 파일에서 텍스트 추출 (openpyxl 및 xlrd 사용)"""
+        if not (OPENPYXL_AVAILABLE and XLRD_AVAILABLE):
+            raise Exception("openpyxl and xlrd are required for Excel file processing but are not available")
         
         try:
-            excel_file = pd.ExcelFile(file_path)
             text = ""
             
-            for sheet_name in excel_file.sheet_names:
-                logger.info(f"Processing sheet: {sheet_name}")
-                df = pd.read_excel(file_path, sheet_name=sheet_name)
+            # 파일 확장자에 따라 처리 방법 결정
+            file_extension = file_path.lower().split('.')[-1]
+            
+            if file_extension in ['xlsx', 'xlsm']:
+                # openpyxl로 .xlsx/.xlsm 파일 처리
+                workbook = load_workbook(file_path, read_only=True, data_only=True)
                 
-                # 시트 이름 추가
-                text += f"\n=== 시트: {sheet_name} ===\n"
-                
-                # 컬럼 헤더 추가
-                if not df.empty:
-                    text += "컬럼: " + ", ".join(str(col) for col in df.columns) + "\n\n"
+                for sheet_name in workbook.sheetnames:
+                    logger.info(f"Processing sheet: {sheet_name}")
+                    worksheet = workbook[sheet_name]
                     
-                    # 데이터 행들을 텍스트로 변환
-                    for index, row in df.iterrows():
-                        row_text = " | ".join(str(value) for value in row.values if pd.notna(value))
-                        if row_text.strip():
-                            text += row_text + "\n"
+                    # 시트 이름 추가
+                    text += f"\n=== 시트: {sheet_name} ===\n"
+                    
+                    # 데이터가 있는 행과 열 범위 확인
+                    if worksheet.max_row == 1 and worksheet.max_column == 1:
+                        # 빈 시트인 경우
+                        text += "빈 시트\n\n"
+                        continue
+                    
+                    # 첫 번째 행을 헤더로 처리
+                    header_row = []
+                    for col in range(1, worksheet.max_column + 1):
+                        cell_value = worksheet.cell(row=1, column=col).value
+                        if cell_value is not None:
+                            header_row.append(str(cell_value))
+                        else:
+                            header_row.append("")
+                    
+                    if any(header_row):  # 헤더가 있는 경우
+                        text += "컬럼: " + ", ".join(header_row) + "\n\n"
+                    
+                    # 데이터 행들 처리 (헤더 제외)
+                    for row in range(2, worksheet.max_row + 1):
+                        row_data = []
+                        for col in range(1, worksheet.max_column + 1):
+                            cell_value = worksheet.cell(row=row, column=col).value
+                            if cell_value is not None:
+                                row_data.append(str(cell_value))
+                        
+                        if row_data:  # 빈 행이 아닌 경우
+                            row_text = " | ".join(row_data)
+                            if row_text.strip():
+                                text += row_text + "\n"
+                    
                     text += "\n"
+                
+                workbook.close()
+                
+            elif file_extension == 'xls':
+                # xlrd로 .xls 파일 처리
+                workbook = xlrd.open_workbook(file_path)
+                
+                for sheet_index in range(workbook.nsheets):
+                    worksheet = workbook.sheet_by_index(sheet_index)
+                    sheet_name = workbook.sheet_names()[sheet_index]
+                    
+                    logger.info(f"Processing sheet: {sheet_name}")
+                    
+                    # 시트 이름 추가
+                    text += f"\n=== 시트: {sheet_name} ===\n"
+                    
+                    if worksheet.nrows == 0:
+                        text += "빈 시트\n\n"
+                        continue
+                    
+                    # 첫 번째 행을 헤더로 처리
+                    if worksheet.nrows > 0:
+                        header_row = []
+                        for col in range(worksheet.ncols):
+                            try:
+                                cell_value = worksheet.cell_value(0, col)
+                                if cell_value:
+                                    header_row.append(str(cell_value))
+                                else:
+                                    header_row.append("")
+                            except IndexError:
+                                break
+                        
+                        if any(header_row):  # 헤더가 있는 경우
+                            text += "컬럼: " + ", ".join(header_row) + "\n\n"
+                    
+                    # 데이터 행들 처리 (헤더 제외)
+                    for row in range(1, worksheet.nrows):
+                        row_data = []
+                        for col in range(worksheet.ncols):
+                            try:
+                                cell_value = worksheet.cell_value(row, col)
+                                if cell_value:
+                                    # xlrd에서 날짜/시간 처리
+                                    if worksheet.cell_type(row, col) == xlrd.XL_CELL_DATE:
+                                        try:
+                                            date_value = xlrd.xldate_as_tuple(cell_value, workbook.datemode)
+                                            if date_value:
+                                                from datetime import datetime
+                                                dt = datetime(*date_value)
+                                                row_data.append(dt.strftime("%Y-%m-%d %H:%M:%S"))
+                                            else:
+                                                row_data.append(str(cell_value))
+                                        except xlrd.XLDateError:
+                                            row_data.append(str(cell_value))
+                                    else:
+                                        row_data.append(str(cell_value))
+                            except IndexError:
+                                break
+                        
+                        if row_data:  # 빈 행이 아닌 경우
+                            row_text = " | ".join(row_data)
+                            if row_text.strip():
+                                text += row_text + "\n"
+                    
+                    text += "\n"
+            else:
+                raise Exception(f"Unsupported Excel file format: {file_extension}")
             
             return TextUtils.clean_text(text)
+            
         except Exception as e:
             logger.error(f"Error extracting text from Excel {file_path}: {e}")
             raise
-    
+
     async def extract_text_from_text_file(self, file_path: str, file_type: str) -> str:
         """텍스트 기반 파일에서 텍스트 추출 (다양한 인코딩 시도)"""
         from .constants import (

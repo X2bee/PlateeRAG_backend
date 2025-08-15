@@ -8,10 +8,16 @@ logger = logging.getLogger("document-processor")
 
 # 의존성 체크
 try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
+    from openpyxl import load_workbook
+    OPENPYXL_AVAILABLE = True
 except ImportError:
-    PANDAS_AVAILABLE = False
+    OPENPYXL_AVAILABLE = False
+
+try:
+    import xlrd
+    XLRD_AVAILABLE = True
+except ImportError:
+    XLRD_AVAILABLE = False
 
 try:
     from pdfminer.high_level import extract_text

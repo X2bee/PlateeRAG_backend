@@ -113,6 +113,7 @@ class DocumentProcessor:
         if not OPENPYXL_AVAILABLE and not XLRD_AVAILABLE:
             # openpyxl도 없고 xlrd도 없으면 Excel 지원 제거
             self.supported_types = [t for t in self.supported_types if t not in ['xlsx', 'xls']]
+            logger.warning("openpyxl and xlrd not available. Excel processing disabled.")
         if not LANGCHAIN_OPENAI_AVAILABLE:
             self.supported_types = [t for t in self.supported_types if t not in self.image_types]
             logger.warning("langchain_openai not available. Image processing disabled.")
