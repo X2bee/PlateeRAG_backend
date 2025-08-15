@@ -378,12 +378,26 @@ class VectorManager:
             
             results = []
             for hit in search_results:
-                results.append({
+                payload = hit.payload or {}
+
+                # Flatten commonly used fields for backward compatibility and convenience
+                result = {
                     "id": hit.id,
                     "score": hit.score,
-                    "payload": hit.payload,
+                    "document_id": payload.get("document_id"),
+                    "chunk_index": payload.get("chunk_index"),
+                    "chunk_text": payload.get("chunk_text"),
+                    "file_name": payload.get("file_name"),
+                    "file_path": payload.get("file_path"),
+                    "file_type": payload.get("file_type"),
+                    "line_start": payload.get("line_start"),
+                    "line_end": payload.get("line_end"),
+                    "page_number": payload.get("page_number"),
+                    "payload": payload,
                     "vector": hit.vector
-                })
+                }
+
+                results.append(result)
             
             logger.info(f"Search completed for '{collection_name}': {len(results)} results")
             return {

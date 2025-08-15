@@ -17,6 +17,7 @@ import datetime
 import uuid
 from service.database.models.vectordb import VectorDB
 from controller.controller_helper import extract_user_id_from_request
+from service.embedding import get_fastembed_service
 
 logger = logging.getLogger("retrieval-controller")
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
@@ -67,6 +68,8 @@ class DocumentSearchRequest(BaseModel):
     limit: int = 5
     score_threshold: Optional[float] = 0.7
     filter: Optional[Dict[str, Any]] = None
+    rerank: Optional[bool] = False
+    rerank_top_k: Optional[int] = 20
 
 def get_vector_manager(request: Request):
     """벡터 매니저 의존성 주입"""
@@ -216,9 +219,9 @@ async def upload_document(
     try:
         rag_service = get_rag_service(request)
 
-        # 파일 저장
-        upload_dir = Path("downloads")
-        upload_dir.mkdir(exist_ok=True)
+        # 파일 저장 (collection명 하위에 저장)
+        upload_dir = Path("downloads") / collection_name
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
         file_path = upload_dir / file.filename
         async with aiofiles.open(file_path, 'wb') as f:
@@ -259,16 +262,83 @@ async def search_documents(request: Request, search_request: DocumentSearchReque
     """문서 검색"""
     try:
         rag_service = get_rag_service(request)
+        # support optional rerank parameters
         result = await rag_service.search_documents(
             search_request.collection_name,
             search_request.query_text,
             search_request.limit,
             search_request.score_threshold,
-            search_request.filter
+            search_request.filter,
+            rerank=search_request.rerank,
+            rerank_top_k=search_request.rerank_top_k
         )
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to search documents: {str(e)}")
+
+
+@router.post("/hybrid/index")
+async def hybrid_index_collection(request: Request, source_collection: str = Form(...), target_collection: str = Form(...)):
+    """기존 컬렉션의 청크들을 가져와 FastEmbed 기반 하이브리드 컬렉션으로 색인합니다."""
+    try:
+        rag_service = get_rag_service(request)
+        vector_manager = rag_service.vector_manager
+        client = vector_manager.client
+
+        # scroll all points from source collection
+        points = []
+        offset = None
+        while True:
+            scroll_res = client.scroll(collection_name=source_collection, limit=500, offset=offset, with_payload=True)
+            pts, next_offset = scroll_res
+            points.extend(pts)
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        if not points:
+            return {"message": "No points found in source collection", "count": 0}
+
+        documents = [p.payload.get("chunk_text", "") for p in points]
+        payloads = [p.payload for p in points]
+
+        fes = get_fastembed_service()
+        fes.init_models()
+        dense, sparse, late = fes.embed_documents_all(documents)
+
+        # create hybrid collection and upsert
+        dense_key = "all-MiniLM-L6-v2"
+        late_key = "colbertv2.0"
+        sparse_key = "bm25"
+
+        fes.create_hybrid_collection(client, target_collection, dense_key, len(dense[0]), late_key, len(late[0][0]), sparse_key)
+        op = fes.upsert_hybrid_points(client, target_collection, dense_key, sparse_key, late_key, dense, sparse, late, documents, ids=None, payloads=payloads)
+
+        return {"message": "Hybrid index created", "upsert_op": str(op)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create hybrid index: {e}")
+
+
+@router.post("/hybrid/search")
+async def hybrid_search(request: Request, collection_name: str = Form(...), query_text: str = Form(...), limit: int = Form(10)):
+    """Hybrd search endpoint using FastEmbedService (prefetch + late rerank)"""
+    try:
+        rag_service = get_rag_service(request)
+        client = rag_service.vector_manager.client
+        fes = get_fastembed_service()
+        fes.init_models()
+
+        dense_model = fes.dense_model
+        sparse_model = fes.sparse_model
+        late_model = fes.late_model
+
+        results = fes.hybrid_search(client, collection_name, query_text, dense_model, sparse_model, late_model,
+                                     dense_key="all-MiniLM-L6-v2", sparse_key="bm25", late_key="colbertv2.0",
+                                     prefetch_limits={"all-MiniLM-L6-v2":20, "bm25":20}, limit=limit)
+
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Hybrid search failed: {e}")
 
 @router.get("/collections/{collection_name}/documents")
 async def list_documents_in_collection(request: Request, collection_name: str):
