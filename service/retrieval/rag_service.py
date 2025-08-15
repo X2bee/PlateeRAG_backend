@@ -808,6 +808,8 @@ class RAGService:
             raise HTTPException(status_code=500, detail="Vector database not connected")
 
         try:
+            # processed_chunks 변수가 이후 조건에서 사용되므로 안전하게 초기화
+            processed_chunks = None
             # 파일 확장자 추출 및 검증
             is_valid, file_extension = self.document_processor.validate_file_format(file_path)
             if not is_valid:
@@ -956,6 +958,18 @@ class RAGService:
             file_name = Path(file_path).name
             # 저장된 파일을 컬렉션 기준으로 식별할 수 있게 경로 형태로 보관
             stored_file_path = f"{collection_name}/{file_name}"
+            # 청크별 메타데이터에 병합할 기본 메타데이터 초기화
+            if metadata and isinstance(metadata, dict):
+                final_metadata = dict(metadata)  # copy incoming metadata
+            else:
+                final_metadata = {}
+            # 공통 메타데이터 보강
+            final_metadata.update({
+                "user_id": user_id,
+                "collection_name": collection_name,
+                "file_name": file_name,
+                "file_path": stored_file_path
+            })
 
             for i, (chunk_data, embedding) in enumerate(zip(chunks_with_metadata, embeddings)):
                 # document_processor에서 계산된 메타데이터 사용
@@ -980,13 +994,13 @@ class RAGService:
                     "global_start": chunk_data.get("global_start", -1),
                     "global_end": chunk_data.get("global_end", -1)
                 }
-
-                # LLM 생성 메타데이터 병합
-                final_metadata.update(chunk_metadata)
+                # 각 청크별로 final_metadata를 복사하여 개별 payload 생성 (mutable 공유 방지)
+                payload = dict(final_metadata) if isinstance(final_metadata, dict) else {}
+                payload.update(chunk_metadata)
 
                 # LLM 메타데이터 생성 여부 표시
                 if use_llm_metadata and await self.metadata_generator.is_enabled():
-                    final_metadata['llm_metadata_generated'] = True
+                    payload['llm_metadata_generated'] = True
 
                 # 각 청크마다 새로운 UUID 생성
                 chunk_id = str(uuid.uuid4())
@@ -994,7 +1008,7 @@ class RAGService:
                 point = {
                     "id": chunk_id,
                     "vector": embedding,
-                    "payload": final_metadata
+                    "payload": payload
                 }
                 points.append(point)
 
@@ -1072,13 +1086,16 @@ class RAGService:
                     source=collection_name,
                     relation_type="chunk",
                 ))
-                app_db.insert(VectorDBChunkEdge(
-                    user_id=user_id,
-                    collection_name=collection_name,
-                    target=payload.get("document_type"),
-                    source=point['id'],
-                    relation_type="document_type"
-                ))
+                # document_type이 존재할 때만 엣지로 저장 (NULL 삽입 방지)
+                doc_type_val = payload.get("document_type")
+                if doc_type_val:
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        collection_name=collection_name,
+                        target=doc_type_val,
+                        source=point['id'],
+                        relation_type="document_type"
+                    ))
                 for keyword in safe_parse_to_list(payload.get("keywords")):
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
