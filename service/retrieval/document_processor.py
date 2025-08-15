@@ -40,6 +40,13 @@ except ImportError:
     PDFMINER_AVAILABLE = False
 
 try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+    print("✅ pdfplumber available")
+except Exception:
+    PDFPLUMBER_AVAILABLE = False
+
+try:
     from pdf2image import convert_from_path
     PDF2IMAGE_AVAILABLE = True
     print("✅ pdf2image available")
@@ -229,6 +236,25 @@ class DocumentProcessor:
         # 연속된 줄바꿈을 두 개로 제한
         text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
         return text.strip()
+
+    def _is_text_quality_sufficient(self, text: Optional[str], min_chars: int = 500, min_word_ratio: float = 0.6) -> bool:
+        """간단한 휴리스틱으로 텍스트 품질 판단
+
+        - min_chars 미만이면 낮음
+        - 텍스트 내 알파벳/한글 등 단어 문자의 비율이 낮으면(이미지 OCR 잡음 가능) 낮음
+        """
+        try:
+            if not text:
+                return False
+            if len(text) < min_chars:
+                return False
+            # 단어 문자 비율 (한글/라틴/숫자 등)
+            import re
+            word_chars = re.findall(r"[\w\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]", text)
+            ratio = len(word_chars) / max(1, len(text))
+            return ratio >= min_word_ratio
+        except Exception:
+            return False
     
     def clean_code_text(self, text: str, file_type: str) -> str:
         """코드 텍스트 정리 (코드의 구조를 보존)"""
@@ -550,7 +576,40 @@ class DocumentProcessor:
                         fitz_text = self._extract_text_from_pdf_fitz(file_path)
                         if fitz_text and fitz_text.strip():
                             logger.info(f"Text extracted via PyMuPDF: {len(fitz_text)} chars")
-                            return fitz_text
+                            # 품질 검사: 너무 짧거나 문자 비율이 낮으면 pdfplumber/pdfminer로 폴백
+                            if not self._is_text_quality_sufficient(fitz_text):
+                                logger.info("PyMuPDF extraction seems low quality, attempting pdfplumber/pdfminer fallbacks")
+                                # 시도 1: pdfplumber (테이블/레이아웃 보존에 강함)
+                                if PDFPLUMBER_AVAILABLE:
+                                    try:
+                                        import pdfplumber
+                                        with pdfplumber.open(file_path) as pdf:
+                                            pages = [p.extract_text() or "" for p in pdf.pages]
+                                        pb_text = "\n".join(pages).strip()
+                                        if pb_text and self._is_text_quality_sufficient(pb_text):
+                                            logger.info(f"Text extracted via pdfplumber: {len(pb_text)} chars")
+                                            return self.clean_text(pb_text)
+                                        else:
+                                            logger.info("pdfplumber result not sufficient, will try pdfminer")
+                                    except Exception as e:
+                                        logger.warning(f"pdfplumber extraction failed: {e}")
+
+                                # 시도 2: pdfminer layout extraction
+                                if PDFMINER_AVAILABLE:
+                                    try:
+                                        layout_text = await asyncio.to_thread(self._extract_text_from_pdf_layout, file_path)
+                                        if layout_text and layout_text.strip() and self._is_text_quality_sufficient(layout_text):
+                                            logger.info(f"Text extracted via pdfminer layout (after PyMuPDF fallback): {len(layout_text)} chars")
+                                            return self.clean_text(layout_text)
+                                    except Exception as e:
+                                        logger.debug(f"pdfminer fallback failed: {e}")
+
+                            # 기본적으로 PyMuPDF 결과 반환 (품질이 충분하면)
+                            if self._is_text_quality_sufficient(fitz_text):
+                                return fitz_text
+                            else:
+                                # 품질 부족이지만 다른 방법도 실패한 경우 이후 폴백으로 진행
+                                logger.info("PyMuPDF result kept as last-resort; continuing with other fallbacks")
                     except Exception as e:
                         logger.warning(f"PyMuPDF extraction failed: {e}")
                 

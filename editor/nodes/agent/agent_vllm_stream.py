@@ -106,7 +106,6 @@ class AgentVLLMStreamNode(Node):
                     rerank=rerank_flag,
                     rerank_top_k=rerank_top_k
                 ))
-                ))
                 results = search_result.get("results", [])
                 if results:
                     context_parts = []
