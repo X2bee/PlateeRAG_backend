@@ -41,6 +41,7 @@ class HuggingFaceEmbedding(BaseEmbedding):
                     self.model_device == 'gpu' or
                     self.model_device == 'cuda'
                 )
+                logger.info(f"Using device: {self.model_device} (GPU: {is_gpu_device})")
                 device = 'cuda' if is_gpu_device else 'cpu'
                 self.model = SentenceTransformer(
                     self.model_name,
