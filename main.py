@@ -182,8 +182,6 @@ app.include_router(nodeApiRouter)
 app.include_router(vastRouter)
 app.include_router(huggingfaceRouter)
 
-# 기존 /app 엔드포인트들은 appController로 이동했으므로 여기서 제거
-
 if __name__ == "__main__":
     try:
         host = os.environ.get("APP_HOST", "0.0.0.0")
@@ -191,8 +189,11 @@ if __name__ == "__main__":
         debug = os.environ.get("DEBUG_MODE", "false").lower() in ('true', '1', 'yes', 'on')
 
         print(f"Starting server on {host}:{port} (debug={debug})")
-        uvicorn.run("main:app", host=host, port=port, reload=debug, workers=4)
+        if debug:
+            uvicorn.run("main:app", host=host, port=port, reload=True)
+        else:
+            uvicorn.run("main:app", host=host, port=port, reload=False, workers=4)
     except Exception as e:
         logger.warning(f"Failed to load config for uvicorn: {e}")
         logger.info("Using default values for uvicorn")
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, workers=4)
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

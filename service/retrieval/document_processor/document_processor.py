@@ -14,7 +14,7 @@ from .constants import (
     DATA_TYPES, SCRIPT_TYPES, LOG_TYPES, WEB_TYPES, IMAGE_TYPES
 )
 from .dependencies import (
-    PANDAS_AVAILABLE, LANGCHAIN_OPENAI_AVAILABLE, 
+    OPENPYXL_AVAILABLE, XLRD_AVAILABLE, LANGCHAIN_OPENAI_AVAILABLE, 
     log_dependency_warnings
 )
 from .config_manager import ConfigManager
@@ -49,7 +49,7 @@ class DocumentProcessor:
         self.collection_config = collection_config
         
         # 의존성에 따른 지원 타입 조정
-        if not PANDAS_AVAILABLE:
+        if not XLRD_AVAILABLE or not OPENPYXL_AVAILABLE:
             self.supported_types = [t for t in self.supported_types if t not in ['xlsx','xls']]
         if not LANGCHAIN_OPENAI_AVAILABLE:
             self.supported_types = [t for t in self.supported_types if t not in self.image_types]
@@ -137,6 +137,7 @@ class DocumentProcessor:
     def validate_file_format(self, file_path: str) -> tuple[bool, str]:
         """파일 형식 유효성 검사"""
         try:
+            logger.info(f"Validating file format for: {self.supported_types}")
             file_extension = Path(file_path).suffix[1:].lower()
             is_valid = file_extension in self.supported_types
             return is_valid, file_extension

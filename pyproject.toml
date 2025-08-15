@@ -117,4 +117,6 @@ dependencies = [
     "zstandard==0.23.0",
     "vastai==0.3.1",
     "huggingface_hub==0.33.4",
+    "openpyxl==3.1.5",
+    "xlrd==2.0.2",
 ]

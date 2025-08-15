@@ -16,11 +16,19 @@ from docx import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 from service.llm.llm_service import LLMService
 
+import os
+import csv
 try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
+    from openpyxl import load_workbook
+    OPENPYXL_AVAILABLE = True
 except ImportError:
-    PANDAS_AVAILABLE = False
+    OPENPYXL_AVAILABLE = False
+
+try:
+    import xlrd
+    XLRD_AVAILABLE = True
+except ImportError:
+    XLRD_AVAILABLE = False
 
 try:
     from pdfminer.high_level import extract_text
@@ -101,8 +109,11 @@ class DocumentProcessor:
         )
         self.collection_config = collection_config
         
-        if not PANDAS_AVAILABLE:
-            self.supported_types = [t for t in self.supported_types if t not in ['xlsx','xls']]
+        # 변경
+        if not OPENPYXL_AVAILABLE and not XLRD_AVAILABLE:
+            # openpyxl도 없고 xlrd도 없으면 Excel 지원 제거
+            self.supported_types = [t for t in self.supported_types if t not in ['xlsx', 'xls']]
+            logger.warning("openpyxl and xlrd not available. Excel processing disabled.")
         if not LANGCHAIN_OPENAI_AVAILABLE:
             self.supported_types = [t for t in self.supported_types if t not in self.image_types]
             logger.warning("langchain_openai not available. Image processing disabled.")
@@ -1240,43 +1251,27 @@ class DocumentProcessor:
             return ""
     
     async def extract_text_from_file(self, file_path: str, file_extension: str) -> str:
-        """파일에서 텍스트 추출 (파일 형식에 따라 적절한 메서드 호출)
-        
-        Args:
-            file_path: 파일 경로
-            file_extension: 파일 확장자
-            
-        Returns:
-            추출된 텍스트
-            
-        Raises:
-            Exception: 텍스트 추출 실패
-        """
-        try:
-            category = self.get_file_category(file_extension)
-            logger.info(f"Extracting text from {file_extension} file ({category} category): {file_path}")
-           
-            # 파일 형식별 텍스트 추출
-            if file_extension == 'pdf':
-                return await self._extract_text_from_pdf(file_path)
-            elif file_extension in ['docx', 'doc']:
-                return await self._extract_text_from_docx(file_path)
-            # 🔥 PPT 처리 추가
-            elif file_extension in ['pptx', 'ppt']:
-                return await self._extract_text_from_ppt(file_path)
-            elif file_extension in ['xlsx', 'xls']:
-                return await self._extract_text_from_excel(file_path)
-            elif file_extension in self.image_types:
-                return await self._convert_image_to_text(file_path)
-            elif file_extension in (self.text_types + self.code_types + self.config_types + 
+        """파일에서 텍스트 추출"""
+        category = self.get_file_category(file_extension)
+        logger.info(f"Extracting text from {file_extension} file ({category} category): {file_path}")
+
+        if file_extension == 'pdf':
+            return await self._extract_text_from_pdf(file_path)
+        elif file_extension in ['docx', 'doc']:
+            return await self._extract_text_from_docx(file_path)
+        elif file_extension in ['pptx', 'ppt']:
+            return await self._extract_text_from_ppt(file_path)
+        elif file_extension in ['xlsx', 'xls']:
+            return await self._extract_text_from_excel(file_path)
+        elif file_extension in ['csv', 'tsv']:
+            return await self._extract_text_from_csv(file_path)
+        elif file_extension in self.image_types:
+            return await self._convert_image_to_text(file_path)
+        elif file_extension in (self.text_types + self.code_types + self.config_types + 
                                 self.script_types + self.log_types + self.web_types):
-                return await self._extract_text_from_text_file(file_path, file_extension)
-            else:
-                raise ValueError(f"Unsupported file type: {file_extension}")
-            
-        except Exception as e:
-            logger.error(f"Failed to extract text from {file_path}: {e}")
-            raise
+            return await self._extract_text_from_text_file(file_path, file_extension)
+        else:
+            raise ValueError(f"Unsupported file type: {file_extension}")
 
     def _is_similar_table_text(self, text1: str, text2: str, threshold: float = 0.8) -> bool:
         """두 표 텍스트가 유사한지 확인 (중복 제거용)"""
@@ -1308,36 +1303,55 @@ class DocumentProcessor:
             return False
     
     async def _extract_text_from_excel(self, file_path: str) -> str:
-        """Excel 파일에서 텍스트 추출"""
-        if not PANDAS_AVAILABLE:
-            raise Exception("pandas is required for Excel file processing but is not available")
-        
+        """Excel(xlsx/xls) 파일에서 텍스트 추출 (pandas 없이)"""
+        ext = os.path.splitext(file_path)[1].lower()
+        text = ""
+
         try:
-            # Excel 파일 읽기 (모든 시트)
-            excel_file = pd.ExcelFile(file_path)
-            text = ""
-            
-            for sheet_name in excel_file.sheet_names:
-                logger.info(f"Processing sheet: {sheet_name}")
-                df = pd.read_excel(file_path, sheet_name=sheet_name)
-                
-                # 시트 이름 추가
-                text += f"\n=== 시트: {sheet_name} ===\n"
-                
-                # 컬럼 헤더 추가
-                if not df.empty:
-                    text += "컬럼: " + ", ".join(str(col) for col in df.columns) + "\n\n"
-                    
-                    # 데이터 행들을 텍스트로 변환
-                    for index, row in df.iterrows():
-                        row_text = " | ".join(str(value) for value in row.values if pd.notna(value))
-                        if row_text.strip():  # 빈 행 제외
+            if ext == ".xlsx":
+                if not OPENPYXL_AVAILABLE:
+                    raise Exception("openpyxl이 설치되어야 .xlsx 파일을 처리할 수 있습니다.")
+                wb = load_workbook(file_path, data_only=True)
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    text += f"\n=== 시트: {sheet_name} ===\n"
+                    for row in ws.iter_rows(values_only=True):
+                        row_text = " | ".join(str(v) for v in row if v is not None)
+                        if row_text.strip():
                             text += row_text + "\n"
-                    text += "\n"
-            
+
+            elif ext == ".xls":
+                if not XLRD_AVAILABLE:
+                    raise Exception("xlrd가 설치되어야 .xls 파일을 처리할 수 있습니다.")
+                wb = xlrd.open_workbook(file_path)
+                for sheet in wb.sheets():
+                    text += f"\n=== 시트: {sheet.name} ===\n"
+                    for row_idx in range(sheet.nrows):
+                        row_values = sheet.row_values(row_idx)
+                        row_text = " | ".join(str(v) for v in row_values if v)
+                        if row_text.strip():
+                            text += row_text + "\n"
+            else:
+                raise Exception(f"지원하지 않는 Excel 형식입니다: {ext}")
+
             return self.clean_text(text)
         except Exception as e:
             logger.error(f"Error extracting text from Excel {file_path}: {e}")
+            raise
+
+    async def _extract_text_from_csv(self, file_path: str, encoding: str = "utf-8") -> str:
+        """CSV 파일에서 텍스트 추출 (pandas 없이)"""
+        text = ""
+        try:
+            async with aiofiles.open(file_path, mode="r", encoding=encoding) as f:
+                reader = csv.reader((await f.read()).splitlines())
+                for row in reader:
+                    row_text = " | ".join(row)
+                    if row_text.strip():
+                        text += row_text + "\n"
+            return self.clean_text(text)
+        except Exception as e:
+            logger.error(f"Error extracting text from CSV {file_path}: {e}")
             raise
     
     async def _extract_text_from_text_file(self, file_path: str, file_type: str) -> str:
