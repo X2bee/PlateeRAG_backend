@@ -44,6 +44,8 @@ class QdrantRetrievalTool(Node):
         {"id": "use_model_prompt", "name": "Use Model Prompt", "type": "BOOL", "value": True, "optional": True, "description": "임베딩 벡터 변환시 모델이 요구하는 프롬프트를 사용할지를 결정합니다."},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
         {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
+        {"id": "rerank", "name": "Enable Rerank", "type": "BOOL", "value": False, "required": False, "optional": True},
+        {"id": "rerank_top_k", "name": "Rerank Top K", "type": "INT", "value": 5, "required": False, "optional": True, "min": 1, "max": 100, "step": 1},
         {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "검색된 자료를 어떻게 사용할 것인지 지시합니다."},
 
     ]
@@ -60,7 +62,7 @@ class QdrantRetrievalTool(Node):
         )
         return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
-    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, use_model_prompt:bool = True, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
+    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, use_model_prompt: bool = True, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt, rerank: bool = False, rerank_top_k: int = 5):
         def create_vectordb_tool():
             @tool(tool_name, description=description)
             def vectordb_retrieval_tool(query: str) -> str:
@@ -73,7 +75,9 @@ class QdrantRetrievalTool(Node):
                         collection_name=collection_name,
                         query_text=query,
                         limit=top_k,
-                        score_threshold=score_threshold
+                        score_threshold=score_threshold,
+                        rerank=rerank,
+                        rerank_top_k=rerank_top_k
                     ))
 
                     results = search_result.get("results", [])

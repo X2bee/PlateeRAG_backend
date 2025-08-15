@@ -820,69 +820,126 @@ class RAGService:
             if not text.strip():
                 raise ValueError("No text content found in the document")
 
-            # 텍스트 청킹
+            # 텍스트 청킹과 메타데이터 생성 (document_processor에 해당 메서드가 없으면 폴백)
             logger.info(f"Chunking text with size {chunk_size} and overlap {chunk_overlap}")
-            chunks = self.document_processor.chunk_text(text, chunk_size, chunk_overlap)
-
-            # LLM 메타데이터 생성 (활성화된 경우)
-            chunk_metadatas = []
-            if use_llm_metadata and await self.metadata_generator.is_enabled():
-                logger.info(f"Generating LLM metadata for {len(chunks)} chunks")
-
-                # 기본 메타데이터 준비
-                base_metadatas = []
-                for i in range(len(chunks)):
-                    base_metadata = {
-                        "chunk_index": i,
-                        "total_chunks": len(chunks),
-                        "chunk_size": len(chunks[i])
-                    }
-                    if metadata:
-                        base_metadata.update(metadata)
-                    base_metadatas.append(base_metadata)
-
-                # LLM으로 배치 메타데이터 생성
-                chunk_metadatas = await self.metadata_generator.generate_batch_metadata(
-                    chunks, base_metadatas, max_concurrent=3
+            try:
+                chunks_with_metadata = self.document_processor.chunk_text_with_metadata(
+                    text, file_extension, chunk_size, chunk_overlap
                 )
+            except AttributeError:
+                # 서버 재시작 없이 코드가 변경되어 현재 인스턴스에 메서드가 없을 수 있음.
+                logger.warning("DocumentProcessor.chunk_text_with_metadata not found on current instance. Attempting to reinitialize DocumentProcessor and retry.")
+                reinitialized = False
+                try:
+                    # 모듈이 디스크에서 업데이트되었을 수 있으므로 런타임에서 모듈을 리로드한 뒤 인스턴스 생성
+                    import importlib
+                    import service.retrieval.document_processor as dp_mod
 
-            else:
-                # LLM 사용 안함 - 기본 메타데이터만 사용
-                logger.info("LLM metadata generation disabled or not available")
-                for i in range(len(chunks)):
-                    base_metadata = {
-                        "chunk_index": i,
-                        "total_chunks": len(chunks),
-                        "chunk_size": len(chunks[i])
-                    }
-                    if metadata:
-                        base_metadata.update(metadata)
-                    chunk_metadatas.append(base_metadata)
+                    importlib.reload(dp_mod)
+                    DocumentProcessorClass = getattr(dp_mod, 'DocumentProcessor', None)
 
-            #TODO 검증할 필요는 있음. 문서 요약 및 메타데이터 정보를 chunk에 더해서 embedding 하는 것으로 사용.
-            processed_chunks = []
-            for i, (chunk, chunk_metadata) in enumerate(zip(chunks, chunk_metadatas)):
-                summary = chunk_metadata.get("summary")
-                summary_info = f"문서 요약: {summary}" if summary and summary.strip() else ""
-                additional_info = {
-                    "keywords": chunk_metadata.get("keywords", []),
-                    "topics": chunk_metadata.get("topics", []),
-                    "entities": chunk_metadata.get("entities", []),
-                    "sentiment": chunk_metadata.get("sentiment", ""),
-                    "document_type": chunk_metadata.get("document_type", ""),
-                    "complexity_level": chunk_metadata.get("complexity_level", ""),
-                    "main_concepts": chunk_metadata.get("main_concepts", [])
-                }
+                    if DocumentProcessorClass is None:
+                        raise RuntimeError('DocumentProcessor class not found after reload')
 
-                uuid_pattern = r'_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                display_collection_name = re.sub(uuid_pattern, '', collection_name, flags=re.IGNORECASE)
-                processed_chunk = f"""이는 {display_collection_name}콜렉션에 존재하는 {(Path(file_path).name)} 파일의 내용입니다.
-{summary_info}
-{additional_info}
+                    collection_config = getattr(self.document_processor, 'collection_config', None)
+                    self.document_processor = DocumentProcessorClass(collection_config)
+                    logger.info("Reinitialized DocumentProcessor instance from reloaded module; retrying chunk_text_with_metadata")
+                    chunks_with_metadata = self.document_processor.chunk_text_with_metadata(
+                        text, file_extension, chunk_size, chunk_overlap
+                    )
+                    reinitialized = True
+                except Exception as e:
+                    logger.warning(f"Reinitialization failed or method still unavailable: {e}. Trying explicit file-load fallback.")
 
-{chunk}"""
-                processed_chunks.append(processed_chunk)
+                    # 시나리오: package와 top-level module명이 충돌하여 패키지 내부 모듈이 사용될 수 있음.
+                    # 이 경우 프로젝트의 최상위 document_processor.py 파일을 명시적 경로로 로드해 시도해본다.
+                    try:
+                        import importlib.util, sys
 
+                        # use top-level Path imported at module scope
+                        base_path = Path(__file__).resolve().parents[3]
+                        target_path = base_path / 'service' / 'retrieval' / 'document_processor.py'
+
+                        if target_path.exists():
+                            spec = importlib.util.spec_from_file_location("plateerag_document_processor_file", str(target_path))
+                            module = importlib.util.module_from_spec(spec)
+                            spec.loader.exec_module(module)
+                            DocumentProcessorClass = getattr(module, 'DocumentProcessor', None)
+                            if DocumentProcessorClass is not None:
+                                collection_config = getattr(self.document_processor, 'collection_config', None)
+                                self.document_processor = DocumentProcessorClass(collection_config)
+                                logger.info("Loaded DocumentProcessor class from file path and reinitialized instance; retrying chunk_text_with_metadata")
+                                chunks_with_metadata = self.document_processor.chunk_text_with_metadata(
+                                    text, file_extension, chunk_size, chunk_overlap
+                                )
+                                reinitialized = True
+                            else:
+                                logger.warning("DocumentProcessor not found in file-loaded module")
+                        else:
+                            logger.warning(f"Top-level document_processor.py not found at {target_path}")
+                    except Exception as e2:
+                        logger.warning(f"File-load fallback failed: {e2}. Falling back to chunk_text + metadata builder.")
+
+                if not reinitialized:
+                    chunks = self.document_processor.chunk_text(text, chunk_size, chunk_overlap)
+
+                    # build line starts using document_processor helper if available
+                    if hasattr(self.document_processor, '_build_line_starts'):
+                        line_starts = self.document_processor._build_line_starts(text)
+                        pos_to_line = getattr(self.document_processor, '_pos_to_line')
+                        find_pos = getattr(self.document_processor, '_find_chunk_position')
+                        get_page = getattr(self.document_processor, '_get_page_number_for_chunk', None)
+                    else:
+                        # 최소한의 대체 구현
+                        line_starts = [0]
+                        def pos_to_line(p, ls=line_starts):
+                            return 1
+                        def find_pos(chunk, full_text, sp=0):
+                            return full_text.find(chunk, sp)
+                        find_pos = find_pos
+                        get_page = None
+
+                    chunks_with_metadata = []
+                    search_pos = 0
+                    last_line_end = 0
+                    for i, chunk in enumerate(chunks):
+                        chunk_pos = find_pos(chunk, text, search_pos)
+                        if chunk_pos != -1:
+                            start_pos = chunk_pos
+                            end_pos = min(chunk_pos + len(chunk) - 1, len(text) - 1)
+                            try:
+                                line_start = pos_to_line(start_pos, line_starts)
+                                line_end = pos_to_line(end_pos, line_starts)
+                            except Exception:
+                                # fallback simple estimate
+                                line_start = text[:start_pos].count('\n') + 1
+                                line_end = text[:end_pos].count('\n') + 1
+                            search_pos = chunk_pos + len(chunk)
+                            last_line_end = line_end
+                        else:
+                            lines_in_chunk = chunk.count('\n') or 1
+                            line_start = last_line_end + 1
+                            line_end = line_start + lines_in_chunk - 1
+                            last_line_end = line_end
+
+                        if get_page is not None:
+                            try:
+                                page_number = get_page(chunk, chunk_pos, [])
+                            except Exception:
+                                page_number = 1
+                        else:
+                            page_number = 1
+
+                        chunks_with_metadata.append({
+                            "text": chunk,
+                            "page_number": page_number,
+                            "line_start": line_start,
+                            "line_end": line_end,
+                            "chunk_index": i
+                        })
+            
+            # 청크 텍스트만 추출하여 임베딩 생성
+            chunks = [chunk_data["text"] for chunk_data in chunks_with_metadata]
             logger.info(f"Generating embeddings for {len(chunks)} chunks")
 
             if processed_chunks and len(processed_chunks) == len(chunks):
@@ -897,18 +954,31 @@ class RAGService:
             points = []
             document_id = str(uuid.uuid4())
             file_name = Path(file_path).name
+            # 저장된 파일을 컬렉션 기준으로 식별할 수 있게 경로 형태로 보관
+            stored_file_path = f"{collection_name}/{file_name}"
 
-            for i, (chunk, embedding, chunk_metadata) in enumerate(zip(chunks, embeddings, chunk_metadatas)):
-                # 최종 메타데이터 구성
-                final_metadata = {
+            for i, (chunk_data, embedding) in enumerate(zip(chunks_with_metadata, embeddings)):
+                # document_processor에서 계산된 메타데이터 사용
+                chunk = chunk_data["text"]
+                page_number = chunk_data["page_number"]
+                line_start = chunk_data["line_start"]
+                line_end = chunk_data["line_end"]
+
+                chunk_metadata = {
                     "document_id": document_id,
                     "chunk_index": i,
                     "chunk_text": chunk,
                     "file_name": file_name,
+                    "file_path": stored_file_path,
                     "file_type": file_extension,
                     "processed_at": datetime.now().isoformat(),
                     "chunk_size": len(chunk),
-                    "total_chunks": len(chunks)
+                    "total_chunks": len(chunks),
+                    "line_start": line_start,
+                    "line_end": line_end,
+                    "page_number": page_number,
+                    "global_start": chunk_data.get("global_start", -1),
+                    "global_end": chunk_data.get("global_end", -1)
                 }
 
                 # LLM 생성 메타데이터 병합
@@ -1061,8 +1131,9 @@ class RAGService:
             raise HTTPException(status_code=500, detail=f"Failed to process document: {e}")
 
     async def search_documents(self, collection_name: str, query_text: str,
-                                limit: int = 5, score_threshold: float = 0.7,
-                                filter_criteria: Dict[str, Any] = None) -> Dict[str, Any]:
+                             limit: int = 5, score_threshold: float = 0.7,
+                             filter_criteria: Dict[str, Any] = None,
+                             rerank: bool = False, rerank_top_k: int = 20) -> Dict[str, Any]:
         """문서 검색
 
         Args:
@@ -1142,7 +1213,7 @@ class RAGService:
             search_results = self.vector_manager.client.search(
                 collection_name=collection_name,
                 query_vector=query_embedding,
-                limit=limit,
+                limit=max(limit, rerank_top_k) if rerank else limit,
                 score_threshold=score_threshold,
                 query_filter=search_filter
             )
@@ -1150,18 +1221,88 @@ class RAGService:
             # 결과 포맷팅
             results = []
             for hit in search_results:
+                payload = hit.payload or {}
                 result = {
                     "id": hit.id,
                     "score": hit.score,
-                    "document_id": hit.payload.get("document_id"),
-                    "chunk_index": hit.payload.get("chunk_index"),
-                    "chunk_text": hit.payload.get("chunk_text"),
-                    "file_name": hit.payload.get("file_name"),
-                    "file_type": hit.payload.get("file_type"),
-                    "metadata": {k: v for k, v in hit.payload.items()
-                                if k not in ["chunk_text", "document_id", "chunk_index", "file_name", "file_type"]}
+                    "document_id": payload.get("document_id"),
+                    "chunk_index": payload.get("chunk_index"),
+                    "chunk_text": payload.get("chunk_text"),
+                    "file_name": payload.get("file_name"),
+                    "file_path": payload.get("file_path"),
+                    "file_type": payload.get("file_type"),
+                    "line_start": payload.get("line_start"),
+                    "line_end": payload.get("line_end"),
+                    "page_number": payload.get("page_number"),
+                    "metadata": {k: v for k, v in payload.items()
+                               if k not in ["chunk_text", "document_id", "chunk_index", "file_name", "file_type", "file_path", "line_start", "line_end", "page_number"]}
                 }
                 results.append(result)
+
+            # Optional reranking using embeddings (if requested and embedding client available)
+            if rerank and results:
+                # normalize rerank flag if passed as string
+                try:
+                    if isinstance(rerank, str):
+                        rerank = rerank.lower() in ('true', '1', 'yes')
+                except Exception:
+                    pass
+
+                if rerank:
+                    try:
+                        # Cross-encoder 기반 재순위
+                        from service.embedding.cross_encoder_service import get_cross_encoder_reranker
+                        
+                        # take top-k candidates to rerank
+                        top_candidates = results[:rerank_top_k]
+                        candidate_texts = [r.get("chunk_text") or "" for r in top_candidates]
+
+                        logger.info(f"Starting cross-encoder rerank for {len(candidate_texts)} candidates (top_k={rerank_top_k})")
+
+                        # Cross-encoder로 재순위 (타임아웃 적용)
+                        try:
+                            import asyncio as _asyncio
+                            
+                            def run_cross_encoder():
+                                cross_encoder = get_cross_encoder_reranker()
+                                return cross_encoder.rerank(query_text, candidate_texts, top_k=len(candidate_texts))
+                            
+                            # 타임아웃 설정
+                            try:
+                                RERANK_TIMEOUT = getattr(self.config, 'RERANK_TIMEOUT', None)
+                                timeout_sec = int(RERANK_TIMEOUT.value) if RERANK_TIMEOUT and hasattr(RERANK_TIMEOUT, 'value') else 10
+                            except Exception:
+                                timeout_sec = 10
+                            
+                            # Cross-encoder 실행 (동기 → 비동기 래핑)
+                            rerank_results = await _asyncio.wait_for(
+                                _asyncio.to_thread(run_cross_encoder), 
+                                timeout=timeout_sec
+                            )
+                            
+                            # 재순위 결과 적용
+                            if rerank_results:
+                                # rerank_results는 [(index, score), ...] 형태
+                                reranked_candidates = []
+                                for idx, rerank_score in rerank_results:
+                                    candidate = top_candidates[idx].copy()
+                                    candidate["rerank_score"] = rerank_score
+                                    reranked_candidates.append(candidate)
+                                
+                                # 재순위된 결과와 나머지 결합
+                                results = reranked_candidates + results[rerank_top_k:]
+                                results = results[:limit]
+                                
+                                logger.info(f"Cross-encoder rerank completed. Top rerank score: {rerank_results[0][1]:.4f}")
+                            else:
+                                logger.warning("Cross-encoder returned empty results")
+                                
+                        except Exception as rerank_e:
+                            logger.warning(f"Cross-encoder rerank failed or timed out: {rerank_e}")
+                            # 실패 시 원본 결과 유지
+                            
+                    except Exception as e:
+                        logger.warning(f"Reranking setup failed: {e}")
 
             logger.info(f"Document search completed: {len(results)} results found")
 
@@ -1240,6 +1381,7 @@ class RAGService:
                     documents[document_id] = {
                         "document_id": document_id,
                         "file_name": payload.get("file_name", "unknown"),
+                        "file_path": payload.get("file_path", payload.get("file_name", "unknown")),
                         "file_type": payload.get("file_type", "unknown"),
                         "processed_at": payload.get("processed_at"),
                         "total_chunks": payload.get("total_chunks", 0),
@@ -1251,8 +1393,8 @@ class RAGService:
                     # 사용자 정의 메타데이터 추출 (시스템 필드 제외)
                     system_fields = {
                         "document_id", "chunk_index", "chunk_text", "file_name",
-                        "file_type", "processed_at", "chunk_size", "total_chunks",
-                        "llm_metadata_generated"
+                        "file_path", "file_type", "processed_at", "chunk_size", "total_chunks",
+                        "line_start", "line_end", "page_number"
                     }
                     for key, value in payload.items():
                         if key not in system_fields:
@@ -1263,6 +1405,9 @@ class RAGService:
                     "chunk_id": str(point.id),
                     "chunk_index": payload.get("chunk_index", 0),
                     "chunk_size": payload.get("chunk_size", 0),
+                    "line_start": payload.get("line_start"),
+                    "line_end": payload.get("line_end"),
+                    "page_number": payload.get("page_number"),
                     "chunk_text_preview": payload.get("chunk_text", "")[:100] + "..." if len(payload.get("chunk_text", "")) > 100 else payload.get("chunk_text", "")
                 }
                 documents[document_id]["chunks"].append(chunk_info)
@@ -1339,6 +1484,7 @@ class RAGService:
             document_info = {
                 "document_id": document_id,
                 "file_name": payload.get("file_name", "unknown"),
+                "file_path": payload.get("file_path", payload.get("file_name", "unknown")),
                 "file_type": payload.get("file_type", "unknown"),
                 "processed_at": payload.get("processed_at"),
                 "total_chunks": len(points),
@@ -1349,8 +1495,8 @@ class RAGService:
             # 사용자 정의 메타데이터 추출
             system_fields = {
                 "document_id", "chunk_index", "chunk_text", "file_name",
-                "file_type", "processed_at", "chunk_size", "total_chunks",
-                "llm_metadata_generated"
+                "file_path", "file_type", "processed_at", "chunk_size", "total_chunks",
+                "line_start", "line_end", "page_number"
             }
             for key, value in payload.items():
                 if key not in system_fields:
@@ -1364,6 +1510,9 @@ class RAGService:
                     "chunk_id": str(point.id),
                     "chunk_index": chunk_payload.get("chunk_index", 0),
                     "chunk_size": chunk_payload.get("chunk_size", 0),
+                    "line_start": chunk_payload.get("line_start"),
+                    "line_end": chunk_payload.get("line_end"),
+                    "page_number": chunk_payload.get("page_number"),
                     "chunk_text": chunk_payload.get("chunk_text", "")
                 }
                 chunks.append(chunk_info)
@@ -1610,3 +1759,256 @@ class RAGService:
                     "metadata_generator_initialized": bool(self.metadata_generator)
                 }
             }
+
+    # DEPRECATED: 이 메서드는 더 이상 사용되지 않습니다. document_processor.chunk_text_with_metadata를 사용하세요.
+    def _extract_page_mapping(self, text: str, file_extension: str) -> List[Dict[str, Any]]:
+        """텍스트에서 페이지 정보 추출
+        
+        Args:
+            text: 원본 텍스트
+            file_extension: 파일 확장자
+            
+        Returns:
+            페이지 정보 리스트 [{"page_num": 1, "start_pos": 0, "end_pos": 100}, ...]
+        """
+        try:
+            page_mapping = []
+            
+            # PDF, PPT, DOCX에서 페이지 구분자 패턴 찾기
+            if file_extension in ['pdf', 'ppt', 'pptx', 'docx', 'doc']:
+                import re
+                
+                # 페이지 구분자 패턴들
+                patterns = [
+                    r'=== 페이지 (\d+) ===',  # PDF PyPDF2 fallback, DOCX 기본 텍스트 추출
+                    r'=== 페이지 (\d+) \(OCR\) ===',  # PDF OCR
+                    r'=== 슬라이드 (\d+) ===',  # PPT 기본
+                    r'=== 슬라이드 (\d+) \(OCR\) ===',  # PPT OCR
+                ]
+                
+                found_pages = False
+                for pattern in patterns:
+                    matches = list(re.finditer(pattern, text))
+                    if matches:
+                        logger.info(f"Found {len(matches)} page markers with pattern: {pattern}")
+                        
+                        for i, match in enumerate(matches):
+                            page_num = int(match.group(1))
+                            start_pos = match.end()  # 페이지 제목 다음부터
+                            
+                            # 다음 페이지의 시작 위치 또는 텍스트 끝
+                            if i + 1 < len(matches):
+                                end_pos = matches[i + 1].start()
+                            else:
+                                end_pos = len(text)
+                            
+                            page_mapping.append({
+                                "page_num": page_num,
+                                "start_pos": start_pos,
+                                "end_pos": end_pos
+                            })
+                        
+                        # 페이지 번호 순으로 정렬
+                        page_mapping.sort(key=lambda x: x["page_num"])
+                        found_pages = True
+                        break
+                
+                if not found_pages:
+                    # DOCX에서 OCR을 통해 페이지가 구분되었는지 확인
+                    if file_extension in ['docx', 'doc']:
+                        ocr_page_pattern = r'\n=== 페이지 (\d+) \(OCR\) ===\n'
+                        ocr_matches = list(re.finditer(ocr_page_pattern, text))
+                        if ocr_matches:
+                            logger.info(f"Found {len(ocr_matches)} DOCX OCR page markers")
+                            for i, match in enumerate(ocr_matches):
+                                page_num = int(match.group(1))
+                                start_pos = match.end()
+                                
+                                if i + 1 < len(ocr_matches):
+                                    end_pos = ocr_matches[i + 1].start()
+                                else:
+                                    end_pos = len(text)
+                                
+                                page_mapping.append({
+                                    "page_num": page_num,
+                                    "start_pos": start_pos,
+                                    "end_pos": end_pos
+                                })
+                            page_mapping.sort(key=lambda x: x["page_num"])
+                            found_pages = True
+                        else:
+                            # OCR 페이지 구분자도 없으면 텍스트 길이 기준으로 가상 페이지 생성
+                            # DOCX의 경우 대략 1500자당 1페이지로 추정
+                            chars_per_page = 1500
+                            text_length = len(text)
+                            
+                            if text_length > chars_per_page:
+                                estimated_pages = (text_length + chars_per_page - 1) // chars_per_page
+                                logger.info(f"Creating {estimated_pages} virtual pages for DOCX based on text length ({text_length} chars)")
+                                
+                                for page_num in range(1, estimated_pages + 1):
+                                    start_pos = (page_num - 1) * chars_per_page
+                                    end_pos = min(page_num * chars_per_page, text_length)
+                                    
+                                    page_mapping.append({
+                                        "page_num": page_num,
+                                        "start_pos": start_pos,
+                                        "end_pos": end_pos
+                                    })
+                                found_pages = True
+                    
+                    if not found_pages:
+                        logger.info("No page markers found, treating as single page document")
+                        page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
+            
+            elif file_extension in ['xlsx', 'xls']:
+                # Excel: 시트별로 페이지 구분
+                import re
+                sheet_pattern = r'\n=== 시트: ([^=]+) ===\n'
+                matches = list(re.finditer(sheet_pattern, text))
+                
+                if matches:
+                    logger.info(f"Found {len(matches)} Excel sheets")
+                    for i, match in enumerate(matches):
+                        sheet_name = match.group(1)
+                        page_num = i + 1
+                        start_pos = match.end()
+                        
+                        # 다음 시트의 시작 위치 또는 텍스트 끝
+                        if i + 1 < len(matches):
+                            end_pos = matches[i + 1].start()
+                        else:
+                            end_pos = len(text)
+                        
+                        page_mapping.append({
+                            "page_num": page_num,
+                            "start_pos": start_pos,
+                            "end_pos": end_pos,
+                            "sheet_name": sheet_name
+                        })
+                else:
+                    page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
+            
+            else:
+                # 텍스트 파일이나 기타 형식: 줄 수 기준으로 가상 페이지 생성 (1000줄당 1페이지)
+                lines = text.split('\n')
+                lines_per_page = 1000
+                total_lines = len(lines)
+                
+                if total_lines <= lines_per_page:
+                    page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
+                else:
+                    current_pos = 0
+                    page_num = 1
+                    
+                    for i in range(0, total_lines, lines_per_page):
+                        start_line = i
+                        end_line = min(i + lines_per_page, total_lines)
+                        
+                        # 라인 범위를 텍스트 위치로 변환
+                        if start_line == 0:
+                            start_pos = 0
+                        else:
+                            start_pos = len('\n'.join(lines[:start_line])) + 1  # +1 for newline
+                        
+                        if end_line >= total_lines:
+                            end_pos = len(text)
+                        else:
+                            end_pos = len('\n'.join(lines[:end_line]))
+                        
+                        page_mapping.append({
+                            "page_num": page_num,
+                            "start_pos": start_pos,
+                            "end_pos": end_pos,
+                            "start_line": start_line + 1,
+                            "end_line": end_line
+                        })
+                        page_num += 1
+                    
+                    logger.info(f"Created {len(page_mapping)} virtual pages for text file ({total_lines} lines)")
+            
+            return page_mapping
+            
+        except Exception as e:
+            logger.warning(f"Error extracting page mapping: {e}")
+            return [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
+
+    # DEPRECATED: 이 메서드는 더 이상 사용되지 않습니다. document_processor.chunk_text_with_metadata를 사용하세요.
+    def _get_page_number_for_chunk(self, chunk: str, full_text: str, chunk_pos: int, page_mapping: List[Dict[str, Any]]) -> int:
+        """청크의 페이지 번호 계산
+        
+        Args:
+            chunk: 청크 텍스트
+            full_text: 전체 텍스트
+            chunk_pos: 청크의 전체 텍스트 내 위치 (-1이면 찾기 실패)
+            page_mapping: 페이지 매핑 정보
+            
+        Returns:
+            페이지 번호
+        """
+        try:
+            if not page_mapping:
+                return 1
+            
+            # 단일 페이지인 경우
+            if len(page_mapping) == 1:
+                return 1
+            
+            if chunk_pos == -1:
+                # 위치를 찾지 못한 경우 청크 내용으로 추정
+                # 여러 가지 방법으로 위치 찾기 시도
+                search_attempts = [
+                    chunk[:100] if len(chunk) > 100 else chunk,  # 첫 100자
+                    chunk[:50] if len(chunk) > 50 else chunk,    # 첫 50자
+                    chunk.split('\n')[0] if '\n' in chunk else chunk[:30],  # 첫 줄 또는 첫 30자
+                ]
+                
+                for attempt in search_attempts:
+                    if attempt.strip():
+                        chunk_pos = full_text.find(attempt.strip())
+                        if chunk_pos != -1:
+                            break
+                
+                if chunk_pos == -1:
+                    logger.warning("Could not determine chunk position, defaulting to page 1")
+                    return 1
+            
+            # 청크의 시작, 중간, 끝 위치를 모두 고려
+            chunk_start = chunk_pos
+            chunk_middle = chunk_pos + len(chunk) // 2
+            chunk_end = chunk_pos + len(chunk)
+            
+            # 세 위치 중 어느 하나라도 페이지 범위에 속하면 해당 페이지로 결정
+            for page_info in page_mapping:
+                start_pos = page_info["start_pos"]
+                end_pos = page_info["end_pos"]
+                
+                # 청크가 페이지 범위와 겹치는지 확인
+                if (start_pos <= chunk_start < end_pos or 
+                    start_pos <= chunk_middle < end_pos or 
+                    start_pos <= chunk_end <= end_pos or
+                    (chunk_start <= start_pos and chunk_end >= end_pos)):  # 청크가 페이지를 완전히 포함하는 경우
+                    return page_info["page_num"]
+            
+            # 위치 기반으로 찾지 못한 경우, 가장 가까운 페이지 찾기
+            min_distance = float('inf')
+            closest_page = 1
+            
+            for page_info in page_mapping:
+                start_pos = page_info["start_pos"]
+                end_pos = page_info["end_pos"]
+                
+                # 청크 중간점과 페이지 중간점의 거리 계산
+                page_middle = (start_pos + end_pos) // 2
+                distance = abs(chunk_middle - page_middle)
+                
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_page = page_info["page_num"]
+            
+            logger.debug(f"Assigned chunk at position {chunk_pos} to closest page {closest_page}")
+            return closest_page
+            
+        except Exception as e:
+            logger.warning(f"Error calculating page number for chunk: {e}")
+            return 1
