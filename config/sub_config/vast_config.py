@@ -14,15 +14,7 @@ from config.base_config import (
 )
 
 class VastConfig(BaseConfig):
-    """Vast 관련 설정을 한곳에서 관리"""
-
     def initialize(self) -> Dict[str, PersistentConfig]:
-        """
-        BaseConfig.initialize() 를 구현.
-        create_persistent_config() 는
-          ① env ➞ ② config_path ➞ ③ default_value ➞ ④ file_path
-        순으로 값을 결정(추정)합니다.
-        """
         # ‣ API / TOKEN 류 ────────────────────────────────
         self.VAST_API_KEY = self.create_persistent_config(
             env_name="VAST_API_KEY",
@@ -75,7 +67,7 @@ class VastConfig(BaseConfig):
         self.MIN_DISK_GB = self.create_persistent_config(
             env_name="VAST_MIN_DISK",
             config_path="vast.resource.min_disk",
-            default_value="20",
+            default_value="200",
             type_converter=convert_to_int,
         )
         # ‣ 검색 쿼리 기본값 ──────────────────────────────
@@ -122,9 +114,15 @@ class VastConfig(BaseConfig):
         )
 
         # ‣ vLLM 모델 및 실행 설정 ─────────────────────────
-        self.VLLM_MODEL_NAME = self.create_persistent_config(
-            env_name="VLLM_MODEL_NAME",
-            config_path="vast.vllm.model_name",
+        # self.VLLM_MODEL_NAME = self.create_persistent_config(
+        #     env_name="VLLM_MODEL_NAME",
+        #     config_path="vast.vllm.model_name",
+        #     default_value="Qwen/Qwen3-1.7B",
+        #     type_converter=convert_to_str,
+        # )
+        self.VLLM_SERVE_MODEL_NAME = self.create_persistent_config(
+            env_name="VLLM_SERVE_MODEL_NAME",
+            config_path="vast.vllm.serve_model_name",
             default_value="Qwen/Qwen3-1.7B",
             type_converter=convert_to_str,
         )

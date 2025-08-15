@@ -22,6 +22,8 @@ enhance_prompt = """You are an AI assistant that must strictly follow these guid
 
 Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
 
+embedding_model_prompt = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+
 class QdrantRetrievalTool(Node):
     categoryId = "xgen"
     functionId = "document_loaders"
@@ -37,6 +39,7 @@ class QdrantRetrievalTool(Node):
 
     parameters = [
         {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
+        {"id": "use_model_prompt", "name": "Use Model Prompt", "type": "BOOL", "value": True, "optional": True, "description": "임베딩 벡터 변환시 모델이 요구하는 프롬프트를 사용할지를 결정합니다."},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
         {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
         {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "RAG 컨텍스트를 사용하여 응답을 향상시키기 위한 프롬프트입니다."},
@@ -55,7 +58,7 @@ class QdrantRetrievalTool(Node):
         )
         return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
-    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
+    def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt, use_model_prompt: bool = True):
         rag_service = AppServiceManager.get_rag_service()
 
         try:
@@ -81,7 +84,9 @@ class QdrantRetrievalTool(Node):
                     "collection_name": collection_name,
                     "top_k": top_k,
                     "score_threshold": score_threshold,
-                    "enhance_prompt": enhance_prompt
+                    "enhance_prompt": enhance_prompt,
+                    "use_model_prompt": use_model_prompt,
+                    "embedding_model_prompt": embedding_model_prompt,
                 },
                 "status": "ready"
             }

@@ -81,7 +81,7 @@ class VastService:
 
         # 기본 템플릿들
         templates["default_vllm"] = InstanceTemplate("default_vllm", {
-            "vllm_model_name": "Qwen/Qwen2.5-Coder-32B-Instruct",
+            "vllm_serve_model_name": "Qwen/Qwen2.5-Coder-32B-Instruct",
             "vllm_max_model_len": 4096,
             "vllm_gpu_memory_utilization": 0.9,
             "vllm_pipeline_parallel_size": 1,
@@ -89,7 +89,7 @@ class VastService:
         })
 
         templates["high_performance"] = InstanceTemplate("high_performance", {
-            "vllm_model_name": "Qwen/Qwen2.5-Coder-32B-Instruct",
+            "vllm_serve_model_name": "Qwen/Qwen2.5-Coder-32B-Instruct",
             "vllm_max_model_len": 8192,
             "vllm_gpu_memory_utilization": 0.95,
             "vllm_pipeline_parallel_size": 2,
@@ -99,7 +99,7 @@ class VastService:
         })
 
         templates["budget"] = InstanceTemplate("budget", {
-            "vllm_model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
+            "vllm_serve_model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
             "vllm_max_model_len": 2048,
             "vllm_gpu_memory_utilization": 0.8,
             "min_gpu_ram": 8,
@@ -416,7 +416,7 @@ class VastService:
             "cpu_cores": create_request.offer_info.get("cpu_cores"),
             "ram": create_request.offer_info.get("ram"),
             "cuda_max_good": create_request.offer_info.get("cuda_max_good", 0.0),
-            "model_name": create_request.vllm_config.vllm_model_name,
+            "model_name": create_request.vllm_config.vllm_serve_model_name,
             "max_model_length": create_request.vllm_config.vllm_max_model_len,
         }
 

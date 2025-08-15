@@ -11,9 +11,9 @@ from datetime import datetime
 import glob
 from pathlib import Path
 from config.persistent_config import (
-    get_all_persistent_configs, 
-    refresh_all_configs, 
-    save_all_configs, 
+    get_all_persistent_configs,
+    refresh_all_configs,
+    save_all_configs,
     export_config_summary,
     PersistentConfig
 )
@@ -77,7 +77,7 @@ async def get_persistent_config_by_name(env_name: str):
                     "is_saved": config.config_value is not None,
                     "type": type(config.value).__name__
                 }
-        
+
         raise HTTPException(status_code=404, detail=f"Config '{env_name}' not found")
     except HTTPException:
         raise
@@ -93,7 +93,7 @@ async def update_persistent_config(env_name: str, request: ConfigUpdateRequest):
         for config in configs:
             if config.env_name == env_name:
                 old_value = config.value
-                
+
                 # 값 타입 변환
                 try:
                     if isinstance(config.env_value, bool):
@@ -110,30 +110,30 @@ async def update_persistent_config(env_name: str, request: ConfigUpdateRequest):
                         config.value = str(request.value)
                 except (ValueError, TypeError) as e:
                     raise HTTPException(status_code=400, detail=f"Invalid value type: {e}")
-                
+
                 if request.save_to_db:
                     config.save()
-                
+
                 # OpenAI API 키가 업데이트된 경우 자동으로 임베딩 제공자 전환 시도
                 if env_name == "OPENAI_API_KEY" and request.value and str(request.value).strip():
                     try:
                         from fastapi import Request
                         import asyncio
-                        
+
                         # app.state에서 config 가져오기 (비동기 처리를 위해 별도 함수로 분리)
                         asyncio.create_task(_auto_switch_embedding_provider_after_delay())
-                        
+
                         logging.info("Scheduled auto-switch for embedding provider after OpenAI API key update")
                     except Exception as e:
                         logging.warning(f"Failed to schedule auto-switch for embedding provider: {e}")
-                
+
                 return {
                     "message": f"Config '{env_name}' updated successfully",
                     "old_value": old_value,
                     "new_value": config.value,
                     "saved_to_db": request.save_to_db
                 }
-        
+
         raise HTTPException(status_code=404, detail=f"Config '{env_name}' not found")
     except HTTPException:
         raise
@@ -172,38 +172,38 @@ async def _auto_switch_embedding_provider_after_delay():
     try:
         # 1초 대기 (설정이 완전히 저장될 때까지)
         await asyncio.sleep(1)
-        
+
         # app.state에서 config 가져오기
         from fastapi import applications
         import uvicorn
-        
+
         # 현재 실행 중인 app 인스턴스 찾기 (간접적 방법)
         # 직접적인 방법이 없으므로 전역 설정에서 가져오기
         try:
             configs = get_all_persistent_configs()
-            
+
             # vectordb config 찾기
             vectordb_configs = [c for c in configs if c.config_path.startswith("vectordb.")]
             if vectordb_configs:
                 # 새로 고침해서 최신 설정 가져오기
                 refresh_all_configs()
-                
+
                 # VectorDB 설정 재구성
                 from config.config_composer import ConfigComposer
                 composer = ConfigComposer()
-                
+
                 if "vectordb" in composer.config_categories and "openai" in composer.config_categories:
                     composer.config_categories["vectordb"].set_openai_config(composer.config_categories["openai"])
                     switched = composer.config_categories["vectordb"].check_and_switch_to_best_provider()
-                    
+
                     if switched:
                         logging.info("Successfully auto-switched embedding provider after OpenAI API key update")
                     else:
                         logging.info("No embedding provider switch needed after OpenAI API key update")
-                        
+
         except Exception as e:
             logging.warning(f"Error during auto-switch process: {e}")
-            
+
     except Exception as e:
         logging.error(f"Failed to auto-switch embedding provider: {e}")
 
@@ -212,17 +212,17 @@ async def get_llm_status():
     """LLM 제공자 상태 정보 반환"""
     try:
         configs = get_all_persistent_configs()
-        
+
         # 현재 기본 제공자 가져오기
         current_provider = "openai"  # 기본값
         for config in configs:
             if config.env_name == "DEFAULT_LLM_PROVIDER":
                 current_provider = config.value
                 break
-        
+
         # 각 제공자별 설정 상태 확인
         providers_status = {}
-        
+
         # OpenAI 상태 확인
         openai_config = {}
         for config in configs:
@@ -232,7 +232,7 @@ async def get_llm_status():
                 openai_config['base_url'] = config.value
             elif config.env_name == "OPENAI_MODEL_DEFAULT":
                 openai_config['model'] = config.value
-        
+
         llm_service = LLMService()
 
         openai_validation = llm_service.validate_provider_config("openai", openai_config)
@@ -241,7 +241,7 @@ async def get_llm_status():
             "available": openai_validation["valid"],
             "error": openai_validation.get("error")
         }
-        
+
         # vLLM 상태 확인
         vllm_config = {}
         for config in configs:
@@ -251,14 +251,14 @@ async def get_llm_status():
                 vllm_config['api_key'] = config.value
             elif config.env_name == "VLLM_MODEL_NAME":
                 vllm_config['model_name'] = config.value
-        
+
         vllm_validation = llm_service.validate_provider_config("vllm", vllm_config)
         providers_status["vllm"] = {
             "configured": vllm_validation["valid"],
             "available": vllm_validation["valid"],
             "error": vllm_validation.get("error")
         }
-        
+
         # SGL 상태 확인
         sgl_config = {}
         for config in configs:
@@ -268,7 +268,7 @@ async def get_llm_status():
                 sgl_config['api_key'] = config.value
             elif config.env_name == "SGL_MODEL_NAME":
                 sgl_config['model_name'] = config.value
-        
+
         sgl_validation = llm_service.validate_provider_config("sgl", sgl_config)
         providers_status["sgl"] = {
             "configured": sgl_validation["valid"],
@@ -276,16 +276,16 @@ async def get_llm_status():
             "error": sgl_validation.get("error", sgl_validation.get("errors")),
             "warnings": sgl_validation.get("warnings")
         }
-        
+
         # 사용 가능한 제공자 목록
         available_providers = [provider for provider, status in providers_status.items() if status["available"]]
-        
+
         return {
             "current_provider": current_provider,
             "available_providers": available_providers,
             "providers": providers_status
         }
-        
+
     except Exception as e:
         logging.error(f"Error getting LLM status: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -297,10 +297,10 @@ async def switch_llm_provider(request: dict):
         provider = request.get("provider")
         if not provider:
             raise HTTPException(status_code=400, detail="Provider is required")
-        
+
         if provider not in ["openai", "vllm", "sgl"]:
             raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai', 'vllm', or 'sgl'")
-        
+
         # DEFAULT_LLM_PROVIDER 설정 업데이트
         configs = get_all_persistent_configs()
         for config in configs:
@@ -308,17 +308,17 @@ async def switch_llm_provider(request: dict):
                 old_value = config.value
                 config.value = provider
                 config.save()
-                
+
                 return {
                     "status": "success",
                     "message": f"Default LLM provider switched to {provider}",
                     "old_provider": old_value,
                     "new_provider": provider
                 }
-        
+
         # DEFAULT_LLM_PROVIDER 설정이 없는 경우
         raise HTTPException(status_code=404, detail="DEFAULT_LLM_PROVIDER config not found")
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -330,30 +330,30 @@ async def auto_switch_llm_provider():
     """사용 가능한 LLM 제공자로 자동 전환"""
     try:
         configs = get_all_persistent_configs()
-        
+
         # 각 제공자별 사용 가능 여부 확인
         available_providers = []
-        
+
         # OpenAI 확인
         openai_config = {}
         for config in configs:
             if config.env_name == "OPENAI_API_KEY":
                 openai_config['api_key'] = config.value
-        
+
         llm_service = LLMService()
 
         if llm_service.validate_provider_config("openai", openai_config)["valid"]:
             available_providers.append("openai")
-        
+
         # vLLM 확인
         vllm_config = {}
         for config in configs:
             if config.env_name == "VLLM_API_BASE_URL":
                 vllm_config['base_url'] = config.value
-        
+
         if llm_service.validate_provider_config("vllm", vllm_config)["valid"]:
             available_providers.append("vllm")
-        
+
         # SGL 확인
         sgl_config = {}
         for config in configs:
@@ -361,23 +361,23 @@ async def auto_switch_llm_provider():
                 sgl_config['base_url'] = config.value
             elif config.env_name == "SGL_MODEL_NAME":
                 sgl_config['model_name'] = config.value
-        
+
         if llm_service.validate_provider_config("sgl", sgl_config)["valid"]:
             available_providers.append("sgl")
-        
+
         if not available_providers:
             raise HTTPException(status_code=400, detail="No LLM providers are available")
-        
+
         # 첫 번째 사용 가능한 제공자로 설정
         selected_provider = available_providers[0]
-        
+
         # DEFAULT_LLM_PROVIDER 업데이트
         for config in configs:
             if config.env_name == "DEFAULT_LLM_PROVIDER":
                 old_value = config.value
                 config.value = selected_provider
                 config.save()
-                
+
                 return {
                     "status": "success",
                     "message": f"Auto-selected provider: {selected_provider}",
@@ -385,9 +385,9 @@ async def auto_switch_llm_provider():
                     "new_provider": selected_provider,
                     "available_providers": available_providers
                 }
-        
+
         raise HTTPException(status_code=404, detail="DEFAULT_LLM_PROVIDER config not found")
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -400,12 +400,12 @@ async def get_llm_models(provider: str):
     try:
         if provider not in ["openai", "vllm", "sgl"]:
             raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai', 'vllm', or 'sgl'")
-        
+
         configs = get_all_persistent_configs()
         config_dict = {config.env_name: config.value for config in configs}
-        
+
         llm_service = LLMService()
-        
+
         if provider == "sgl":
             config_data = {
                 'base_url': config_dict.get('SGL_API_BASE_URL'),
@@ -430,10 +430,10 @@ async def get_llm_models(provider: str):
                 "count": 4,
                 "note": "OpenAI models list is predefined"
             }
-        
+
         result = await llm_service.get_provider_models(provider, config_data)
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -448,7 +448,7 @@ async def test_connection(category: str):
         configs = get_all_persistent_configs()
         config_dict = {config.env_name: config.value for config in configs}
         llm_service = LLMService()
-        
+
         if category == "openai":
             config_data = {
                 'api_key': config_dict.get('OPENAI_API_KEY'),
@@ -456,7 +456,7 @@ async def test_connection(category: str):
                 'model': config_dict.get('OPENAI_MODEL_DEFAULT', 'gpt-3.5-turbo')
             }
             return await llm_service.test_openai_connection(config_data)
-            
+
         elif category == "vllm":
             config_data = {
                 'base_url': config_dict.get('VLLM_API_BASE_URL'),
@@ -464,7 +464,7 @@ async def test_connection(category: str):
                 'model_name': config_dict.get('VLLM_MODEL_NAME')
             }
             return await llm_service.test_vllm_connection(config_data)
-            
+
         elif category == "sgl":
             config_data = {
                 'base_url': config_dict.get('SGL_API_BASE_URL'),
@@ -472,11 +472,11 @@ async def test_connection(category: str):
                 'model_name': config_dict.get('SGL_MODEL_NAME')
             }
             return await llm_service.test_sgl_connection(config_data)
-            
+
         elif category == "llm":
             # 현재 기본 LLM 제공자 테스트
             current_provider = config_dict.get('DEFAULT_LLM_PROVIDER', 'openai')
-            
+
             if current_provider == "openai":
                 config_data = {
                     'api_key': config_dict.get('OPENAI_API_KEY'),
@@ -484,7 +484,7 @@ async def test_connection(category: str):
                     'model': config_dict.get('OPENAI_MODEL_DEFAULT', 'gpt-3.5-turbo')
                 }
                 return await llm_service.test_openai_connection(config_data)
-                
+
             elif current_provider == "vllm":
                 config_data = {
                     'base_url': config_dict.get('VLLM_API_BASE_URL'),
@@ -492,7 +492,7 @@ async def test_connection(category: str):
                     'model_name': config_dict.get('VLLM_MODEL_NAME')
                 }
                 return await llm_service.test_vllm_connection(config_data)
-                
+
             elif current_provider == "sgl":
                 config_data = {
                     'base_url': config_dict.get('SGL_API_BASE_URL'),
@@ -500,13 +500,13 @@ async def test_connection(category: str):
                     'model_name': config_dict.get('SGL_MODEL_NAME')
                 }
                 return await llm_service.test_sgl_connection(config_data)
-                
+
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported LLM provider: {current_provider}")
-        
+
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported category: {category}")
-            
+
     except HTTPException:
         raise
     except (ValueError, ConnectionError, RequestException) as e:
@@ -522,15 +522,15 @@ async def test_collection_connection(category: str):
     try:
         configs = get_all_persistent_configs()
         config_dict = {config.env_name: config.value for config in configs}
-        
+
         logging.info(config_dict)
         # IMAGE_TEXT 관련 설정에서 제공자 결정 (예: "openai" 또는 "vllm")
         const_provider = config_dict.get("IMAGE_TEXT_MODEL_PROVIDER", "no_model").lower()
         if const_provider not in ("openai", "vllm"):
             raise HTTPException(status_code=400, detail=f"Unsupported collection provider: {const_provider}")
-        
+
         llm_service = LLMService()
-        
+
         if const_provider == "openai":
             config_data = {
                 'api_key': config_dict.get("IMAGE_TEXT_API_KEY"),
@@ -568,16 +568,17 @@ async def validate_llm_provider_config(provider: str):
     try:
         if provider not in ["openai", "vllm", "sgl"]:
             raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai', 'vllm', or 'sgl'")
-        
+
         configs = get_all_persistent_configs()
         config_dict = {config.env_name: config.value for config in configs}
-        
+
         llm_service = LLMService()
-        
+
+        config_data = None
         if provider == "openai":
             config_data = {
-                'api_key': config_dict.get('OPENAI_API_KEY'),
                 'base_url': config_dict.get('OPENAI_API_BASE_URL'),
+                'api_key': config_dict.get('OPENAI_API_KEY'),
                 'model': config_dict.get('OPENAI_MODEL_DEFAULT')
             }
         elif provider == "vllm":
@@ -592,15 +593,15 @@ async def validate_llm_provider_config(provider: str):
                 'api_key': config_dict.get('SGL_API_KEY'),
                 'model_name': config_dict.get('SGL_MODEL_NAME')
             }
-        
+
         validation_result = llm_service.validate_provider_config(provider, config_data)
-        
+
         return {
             "provider": provider,
             "validation": validation_result,
             "config_data": {k: "***" if "key" in k.lower() and v else v for k, v in config_data.items()}
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:

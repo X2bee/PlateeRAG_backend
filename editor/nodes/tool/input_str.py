@@ -71,10 +71,13 @@ class InputStringNode(Node):
 
         # input_str이 존재하고 빈 문자열이 아닌 경우
         if input_str and input_str.strip():
-            parsed_input_str = f"""Input: {input_str}
+            if kwargs_result:
+                parsed_input_str = f"""Input: {input_str}
 
 parameters: {json.dumps(kwargs_result, ensure_ascii=False)}"""
-            return parsed_input_str
+                return parsed_input_str
+            else:
+                return input_str
 
         # input_str이 없거나 빈 문자열이지만 kwargs가 존재하는 경우
         elif (not input_str or input_str.strip() == "") and kwargs_result:
