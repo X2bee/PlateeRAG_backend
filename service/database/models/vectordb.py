@@ -34,6 +34,7 @@ class VectorDBChunkMeta(BaseModel):
         self.user_id: Optional[int] = kwargs.get('user_id')
         self.collection_name: str = kwargs.get('collection_name', '')
         self.file_name: str = kwargs.get('file_name', '')
+        self.chunk_id: str = kwargs.get('chunk_id', None)
         self.chunk_text: str = kwargs.get('chunk_text', '')
         self.chunk_index: str = kwargs.get('chunk_index', '')
         self.total_chunks: int = kwargs.get('total_chunks', 0)
@@ -56,6 +57,7 @@ class VectorDBChunkMeta(BaseModel):
             'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
             'collection_name': 'VARCHAR(500) NOT NULL',
             'file_name': 'VARCHAR(500) NOT NULL',
+            'chunk_id': 'VARCHAR(500) NOT NULL',
             'chunk_text': 'TEXT NOT NULL',
             'chunk_index': 'INTEGER NOT NULL',
             'total_chunks': 'INTEGER NOT NULL',
@@ -69,4 +71,27 @@ class VectorDBChunkMeta(BaseModel):
             'language': 'VARCHAR(10)',
             'complexity_level': 'VARCHAR(50)',
             'main_concepts': 'TEXT[]'
+        }
+
+class VectorDBChunkEdge(BaseModel):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.user_id: Optional[int] = kwargs.get('user_id')
+        self.target: str = kwargs.get('target', '')
+        self.source: str = kwargs.get('source', '')
+        self.relation_type: str = kwargs.get('relation_type', '')
+        self.edge_type: str = kwargs.get('edge_type', 'indirect')
+        self.edge_weight: float = kwargs.get('edge_weight', 1.0)
+
+    def get_table_name(self) -> str:
+        return "vector_db_chunk_edge"
+
+    def get_schema(self) -> Dict[str, str]:
+        return {
+            'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
+            'target': 'VARCHAR(500) NOT NULL',
+            'source': 'VARCHAR(500) NOT NULL',
+            'relation_type': 'VARCHAR(50) NOT NULL',
+            'edge_type': 'VARCHAR(50) NOT NULL',
+            'edge_weight': 'FLOAT NOT NULL'
         }

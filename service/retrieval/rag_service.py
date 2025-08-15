@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+from pydantic import BaseModel, Field
+from langchain_core.output_parsers import JsonOutputParser
 import gc
 import weakref
 
@@ -21,9 +23,21 @@ from service.embedding import EmbeddingFactory
 from service.retrieval.document_processor import DocumentProcessor
 from service.retrieval.document_processor.config_manager import ConfigManager
 from service.vector_db.vector_manager import VectorManager
-from service.database.models.vectordb import VectorDBChunkMeta
+from service.database.models.vectordb import VectorDBChunkEdge, VectorDBChunkMeta
 
 logger = logging.getLogger("rag-service")
+
+class DocumentMetadata(BaseModel):
+    """문서 메타데이터를 위한 Pydantic 모델"""
+    summary: str = Field(description="주어진 데이터의 핵심 요소를 반드시 추출하여 요약문을 작성하십시오. 이 요약문의 길이 제한은 없으며, 반드시 핵심 정보는 모두 포함되어야 합니다. 특히 연령, 성별, 수치적 요소, 계절, 주기성 등의 메타적 요소가 존재하면 이것은 반드시 포함되어야 합니다.")
+    keywords: List[str] = Field(description="핵심 키워드들 (3-5개)", min_items=1, max_items=5)
+    topics: List[str] = Field(description="주요 주제들 (2-4개)", min_items=1, max_items=5)
+    entities: List[str] = Field(description="개체명들 (인명, 지명, 기관명 등)", max_items=5)
+    sentiment: str = Field(description="문서의 감정 톤", pattern="^(positive|negative|neutral)$")
+    document_type: str = Field(description="문서 유형", pattern="^(기술문서|보고서|매뉴얼|학술논문|뉴스|기타)$")
+    language: str = Field(description="언어 코드 (ko, en, ja, zh 등)", max_length=1)
+    complexity_level: str = Field(description="복잡도 수준", pattern="^(beginner|intermediate|advanced)$")
+    main_concepts: List[str] = Field(description="핵심 개념들 (2-4개)", min_items=1, max_items=5)
 
 class LLMMetadataGenerator:
     """LLM 기반 메타데이터 생성 클래스"""
@@ -124,31 +138,33 @@ class LLMMetadataGenerator:
             self._initialize_llm_client()
 
     def _create_metadata_prompt(self, text: str, existing_metadata: Dict[str, Any] = None) -> str:
-        """메타데이터 생성을 위한 프롬프트 생성"""
+        """메타데이터 생성을 위한 프롬프트 생성 (JsonOutputParser 사용)"""
 
         # 텍스트 길이 제한
         text_sample = text[:3000] if len(text) > 3000 else text
 
-        #TODO 프롬프트 정교화가 필요할 수도 있음.
+        # JsonOutputParser를 사용하여 형식 지침 생성
+        parser = JsonOutputParser(pydantic_object=DocumentMetadata)
+        format_instructions = parser.get_format_instructions()
+
+        # 중괄호 이스케이프 처리
+        escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
+
         prompt = f"""다음 텍스트를 분석해서 구조화된 메타데이터를 생성해주세요:
 
 === 텍스트 ===
 {text_sample}
 
-=== 요구사항 ===
-다음 형식의 JSON만 반환해주세요 (다른 설명은 포함하지 마세요):
+=== 출력 형식 ===
+{escaped_instructions}
 
-{{
-    "summary": "주어진 데이터의 핵심 요소를 반드시 추출하여 요약문을 작성하십시오. 이 요약문의 길이 제한은 없으며, 반드시 핵심 정보는 모두 포함되어야 합니다. 특히 연령, 성별, 수치적 요소, 계절, 주기성 등의 메타적 요소가 존재하면 이것은 반드시 포함되어야 합니다.",
-    "keywords": ["핵심키워드1", "핵심키워드2", "핵심키워드3", "핵심키워드4"],
-    "topics": ["주제1", "주제2", "주제3"],
-    "entities": ["개체명1", "개체명2", "개체명3"],
-    "sentiment": "positive/negative/neutral 중 하나",
-    "document_type": "기술문서/보고서/매뉴얼/학술논문/뉴스/기타 중 하나",
-    "language": "ko/en/ja/zh 등 언어코드",
-    "complexity_level": "beginner/intermediate/advanced 중 하나",
-    "main_concepts": ["핵심개념1", "핵심개념2", "핵심개념3"]
-}}"""
+=== 추가 지침 ===
+- 한국어 텍스트는 language를 "ko"로 설정
+- 감정 분석에서 중립적인 경우 "neutral" 사용
+- 문서 유형이 명확하지 않으면 "기타" 사용
+- 키워드와 개념은 중복되지 않도록 주의
+- 개체명이 없는 경우 빈 배열 반환
+- 명시적인 요청이 없다면 summary는 한글로 반환"""
 
         if existing_metadata:
             prompt += f"\n\n=== 기존 메타데이터 참고 ===\n{existing_metadata}"
@@ -156,7 +172,7 @@ class LLMMetadataGenerator:
         return prompt
 
     async def generate_metadata(self, text: str, existing_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
-        """LLM을 사용해서 메타데이터 생성"""
+        """LLM을 사용해서 메타데이터 생성 (JsonOutputParser 사용)"""
 
         await self.ensure_llm_client()
 
@@ -167,30 +183,43 @@ class LLMMetadataGenerator:
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
 
-            system_msg = SystemMessage(content="당신은 문서 분석 전문가입니다. 주어진 텍스트를 분석해서 구조화된 메타데이터를 JSON 형식으로 생성해주세요.")
+            # JsonOutputParser 초기화
+            parser = JsonOutputParser(pydantic_object=DocumentMetadata)
+
+            system_msg = SystemMessage(content="당신은 문서 분석 전문가입니다. 주어진 텍스트를 분석해서 구조화된 메타데이터를 JSON 형식으로 정확하게 생성해주세요.")
             human_msg = HumanMessage(content=self._create_metadata_prompt(text, existing_metadata))
 
-            #TODO Langchain Json Parser이용해서 정합성 검증하는거 추가
             response = await self.llm_client.ainvoke([system_msg, human_msg])
             content = response.content.strip()
 
-            # JSON 파싱
+            # JsonOutputParser를 사용하여 파싱
             try:
-                # JSON 마크다운 블록 제거
-                if content.startswith('```json'):
-                    content = content[7:]
-                if content.endswith('```'):
-                    content = content[:-3]
+                parsed_result = parser.parse(content)
+                logger.info(f"Generated metadata using LLM: {list(parsed_result.keys())}")
+                return parsed_result
+            except Exception as parse_error:
+                logger.warning(f"JsonOutputParser failed: {parse_error}")
 
-                metadata = json.loads(content.strip())
-                logger.info(f"LLM response content: {metadata} ")
-                logger.info(f"Generated metadata using LLM: {list(metadata.keys())}")
-                return metadata
+                # 파싱 실패 시 수동 JSON 파싱 시도
+                try:
+                    # JSON 마크다운 블록 제거
+                    if content.startswith('```json'):
+                        content = content[7:]
+                    if content.endswith('```'):
+                        content = content[:-3]
 
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse LLM JSON response: {e}")
-                logger.error(f"Raw response: {content}")
-                return {}
+                    # 수동 JSON 파싱
+                    parsed_result = json.loads(content.strip())
+
+                    # Pydantic 모델로 검증
+                    validated_result = DocumentMetadata(**parsed_result)
+                    logger.info(f"Generated metadata using fallback JSON parsing: {list(validated_result.dict().keys())}")
+                    return validated_result.dict()
+
+                except (json.JSONDecodeError, Exception) as fallback_error:
+                    logger.error(f"Both JsonOutputParser and manual parsing failed: {fallback_error}")
+                    logger.debug(f"Raw content: {content}")
+                    return {}
 
         except Exception as e:
             logger.error(f"Error generating metadata with LLM: {e}")
@@ -908,25 +937,104 @@ class RAGService:
             # LLM 메타데이터 생성 여부 로깅
             for point in points:
                 payload = point["payload"]
+
+                # 리스트 타입 필드들을 안전하게 처리
+                def safe_list_to_string(value):
+                    """리스트를 PostgreSQL이 인식할 수 있는 문자열로 변환"""
+                    if isinstance(value, list):
+                        if not value:  # 빈 리스트인 경우
+                            return None
+                        # 각 요소를 문자열로 변환하고 PostgreSQL 배열 형식으로 포맷
+                        escaped_items = [str(item).replace('"', '""') for item in value]
+                        return "{" + ",".join(f'"{item}"' for item in escaped_items) + "}"
+                    elif isinstance(value, str) and value.startswith('[') and value.endswith(']'):
+                        try:
+                            # JSON 문자열을 파싱해서 리스트로 변환 후 다시 PostgreSQL 형식으로
+                            import json
+                            parsed_list = json.loads(value)
+                            if isinstance(parsed_list, list):
+                                if not parsed_list:  # 빈 리스트인 경우
+                                    return None
+                                escaped_items = [str(item).replace('"', '""') for item in parsed_list]
+                                return "{" + ",".join(f'"{item}"' for item in escaped_items) + "}"
+                        except (json.JSONDecodeError, Exception):
+                            pass
+                    return value
+
+                def safe_parse_to_list(value):
+                    """값을 안전하게 리스트로 파싱"""
+                    if isinstance(value, list):
+                        return value
+                    elif isinstance(value, str) and value.startswith('[') and value.endswith(']'):
+                        try:
+                            import json
+                            parsed_list = json.loads(value)
+                            if isinstance(parsed_list, list):
+                                return parsed_list
+                        except (json.JSONDecodeError, Exception):
+                            pass
+                    return []
+
                 vectordb_chunk_meta = VectorDBChunkMeta(
                     user_id=user_id,
                     collection_name=collection_name,
                     file_name=file_name,
+                    chunk_id=point['id'],
                     chunk_text=(payload.get("chunk_text")[:500] + "..." if len(payload.get("chunk_text")) > 500 else payload.get("chunk_text")),
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
                     chunk_size=payload.get("chunk_size"),
                     summary=payload.get("summary"),
-                    keywords=payload.get("keywords"),
-                    topics=payload.get("topics"),
-                    entities=payload.get("entities"),
+                    keywords=safe_list_to_string(payload.get("keywords")),
+                    topics=safe_list_to_string(payload.get("topics")),
+                    entities=safe_list_to_string(payload.get("entities")),
                     sentiment=payload.get("sentiment"),
                     document_type=payload.get("document_type"),
                     language=payload.get("language"),
                     complexity_level=payload.get("complexity_level"),
-                    main_concepts=payload.get("main_concepts"),
+                    main_concepts=safe_list_to_string(payload.get("main_concepts")),
                 )
                 app_db.insert(vectordb_chunk_meta)
+                app_db.insert(VectorDBChunkEdge(
+                    user_id=user_id,
+                    target=point['id'],
+                    source=collection_name,
+                    relation_type="chunk"
+                ))
+                app_db.insert(VectorDBChunkEdge(
+                    user_id=user_id,
+                    target=payload.get("document_type"),
+                    source=point['id'],
+                    relation_type="document_type"
+                ))
+                for keyword in safe_parse_to_list(payload.get("keywords")):
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        target=keyword,
+                        source=point['id'],
+                        relation_type="keyword"
+                    ))
+                for topic in safe_parse_to_list(payload.get("topics")):
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        target=topic,
+                        source=point['id'],
+                        relation_type="topic"
+                    ))
+                for entity in safe_parse_to_list(payload.get("entities")):
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        target=entity,
+                        source=point['id'],
+                        relation_type="entity"
+                    ))
+                for main_concept in safe_parse_to_list(payload.get("main_concepts")):
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        target=main_concept,
+                        source=point['id'],
+                        relation_type="main_concept"
+                    ))
 
             llm_enabled = use_llm_metadata and await self.metadata_generator.is_enabled()
             logger.info(f"use_llm_metadata: {use_llm_metadata}, LLM metadata enabled: {await self.metadata_generator.is_enabled()}")

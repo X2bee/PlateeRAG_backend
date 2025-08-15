@@ -72,6 +72,8 @@ class AgentOpenAIStreamNode(Node):
             if rag_context:
                 if rag_context['search_params']['use_model_prompt']:
                     query = rag_context['search_params']['embedding_model_prompt'] + text
+                else:
+                    query = text
                 search_result = sync_run_async(rag_context['rag_service'].search_documents(
                     collection_name=rag_context['search_params']['collection_name'],
                     query_text=query,

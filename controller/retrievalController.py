@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 import datetime
 import uuid
-from service.database.models.vectordb import VectorDB
+from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
 from controller.controller_helper import extract_user_id_from_request
 from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
@@ -274,6 +274,44 @@ async def get_document_details(request: Request, collection_name: str, document_
     try:
         rag_service = get_rag_service(request)
         return rag_service.get_document_details(collection_name, document_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
+
+@router.get("/collections/detail/{collection_name}/documents")
+async def get_document_detail_meta(request: Request, collection_name: str):
+    """특정 문서의 메타데이터 조회"""
+    try:
+        app_db = get_db_manager(request)
+        user_id = extract_user_id_from_request(request)
+        existing_data = app_db.find_by_condition(
+            VectorDBChunkMeta,
+            {
+                "user_id": user_id,
+                "collection_name": collection_name,
+            },
+            limit=10000,
+            return_list=True
+        )
+        return existing_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
+
+@router.get("/collections/detail/{collection_name}/edges")
+async def get_document_detail_edges(request: Request, collection_name: str):
+    """특정 문서의 엣지 메타데이터 조회"""
+    try:
+        app_db = get_db_manager(request)
+        user_id = extract_user_id_from_request(request)
+        existing_data = app_db.find_by_condition(
+            VectorDBChunkEdge,
+            {
+                "user_id": user_id,
+                "collection_name": collection_name,
+            },
+            limit=10000,
+            return_list=True
+        )
+        return existing_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
 
