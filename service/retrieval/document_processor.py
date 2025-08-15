@@ -585,7 +585,18 @@ class DocumentProcessor:
                     except Exception as e:
                         logger.warning(f"pdfminer extraction failed: {e}")
                         
-                # 2단계: PyPDF2 fallback
+                # 2단계: PyMuPDF를 런타임에서 우선 시도하고, 불가능하면 PyPDF2로 폴백
+                try:
+                    import fitz
+                    logger.info("PyMuPDF detected at runtime, attempting extraction via PyMuPDF")
+                    fitz_text = await asyncio.to_thread(self._extract_text_from_pdf_fitz, file_path)
+                    if fitz_text and fitz_text.strip():
+                        logger.info(f"Text extracted via PyMuPDF: {len(fitz_text)} chars")
+                        return fitz_text
+                except Exception as e:
+                    logger.debug(f"PyMuPDF runtime attempt failed or not available: {e}")
+
+                # PyMuPDF가 없거나 실패하면 기존 PyPDF2 fallback 사용
                 logger.info(f"Using PyPDF2 fallback for {file_path}")
                 text = await self._extract_text_from_pdf_fallback(file_path)
                 logger.info(f"Text extracted via PyPDF2: {len(text)} chars")
