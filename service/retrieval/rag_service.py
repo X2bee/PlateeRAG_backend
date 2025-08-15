@@ -4,7 +4,7 @@ RAG 서비스 모듈
 이 모듈은 RAG(Retrieval-Augmented Generation) 시스템의 핵심 비즈니스 로직을 제공합니다.
 문서 처리, 임베딩 생성, 벡터 검색 등의 기능을 조합하여 완전한 RAG 서비스를 구현합니다.
 """
-
+import re
 import logging
 import uuid
 import json
@@ -21,29 +21,30 @@ from service.embedding import EmbeddingFactory
 from service.retrieval.document_processor import DocumentProcessor
 from service.retrieval.document_processor.config_manager import ConfigManager
 from service.vector_db.vector_manager import VectorManager
+from service.database.models.vectordb import VectorDBChunkMeta
 
 logger = logging.getLogger("rag-service")
 
 class LLMMetadataGenerator:
     """LLM 기반 메타데이터 생성 클래스"""
-    
+
     def __init__(self, collection_config = None):
         self.collection_config = collection_config
         self.llm_client = None
-        
+
         # 초기화 시 디버깅 로그
         logger.info(f"LLMMetadataGenerator initialized with collection_config: {type(collection_config)}")
-        
+
         # 설정 구조 확인을 위한 로그
         if collection_config:
             logger.info(f"Available attributes: {dir(collection_config)}")
-        
+
     def _get_config_value(self, attr_name: str, default_value: Any = None) -> Any:
         """collection_config에서 안전하게 값을 가져오기"""
         try:
             if not self.collection_config:
                 return default_value
-                
+
             # 속성이 존재하는지 확인
             if hasattr(self.collection_config, attr_name):
                 attr = getattr(self.collection_config, attr_name)
@@ -55,30 +56,30 @@ class LLMMetadataGenerator:
             else:
                 logger.warning(f"Attribute '{attr_name}' not found in collection_config")
                 return default_value
-                
+
         except Exception as e:
             logger.error(f"Error getting config value for '{attr_name}': {e}")
             return default_value
-        
+
     def _initialize_llm_client(self):
         """LLM 클라이언트 초기화"""
         try:
             # collection_config에서 IMAGE_TEXT 관련 설정들 가져오기
             provider = str(self._get_config_value('IMAGE_TEXT_MODEL_PROVIDER', 'no_model')).lower()
-            
+
             if provider == 'no_model':
                 logger.info("No LLM model configured - metadata generation disabled")
                 self.llm_client = None
                 return
-                
+
             # 다른 설정값들 가져오기
             model = self._get_config_value('IMAGE_TEXT_MODEL_NAME', 'gpt-4o-mini')
             api_key = self._get_config_value('IMAGE_TEXT_API_KEY', '')
             base_url = self._get_config_value('IMAGE_TEXT_BASE_URL', 'https://api.openai.com/v1')
             temperature = float(self._get_config_value('IMAGE_TEXT_TEMPERATURE', 0.1))
-            
+
             logger.info(f"Initializing LLM client with provider: {provider}, model: {model}")
-                
+
             if provider == 'openai':
                 from langchain_openai import ChatOpenAI
                 self.llm_client = ChatOpenAI(
@@ -99,13 +100,13 @@ class LLMMetadataGenerator:
                 logger.error(f"Unsupported LLM provider: {provider}")
                 self.llm_client = None
                 return
-                
+
             logger.info(f"LLM client initialized successfully: {provider}")
-                
+
         except Exception as e:
             logger.error(f"Failed to initialize LLM client: {e}")
             self.llm_client = None
-            
+
     async def is_enabled(self) -> bool:
         """메타데이터 생성이 활성화되어 있는지 확인"""
         try:
@@ -113,21 +114,22 @@ class LLMMetadataGenerator:
             return provider != 'no_model'
         except Exception:
             return False
-            
+
     async def ensure_llm_client(self):
         """LLM 클라이언트가 사용 가능한지 확인하고 필요시 재초기화"""
         if not await self.is_enabled():
             return
-            
+
         if not self.llm_client:
             self._initialize_llm_client()
 
     def _create_metadata_prompt(self, text: str, existing_metadata: Dict[str, Any] = None) -> str:
         """메타데이터 생성을 위한 프롬프트 생성"""
-        
+
         # 텍스트 길이 제한
         text_sample = text[:3000] if len(text) > 3000 else text
-        
+
+        #TODO 프롬프트 정교화가 필요할 수도 있음.
         prompt = f"""다음 텍스트를 분석해서 구조화된 메타데이터를 생성해주세요:
 
 === 텍스트 ===
@@ -137,7 +139,7 @@ class LLMMetadataGenerator:
 다음 형식의 JSON만 반환해주세요 (다른 설명은 포함하지 마세요):
 
 {{
-    "summary": "텍스트의 핵심 내용을 2-3문장으로 요약",
+    "summary": "주어진 데이터의 핵심 요소를 반드시 추출하여 요약문을 작성하십시오. 이 요약문의 길이 제한은 없으며, 반드시 핵심 정보는 모두 포함되어야 합니다. 특히 연령, 성별, 수치적 요소, 계절, 주기성 등의 메타적 요소가 존재하면 이것은 반드시 포함되어야 합니다.",
     "keywords": ["핵심키워드1", "핵심키워드2", "핵심키워드3", "핵심키워드4"],
     "topics": ["주제1", "주제2", "주제3"],
     "entities": ["개체명1", "개체명2", "개체명3"],
@@ -147,30 +149,31 @@ class LLMMetadataGenerator:
     "complexity_level": "beginner/intermediate/advanced 중 하나",
     "main_concepts": ["핵심개념1", "핵심개념2", "핵심개념3"]
 }}"""
-        
+
         if existing_metadata:
             prompt += f"\n\n=== 기존 메타데이터 참고 ===\n{existing_metadata}"
-            
+
         return prompt
-        
+
     async def generate_metadata(self, text: str, existing_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """LLM을 사용해서 메타데이터 생성"""
-        
+
         await self.ensure_llm_client()
-        
+
         if not self.llm_client:
             logger.debug("LLM client not available, skipping metadata generation")
             return {}
-            
+
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
-            
+
             system_msg = SystemMessage(content="당신은 문서 분석 전문가입니다. 주어진 텍스트를 분석해서 구조화된 메타데이터를 JSON 형식으로 생성해주세요.")
             human_msg = HumanMessage(content=self._create_metadata_prompt(text, existing_metadata))
-            
+
+            #TODO Langchain Json Parser이용해서 정합성 검증하는거 추가
             response = await self.llm_client.ainvoke([system_msg, human_msg])
             content = response.content.strip()
-            
+
             # JSON 파싱
             try:
                 # JSON 마크다운 블록 제거
@@ -178,43 +181,43 @@ class LLMMetadataGenerator:
                     content = content[7:]
                 if content.endswith('```'):
                     content = content[:-3]
-                    
+
                 metadata = json.loads(content.strip())
-                logger.info(f"LLM response content: {metadata} ") # 처음 1000자만 로그에 출력
+                logger.info(f"LLM response content: {metadata} ")
                 logger.info(f"Generated metadata using LLM: {list(metadata.keys())}")
                 return metadata
-                
+
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse LLM JSON response: {e}")
                 logger.error(f"Raw response: {content}")
                 return {}
-                
+
         except Exception as e:
             logger.error(f"Error generating metadata with LLM: {e}")
             return {}
-            
-    async def generate_batch_metadata(self, texts: List[str], 
+
+    async def generate_batch_metadata(self, texts: List[str],
                                     existing_metadatas: List[Dict[str, Any]] = None,
                                     max_concurrent: int = 3) -> List[Dict[str, Any]]:
         """여러 텍스트에 대해 배치로 메타데이터 생성"""
-        
+
         if not await self.is_enabled():
             logger.info("LLM metadata generation disabled")
-            return [existing_metadatas[i] if existing_metadatas and i < len(existing_metadatas) else {} 
+            return [existing_metadatas[i] if existing_metadatas and i < len(existing_metadatas) else {}
                    for i in range(len(texts))]
-                   
+
         # 세마포어로 동시 요청 수 제한
         semaphore = asyncio.Semaphore(max_concurrent)
-        
+
         async def generate_single(i: int, text: str) -> Dict[str, Any]:
             async with semaphore:
                 existing = existing_metadatas[i] if existing_metadatas and i < len(existing_metadatas) else None
                 return await self.generate_metadata(text, existing)
-                
+
         # 병렬 처리
         tasks = [generate_single(i, text) for i, text in enumerate(texts)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # 예외 처리
         processed_results = []
         for i, result in enumerate(results):
@@ -224,7 +227,7 @@ class LLMMetadataGenerator:
                 processed_results.append(existing)
             else:
                 processed_results.append(result)
-                
+
         return processed_results
 
 class RAGService:
@@ -352,7 +355,7 @@ class RAGService:
 
         self.vector_manager = VectorManager(vectordb_config)
         self.embeddings_client = None
-        
+
         # LLM 메타데이터 생성기 초기화
         self.metadata_generator = LLMMetadataGenerator(collection_config)
 
@@ -751,10 +754,11 @@ class RAGService:
                     detail=f"Failed to generate query embedding: {str(e)}. Provider: {self.config.EMBEDDING_PROVIDER.value}"
                 ) from retry_error
 
-    async def process_document(self, file_path: str, collection_name: str,
+    async def process_document(self, user_id, app_db, file_path: str, collection_name: str,
                                 chunk_size: int = 1000, chunk_overlap: int = 200,
-                                metadata: Dict[str, Any] = None, 
-                                use_llm_metadata: bool = True) -> Dict[str, Any]:
+                                metadata: Dict[str, Any] = None,
+                                use_llm_metadata: bool = True,
+                                ) -> Dict[str, Any]:
         """문서를 처리하여 컬렉션에 저장
 
         Args:
@@ -795,7 +799,7 @@ class RAGService:
             chunk_metadatas = []
             if use_llm_metadata and await self.metadata_generator.is_enabled():
                 logger.info(f"Generating LLM metadata for {len(chunks)} chunks")
-                
+
                 # 기본 메타데이터 준비
                 base_metadatas = []
                 for i in range(len(chunks)):
@@ -807,11 +811,12 @@ class RAGService:
                     if metadata:
                         base_metadata.update(metadata)
                     base_metadatas.append(base_metadata)
-                
+
                 # LLM으로 배치 메타데이터 생성
                 chunk_metadatas = await self.metadata_generator.generate_batch_metadata(
                     chunks, base_metadatas, max_concurrent=3
                 )
+
             else:
                 # LLM 사용 안함 - 기본 메타데이터만 사용
                 logger.info("LLM metadata generation disabled or not available")
@@ -825,9 +830,39 @@ class RAGService:
                         base_metadata.update(metadata)
                     chunk_metadatas.append(base_metadata)
 
-            # 임베딩 생성
+            #TODO 검증할 필요는 있음. 문서 요약 및 메타데이터 정보를 chunk에 더해서 embedding 하는 것으로 사용.
+            processed_chunks = []
+            for i, (chunk, chunk_metadata) in enumerate(zip(chunks, chunk_metadatas)):
+                summary = chunk_metadata.get("summary")
+                summary_info = f"문서 요약: {summary}" if summary and summary.strip() else ""
+                additional_info = {
+                    "keywords": chunk_metadata.get("keywords", []),
+                    "topics": chunk_metadata.get("topics", []),
+                    "entities": chunk_metadata.get("entities", []),
+                    "sentiment": chunk_metadata.get("sentiment", ""),
+                    "document_type": chunk_metadata.get("document_type", ""),
+                    "complexity_level": chunk_metadata.get("complexity_level", ""),
+                    "main_concepts": chunk_metadata.get("main_concepts", [])
+                }
+
+                uuid_pattern = r'_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                display_collection_name = re.sub(uuid_pattern, '', collection_name, flags=re.IGNORECASE)
+                processed_chunk = f"""이는 {display_collection_name}콜렉션에 존재하는 {(Path(file_path).name)} 파일의 내용입니다.
+{summary_info}
+{additional_info}
+
+{chunk}"""
+                processed_chunks.append(processed_chunk)
+
             logger.info(f"Generating embeddings for {len(chunks)} chunks")
-            embeddings = await self.generate_embeddings(chunks)
+
+            if processed_chunks and len(processed_chunks) == len(chunks):
+                logger.info("Using processed chunks for embedding generation")
+                embeddings = await self.generate_embeddings(processed_chunks)
+                # processed_chunks를 사용하여 청크 업데이트
+                chunks = processed_chunks
+            else:
+                embeddings = await self.generate_embeddings(chunks)
 
             # 포인트 생성 및 삽입
             points = []
@@ -849,7 +884,7 @@ class RAGService:
 
                 # LLM 생성 메타데이터 병합
                 final_metadata.update(chunk_metadata)
-                
+
                 # LLM 메타데이터 생성 여부 표시
                 if use_llm_metadata and await self.metadata_generator.is_enabled():
                     final_metadata['llm_metadata_generated'] = True
@@ -869,6 +904,29 @@ class RAGService:
 
             # 컬렉션 메타데이터 업데이트 (문서 수 증가)
             self.vector_manager.update_collection_document_count(collection_name, 1)
+
+            # LLM 메타데이터 생성 여부 로깅
+            for point in points:
+                payload = point["payload"]
+                vectordb_chunk_meta = VectorDBChunkMeta(
+                    user_id=user_id,
+                    collection_name=collection_name,
+                    file_name=file_name,
+                    chunk_text=(payload.get("chunk_text")[:500] + "..." if len(payload.get("chunk_text")) > 500 else payload.get("chunk_text")),
+                    chunk_index=payload.get("chunk_index"),
+                    total_chunks=payload.get("total_chunks"),
+                    chunk_size=payload.get("chunk_size"),
+                    summary=payload.get("summary"),
+                    keywords=payload.get("keywords"),
+                    topics=payload.get("topics"),
+                    entities=payload.get("entities"),
+                    sentiment=payload.get("sentiment"),
+                    document_type=payload.get("document_type"),
+                    language=payload.get("language"),
+                    complexity_level=payload.get("complexity_level"),
+                    main_concepts=payload.get("main_concepts"),
+                )
+                app_db.insert(vectordb_chunk_meta)
 
             llm_enabled = use_llm_metadata and await self.metadata_generator.is_enabled()
             logger.info(f"use_llm_metadata: {use_llm_metadata}, LLM metadata enabled: {await self.metadata_generator.is_enabled()}")
@@ -1311,15 +1369,15 @@ class RAGService:
                     "enabled": False,
                     "error": "Metadata generator not initialized"
                 }
-                
+
             # ✅ collection_config에서 안전하게 값 가져오기
             provider = self.metadata_generator._get_config_value('IMAGE_TEXT_MODEL_PROVIDER', 'no_model')
             model = self.metadata_generator._get_config_value('IMAGE_TEXT_MODEL_NAME', 'unknown')
             base_url = self.metadata_generator._get_config_value('IMAGE_TEXT_BASE_URL', '')
             temperature = self.metadata_generator._get_config_value('IMAGE_TEXT_TEMPERATURE', 0.1)
-            
+
             is_enabled = await self.metadata_generator.is_enabled()
-            
+
             return {
                 "status": "initialized",
                 "enabled": is_enabled,

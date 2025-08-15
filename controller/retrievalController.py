@@ -195,11 +195,13 @@ async def upload_document(
     collection_name: str = Form(...),
     chunk_size: int = Form(1000),
     chunk_overlap: int = Form(200),
+    user_id: int = Form(...),
     metadata: Optional[str] = Form(None)
 ):
     """문서 업로드 및 처리"""
     try:
         rag_service = get_rag_service(request)
+        app_db = get_db_manager(request)
 
         # 파일 저장
         upload_dir = Path("downloads")
@@ -220,11 +222,13 @@ async def upload_document(
 
         # 문서 처리
         result = await rag_service.process_document(
+            user_id,
+            app_db,
             str(file_path),
             collection_name,
             chunk_size,
             chunk_overlap,
-            doc_metadata
+            doc_metadata,
         )
 
         # 임시 파일 삭제
