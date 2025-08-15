@@ -123,7 +123,7 @@ class VastConfig(BaseConfig):
         self.VLLM_SERVE_MODEL_NAME = self.create_persistent_config(
             env_name="VLLM_SERVE_MODEL_NAME",
             config_path="vast.vllm.serve_model_name",
-            default_value="Qwen/Qwen3-1.7B",
+            default_value="x2bee/Polar-14B",
             type_converter=convert_to_str,
         )
         self.VLLM_MAX_MODEL_LEN = self.create_persistent_config(
