@@ -43,7 +43,7 @@ class OfferSearchRequest(BaseModel):
 class VLLMConfigRequest(BaseModel):
     """VLLM 설정 요청"""
     # 모델 설정
-    vllm_model_name: str = Field("Qwen/Qwen3-1.7B", description="사용할 모델명", example="Qwen/Qwen3-1.7B")
+    vllm_serve_model_name: str = Field("Qwen/Qwen3-1.7B", description="사용할 모델명", example="Qwen/Qwen3-1.7B")
     vllm_max_model_len: int = Field(4096, description="최대 모델 길이", example=2048, ge=512, le=32768)
 
     # 네트워크 설정
@@ -427,7 +427,7 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
             )
 
         is_valid_model = False
-        if create_request.vllm_config and create_request.vllm_config.vllm_model_name and len(create_request.vllm_config.vllm_model_name) >= 1:
+        if create_request.vllm_config and create_request.vllm_config.vllm_serve_model_name and len(create_request.vllm_config.vllm_serve_model_name) >= 1:
             is_valid_model = True
 
         background_tasks.add_task(service.wait_and_setup_instance, instance_id, is_valid_model)

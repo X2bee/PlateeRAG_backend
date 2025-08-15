@@ -22,6 +22,8 @@ enhance_prompt = """You are an AI assistant that must strictly follow these guid
 
 Remember: It's better to say "I don't know" than to provide inaccurate or fabricated information."""
 
+embedding_model_prompt = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+
 class QdrantRetrievalTool(Node):
     categoryId = "xgen"
     functionId = "document_loaders"
@@ -39,6 +41,7 @@ class QdrantRetrievalTool(Node):
         {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "tool_name", "required": True},
         {"id": "description", "name": "Description", "type": "STR", "value": "주어진 질문에 대해 검색을 수행하는 Tool입니다.", "required": True, "expandable": True, "description": "이 도구를 언제 사용하여야 하는지 설명합니다. AI는 해당 설명을 통해, 해당 도구를 언제 호출해야할지 결정할 수 있습니다."},
         {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
+        {"id": "use_model_prompt", "name": "Use Model Prompt", "type": "BOOL", "value": True, "optional": True, "description": "임베딩 벡터 변환시 모델이 요구하는 프롬프트를 사용할지를 결정합니다."},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 4, "required": False, "optional": True, "min": 1, "max": 10, "step": 1},
         {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.2, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
         {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "검색된 자료를 어떻게 사용할 것인지 지시합니다."},
@@ -57,12 +60,15 @@ class QdrantRetrievalTool(Node):
         )
         return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
-    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
+    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, use_model_prompt:bool = True, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt):
         def create_vectordb_tool():
             @tool(tool_name, description=description)
             def vectordb_retrieval_tool(query: str) -> str:
                 rag_service = AppServiceManager.get_rag_service()
                 try:
+                    if use_model_prompt:
+                        query = embedding_model_prompt + query
+
                     search_result = sync_run_async(rag_service.search_documents(
                         collection_name=collection_name,
                         query_text=query,
