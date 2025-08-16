@@ -1284,27 +1284,70 @@ async def process_batch_group(
     selected_collections: Optional[List[str]],
     batch_id: str,
     app_db,
-    request
+    request,
+    max_concurrent: int = 5  # 동시 실행 제한
 ) -> List[BatchTestResult]:
     """
-    배치 그룹을 병렬로 처리
+    배치 그룹을 병렬로 처리 (안정성 개선)
     """
     results = []
-
-    # asyncio.gather를 사용해서 병렬 실행
-    tasks = []
-    for test_case in test_cases:
+    
+    # Semaphore로 동시 실행 제한 (서버 과부하 방지)
+    semaphore = asyncio.Semaphore(min(max_concurrent, len(test_cases)))
+    
+    async def execute_with_retry(test_case, retry_count=3):
+        """재시도 로직을 포함한 실행"""
         unique_interaction_id = f"{interaction_id}_{batch_id}_{test_case.id}"
-        task = execute_single_workflow_for_batch(
-            user_id=user_id,
-            workflow_name=workflow_name,
-            workflow_id=workflow_id,
-            input_data=test_case.input,
-            interaction_id=unique_interaction_id,
-            selected_collections=selected_collections,
-            app_db=app_db,
-            request=request
-        )
+        last_error = None
+        
+        for attempt in range(retry_count):
+            try:
+                async with semaphore:  # 동시 실행 제한
+                    # 타임아웃 90초 설정
+                    result = await asyncio.wait_for(
+                        execute_single_workflow_for_batch(
+                            user_id=user_id,
+                            workflow_name=workflow_name,
+                            workflow_id=workflow_id,
+                            input_data=test_case.input,
+                            interaction_id=unique_interaction_id,
+                            selected_collections=selected_collections,
+                            app_db=app_db,
+                            request=request
+                        ),
+                        timeout=90.0  # 90초 타임아웃
+                    )
+                    
+                    if attempt > 0:
+                        logger.info(f"테스트 케이스 {test_case.id} 성공 (시도 {attempt + 1}/{retry_count})")
+                    
+                    return result
+                    
+            except asyncio.TimeoutError:
+                last_error = "Timeout after 90 seconds"
+                logger.warning(f"테스트 케이스 {test_case.id} 타임아웃 (시도 {attempt + 1}/{retry_count})")
+                
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"테스트 케이스 {test_case.id} 실패 (시도 {attempt + 1}/{retry_count}): {e}")
+            
+            # 재시도 전 대기 (지수 백오프)
+            if attempt < retry_count - 1:
+                wait_time = min(2 ** attempt, 10)  # 최대 10초
+                await asyncio.sleep(wait_time)
+        
+        # 모든 재시도 실패
+        logger.error(f"테스트 케이스 {test_case.id} 최종 실패: {last_error}")
+        return {"success": False, "error": last_error, "execution_time": 0}
+
+    # Rate limiting을 위한 딜레이 추가
+    tasks = []
+    for i, test_case in enumerate(test_cases):
+        # 각 요청 사이에 짧은 딜레이 (0.1초)
+        if i > 0:
+            await asyncio.sleep(0.1)
+        
+        task = execute_with_retry(test_case)
         tasks.append(task)
 
     # 모든 태스크를 병렬로 실행
@@ -1398,11 +1441,18 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
 
         all_results = []
 
-        # 배치 크기만큼 나누어서 처리
-        for i in range(0, len(batch_request.test_cases), batch_request.batch_size):
-            batch_group = batch_request.test_cases[i:i + batch_request.batch_size]
+        # 안전한 배치 크기 설정 (너무 큰 값 제한)
+        safe_batch_size = min(batch_request.batch_size, 20)  # 최대 20개로 제한
+        if safe_batch_size != batch_request.batch_size:
+            logger.warning(f"배치 크기를 {batch_request.batch_size}에서 {safe_batch_size}로 제한")
 
-            logger.info(f"배치 그룹 {i//batch_request.batch_size + 1} 처리 중: {len(batch_group)}개 병렬 실행")
+        # 배치 크기만큼 나누어서 처리
+        for i in range(0, len(batch_request.test_cases), safe_batch_size):
+            batch_group = batch_request.test_cases[i:i + safe_batch_size]
+            batch_num = i//safe_batch_size + 1
+            total_batches = (len(batch_request.test_cases) + safe_batch_size - 1) // safe_batch_size
+
+            logger.info(f"배치 그룹 {batch_num}/{total_batches} 처리 중: {len(batch_group)}개 병렬 실행")
 
             # 현재 배치 그룹 처리
             group_results = await process_batch_group(
@@ -1414,14 +1464,23 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
                 selected_collections=batch_request.selected_collections,
                 batch_id=batch_id,
                 app_db=app_db,
-                request=request
+                request=request,
+                max_concurrent=min(safe_batch_size, 10)  # 동시 실행 제한
             )
 
             all_results.extend(group_results)
 
-            # 다음 배치 그룹 처리 전 잠시 대기 (서버 부하 방지위해서)
-            if i + batch_request.batch_size < len(batch_request.test_cases):
-                await asyncio.sleep(0.5)
+            # 배치 상태 업데이트
+            if batch_id in batch_status_storage:
+                batch_status_storage[batch_id]["completed_count"] = len(all_results)
+                batch_status_storage[batch_id]["progress"] = (len(all_results) / len(batch_request.test_cases)) * 100
+
+            # 다음 배치 그룹 처리 전 대기 (서버 부하 방지)
+            if i + safe_batch_size < len(batch_request.test_cases):
+                # 배치 크기에 따라 대기 시간 조절
+                cooldown_time = max(0.5, min(2.0, safe_batch_size * 0.1))
+                logger.info(f"다음 배치 그룹 처리 전 {cooldown_time}초 대기")
+                await asyncio.sleep(cooldown_time)
 
         # 최종 결과 계산
         total_execution_time = int((time.time() - start_time) * 1000)
@@ -1431,9 +1490,31 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
         # 배치 상태 완료로 업데이트
         batch_status_storage[batch_id]["status"] = "completed"
         batch_status_storage[batch_id]["progress"] = 100.0
+        batch_status_storage[batch_id]["end_time"] = time.time()
+        batch_status_storage[batch_id]["success_rate"] = (success_count / len(all_results)) * 100 if all_results else 0
 
-        logger.info(f"배치 {batch_id} 완료: 성공={success_count}개, 실패={error_count}개, "
-                   f"총 소요시간={total_execution_time}ms")
+        # 성능 통계 계산 및 로깅
+        avg_execution_time = total_execution_time / len(all_results) if all_results else 0
+        duration_seconds = total_execution_time / 1000
+        throughput = len(all_results) / duration_seconds if duration_seconds > 0 else 0
+
+        logger.info(f"""
+        ✅ 배치 실행 완료 - {batch_id}:
+        📊 결과 요약:
+        • 총 테스트: {len(all_results)}개
+        • 성공: {success_count}개 ({(success_count/len(all_results)*100):.1f}%)
+        • 실패: {error_count}개 ({(error_count/len(all_results)*100):.1f}%)
+        
+        ⏱️ 성능 지표:
+        • 총 소요시간: {total_execution_time}ms ({duration_seconds:.2f}초)
+        • 평균 실행시간: {avg_execution_time:.2f}ms
+        • 처리율: {throughput:.2f} 테스트/초
+        • 배치 크기: {batch_request.batch_size}개
+        
+        🎯 품질 지표:
+        • 성공률: {(success_count/len(all_results)*100):.1f}%
+        • 에러율: {(error_count/len(all_results)*100):.1f}%
+        """)
 
         response = BatchExecuteResponse(
             batch_id=batch_id,
@@ -1447,13 +1528,56 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
         return response
 
     except Exception as e:
-        logger.error(f"배치 실행 중 오류: {str(e)}", exc_info=True)
+        logger.error(f"❌ 배치 실행 중 치명적 오류 발생: {str(e)}", exc_info=True)
 
+        # 배치 상태 에러로 설정
         if 'batch_id' in locals() and batch_id in batch_status_storage:
             batch_status_storage[batch_id]["status"] = "error"
             batch_status_storage[batch_id]["error"] = str(e)
+            batch_status_storage[batch_id]["end_time"] = time.time()
+            batch_status_storage[batch_id]["completed_count"] = len(all_results) if 'all_results' in locals() else 0
 
-        raise HTTPException(status_code=500, detail=f"배치 실행 실패: {str(e)}")
+        # 구체적인 에러 정보 수집
+        error_context = {
+            "batch_id": batch_id if 'batch_id' in locals() else "unknown",
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+            "timestamp": datetime.now().isoformat(),
+            "completed_count": len(all_results) if 'all_results' in locals() else 0,
+            "total_requested": len(batch_request.test_cases) if 'batch_request' in locals() else 0,
+            "workflow_name": batch_request.workflow_name if 'batch_request' in locals() else "unknown"
+        }
+
+        logger.error(f"🔍 배치 실행 실패 상세 정보: {error_context}")
+
+        # 사용자 친화적인 에러 메시지 생성
+        user_message = "배치 테스트 실행 중 오류가 발생했습니다."
+        
+        if "timeout" in str(e).lower():
+            user_message += " 일부 테스트가 시간 초과되었습니다. 배치 크기를 줄이거나 워크플로우를 최적화해 보세요."
+        elif "connection" in str(e).lower():
+            user_message += " 네트워크 연결 문제가 발생했습니다. 잠시 후 다시 시도해 주세요."
+        elif "memory" in str(e).lower():
+            user_message += " 메모리 부족으로 인한 오류입니다. 배치 크기를 줄여 주세요."
+        else:
+            user_message += " 서버 로그를 확인하거나 관리자에게 문의해 주세요."
+
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "message": user_message,
+                "error_type": type(e).__name__,
+                "batch_id": error_context["batch_id"],
+                "completed_count": error_context["completed_count"],
+                "total_requested": error_context["total_requested"],
+                "suggestions": [
+                    "배치 크기를 줄여서 다시 시도해 보세요",
+                    "워크플로우가 올바르게 구성되어 있는지 확인해 보세요",
+                    "서버 리소스 상태를 확인해 보세요",
+                    "네트워크 연결 상태를 확인해 보세요"
+                ]
+            }
+        )
 
 @router.get("/batch/status/{batch_id}")
 async def get_batch_status(batch_id: str):
