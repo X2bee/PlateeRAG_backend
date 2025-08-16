@@ -809,7 +809,7 @@ class RAGService:
 
         try:
             # processed_chunks 변수가 이후 조건에서 사용되므로 안전하게 초기화
-            processed_chunks = None
+            processed_chunks = []
             # 파일 확장자 추출 및 검증
             is_valid, file_extension = self.document_processor.validate_file_format(file_path)
             if not is_valid:
@@ -939,11 +939,46 @@ class RAGService:
                             "line_end": line_end,
                             "chunk_index": i
                         })
-            
-            # 청크 텍스트만 추출하여 임베딩 생성
-            chunks = [chunk_data["text"] for chunk_data in chunks_with_metadata]
-            logger.info(f"Generating embeddings for {len(chunks)} chunks")
 
+            chunks = [chunk_data["text"] for chunk_data in chunks_with_metadata]
+
+            #TODO LLM으로 chunk 데이터 Gen하는 것 임시로 구현. 후에 검토 필요
+            llm_gen_chunk_metadatas = None
+            if use_llm_metadata and await self.metadata_generator.is_enabled():
+                logger.info(f"Generating LLM metadata for {len(chunks)} chunks")
+
+                try:
+                    llm_gen_chunk_metadatas = await self.metadata_generator.generate_batch_metadata(
+                        chunks, None, max_concurrent=3
+                    )
+                except Exception as e:
+                    llm_gen_chunk_metadatas = None
+
+            processed_chunks = []
+            if llm_gen_chunk_metadatas:
+                for i, (chunk, chunk_metadata) in enumerate(zip(chunks, llm_gen_chunk_metadatas)):
+                    summary = chunk_metadata.get("summary")
+                    summary_info = f"문서 요약: {summary}" if summary and summary.strip() else ""
+                    additional_info = {
+                        "keywords": chunk_metadata.get("keywords", []),
+                        "topics": chunk_metadata.get("topics", []),
+                        "entities": chunk_metadata.get("entities", []),
+                        "sentiment": chunk_metadata.get("sentiment", ""),
+                        "document_type": chunk_metadata.get("document_type", ""),
+                        "complexity_level": chunk_metadata.get("complexity_level", ""),
+                        "main_concepts": chunk_metadata.get("main_concepts", [])
+                    }
+
+                    uuid_pattern = r'_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                    display_collection_name = re.sub(uuid_pattern, '', collection_name, flags=re.IGNORECASE)
+                    processed_chunk = f"""이는 '{display_collection_name}' 콜렉션에 존재하는 {(Path(file_path).name)} 파일의 내용입니다.
+{summary_info}
+{additional_info}
+
+{chunk}"""
+                    processed_chunks.append(processed_chunk)
+
+            logger.info(f"Generating embeddings for {len(chunks)} chunks")
             if processed_chunks and len(processed_chunks) == len(chunks):
                 logger.info("Using processed chunks for embedding generation")
                 embeddings = await self.generate_embeddings(processed_chunks)
@@ -971,9 +1006,12 @@ class RAGService:
                 "file_path": stored_file_path
             })
 
-            for i, (chunk_data, embedding) in enumerate(zip(chunks_with_metadata, embeddings)):
+            # llm_gen_chunk_metadatas가 None인 경우 빈 딕셔너리 리스트로 대체
+            if llm_gen_chunk_metadatas is None:
+                llm_gen_chunk_metadatas = [{} for _ in range(len(chunks_with_metadata))]
+
+            for i, (chunk, chunk_data, embedding, llm_gen_chunk_metadata) in enumerate(zip(chunks, chunks_with_metadata, embeddings, llm_gen_chunk_metadatas)):
                 # document_processor에서 계산된 메타데이터 사용
-                chunk = chunk_data["text"]
                 page_number = chunk_data["page_number"]
                 line_start = chunk_data["line_start"]
                 line_end = chunk_data["line_end"]
@@ -997,6 +1035,10 @@ class RAGService:
                 # 각 청크별로 final_metadata를 복사하여 개별 payload 생성 (mutable 공유 방지)
                 payload = dict(final_metadata) if isinstance(final_metadata, dict) else {}
                 payload.update(chunk_metadata)
+
+                # LLM 메타데이터가 있는 경우에만 업데이트
+                if llm_gen_chunk_metadata and isinstance(llm_gen_chunk_metadata, dict):
+                    payload.update(llm_gen_chunk_metadata)
 
                 # LLM 메타데이터 생성 여부 표시
                 if use_llm_metadata and await self.metadata_generator.is_enabled():
@@ -1269,7 +1311,7 @@ class RAGService:
                     try:
                         # Cross-encoder 기반 재순위
                         from service.embedding.cross_encoder_service import get_cross_encoder_reranker
-                        
+
                         # take top-k candidates to rerank
                         top_candidates = results[:rerank_top_k]
                         candidate_texts = [r.get("chunk_text") or "" for r in top_candidates]
@@ -1279,24 +1321,24 @@ class RAGService:
                         # Cross-encoder로 재순위 (타임아웃 적용)
                         try:
                             import asyncio as _asyncio
-                            
+
                             def run_cross_encoder():
                                 cross_encoder = get_cross_encoder_reranker()
                                 return cross_encoder.rerank(query_text, candidate_texts, top_k=len(candidate_texts))
-                            
+
                             # 타임아웃 설정
                             try:
                                 RERANK_TIMEOUT = getattr(self.config, 'RERANK_TIMEOUT', None)
                                 timeout_sec = int(RERANK_TIMEOUT.value) if RERANK_TIMEOUT and hasattr(RERANK_TIMEOUT, 'value') else 10
                             except Exception:
                                 timeout_sec = 10
-                            
+
                             # Cross-encoder 실행 (동기 → 비동기 래핑)
                             rerank_results = await _asyncio.wait_for(
-                                _asyncio.to_thread(run_cross_encoder), 
+                                _asyncio.to_thread(run_cross_encoder),
                                 timeout=timeout_sec
                             )
-                            
+
                             # 재순위 결과 적용
                             if rerank_results:
                                 # rerank_results는 [(index, score), ...] 형태
@@ -1305,19 +1347,19 @@ class RAGService:
                                     candidate = top_candidates[idx].copy()
                                     candidate["rerank_score"] = rerank_score
                                     reranked_candidates.append(candidate)
-                                
+
                                 # 재순위된 결과와 나머지 결합
                                 results = reranked_candidates + results[rerank_top_k:]
                                 results = results[:limit]
-                                
+
                                 logger.info(f"Cross-encoder rerank completed. Top rerank score: {rerank_results[0][1]:.4f}")
                             else:
                                 logger.warning("Cross-encoder returned empty results")
-                                
+
                         except Exception as rerank_e:
                             logger.warning(f"Cross-encoder rerank failed or timed out: {rerank_e}")
                             # 실패 시 원본 결과 유지
-                            
+
                     except Exception as e:
                         logger.warning(f"Reranking setup failed: {e}")
 
@@ -1780,21 +1822,21 @@ class RAGService:
     # DEPRECATED: 이 메서드는 더 이상 사용되지 않습니다. document_processor.chunk_text_with_metadata를 사용하세요.
     def _extract_page_mapping(self, text: str, file_extension: str) -> List[Dict[str, Any]]:
         """텍스트에서 페이지 정보 추출
-        
+
         Args:
             text: 원본 텍스트
             file_extension: 파일 확장자
-            
+
         Returns:
             페이지 정보 리스트 [{"page_num": 1, "start_pos": 0, "end_pos": 100}, ...]
         """
         try:
             page_mapping = []
-            
+
             # PDF, PPT, DOCX에서 페이지 구분자 패턴 찾기
             if file_extension in ['pdf', 'ppt', 'pptx', 'docx', 'doc']:
                 import re
-                
+
                 # 페이지 구분자 패턴들
                 patterns = [
                     r'=== 페이지 (\d+) ===',  # PDF PyPDF2 fallback, DOCX 기본 텍스트 추출
@@ -1802,34 +1844,34 @@ class RAGService:
                     r'=== 슬라이드 (\d+) ===',  # PPT 기본
                     r'=== 슬라이드 (\d+) \(OCR\) ===',  # PPT OCR
                 ]
-                
+
                 found_pages = False
                 for pattern in patterns:
                     matches = list(re.finditer(pattern, text))
                     if matches:
                         logger.info(f"Found {len(matches)} page markers with pattern: {pattern}")
-                        
+
                         for i, match in enumerate(matches):
                             page_num = int(match.group(1))
                             start_pos = match.end()  # 페이지 제목 다음부터
-                            
+
                             # 다음 페이지의 시작 위치 또는 텍스트 끝
                             if i + 1 < len(matches):
                                 end_pos = matches[i + 1].start()
                             else:
                                 end_pos = len(text)
-                            
+
                             page_mapping.append({
                                 "page_num": page_num,
                                 "start_pos": start_pos,
                                 "end_pos": end_pos
                             })
-                        
+
                         # 페이지 번호 순으로 정렬
                         page_mapping.sort(key=lambda x: x["page_num"])
                         found_pages = True
                         break
-                
+
                 if not found_pages:
                     # DOCX에서 OCR을 통해 페이지가 구분되었는지 확인
                     if file_extension in ['docx', 'doc']:
@@ -1840,12 +1882,12 @@ class RAGService:
                             for i, match in enumerate(ocr_matches):
                                 page_num = int(match.group(1))
                                 start_pos = match.end()
-                                
+
                                 if i + 1 < len(ocr_matches):
                                     end_pos = ocr_matches[i + 1].start()
                                 else:
                                     end_pos = len(text)
-                                
+
                                 page_mapping.append({
                                     "page_num": page_num,
                                     "start_pos": start_pos,
@@ -1858,45 +1900,45 @@ class RAGService:
                             # DOCX의 경우 대략 1500자당 1페이지로 추정
                             chars_per_page = 1500
                             text_length = len(text)
-                            
+
                             if text_length > chars_per_page:
                                 estimated_pages = (text_length + chars_per_page - 1) // chars_per_page
                                 logger.info(f"Creating {estimated_pages} virtual pages for DOCX based on text length ({text_length} chars)")
-                                
+
                                 for page_num in range(1, estimated_pages + 1):
                                     start_pos = (page_num - 1) * chars_per_page
                                     end_pos = min(page_num * chars_per_page, text_length)
-                                    
+
                                     page_mapping.append({
                                         "page_num": page_num,
                                         "start_pos": start_pos,
                                         "end_pos": end_pos
                                     })
                                 found_pages = True
-                    
+
                     if not found_pages:
                         logger.info("No page markers found, treating as single page document")
                         page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
-            
+
             elif file_extension in ['xlsx', 'xls']:
                 # Excel: 시트별로 페이지 구분
                 import re
                 sheet_pattern = r'\n=== 시트: ([^=]+) ===\n'
                 matches = list(re.finditer(sheet_pattern, text))
-                
+
                 if matches:
                     logger.info(f"Found {len(matches)} Excel sheets")
                     for i, match in enumerate(matches):
                         sheet_name = match.group(1)
                         page_num = i + 1
                         start_pos = match.end()
-                        
+
                         # 다음 시트의 시작 위치 또는 텍스트 끝
                         if i + 1 < len(matches):
                             end_pos = matches[i + 1].start()
                         else:
                             end_pos = len(text)
-                        
+
                         page_mapping.append({
                             "page_num": page_num,
                             "start_pos": start_pos,
@@ -1905,34 +1947,34 @@ class RAGService:
                         })
                 else:
                     page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
-            
+
             else:
                 # 텍스트 파일이나 기타 형식: 줄 수 기준으로 가상 페이지 생성 (1000줄당 1페이지)
                 lines = text.split('\n')
                 lines_per_page = 1000
                 total_lines = len(lines)
-                
+
                 if total_lines <= lines_per_page:
                     page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
                 else:
                     current_pos = 0
                     page_num = 1
-                    
+
                     for i in range(0, total_lines, lines_per_page):
                         start_line = i
                         end_line = min(i + lines_per_page, total_lines)
-                        
+
                         # 라인 범위를 텍스트 위치로 변환
                         if start_line == 0:
                             start_pos = 0
                         else:
                             start_pos = len('\n'.join(lines[:start_line])) + 1  # +1 for newline
-                        
+
                         if end_line >= total_lines:
                             end_pos = len(text)
                         else:
                             end_pos = len('\n'.join(lines[:end_line]))
-                        
+
                         page_mapping.append({
                             "page_num": page_num,
                             "start_pos": start_pos,
@@ -1941,11 +1983,11 @@ class RAGService:
                             "end_line": end_line
                         })
                         page_num += 1
-                    
+
                     logger.info(f"Created {len(page_mapping)} virtual pages for text file ({total_lines} lines)")
-            
+
             return page_mapping
-            
+
         except Exception as e:
             logger.warning(f"Error extracting page mapping: {e}")
             return [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
@@ -1953,24 +1995,24 @@ class RAGService:
     # DEPRECATED: 이 메서드는 더 이상 사용되지 않습니다. document_processor.chunk_text_with_metadata를 사용하세요.
     def _get_page_number_for_chunk(self, chunk: str, full_text: str, chunk_pos: int, page_mapping: List[Dict[str, Any]]) -> int:
         """청크의 페이지 번호 계산
-        
+
         Args:
             chunk: 청크 텍스트
             full_text: 전체 텍스트
             chunk_pos: 청크의 전체 텍스트 내 위치 (-1이면 찾기 실패)
             page_mapping: 페이지 매핑 정보
-            
+
         Returns:
             페이지 번호
         """
         try:
             if not page_mapping:
                 return 1
-            
+
             # 단일 페이지인 경우
             if len(page_mapping) == 1:
                 return 1
-            
+
             if chunk_pos == -1:
                 # 위치를 찾지 못한 경우 청크 내용으로 추정
                 # 여러 가지 방법으로 위치 찾기 시도
@@ -1979,53 +2021,53 @@ class RAGService:
                     chunk[:50] if len(chunk) > 50 else chunk,    # 첫 50자
                     chunk.split('\n')[0] if '\n' in chunk else chunk[:30],  # 첫 줄 또는 첫 30자
                 ]
-                
+
                 for attempt in search_attempts:
                     if attempt.strip():
                         chunk_pos = full_text.find(attempt.strip())
                         if chunk_pos != -1:
                             break
-                
+
                 if chunk_pos == -1:
                     logger.warning("Could not determine chunk position, defaulting to page 1")
                     return 1
-            
+
             # 청크의 시작, 중간, 끝 위치를 모두 고려
             chunk_start = chunk_pos
             chunk_middle = chunk_pos + len(chunk) // 2
             chunk_end = chunk_pos + len(chunk)
-            
+
             # 세 위치 중 어느 하나라도 페이지 범위에 속하면 해당 페이지로 결정
             for page_info in page_mapping:
                 start_pos = page_info["start_pos"]
                 end_pos = page_info["end_pos"]
-                
+
                 # 청크가 페이지 범위와 겹치는지 확인
-                if (start_pos <= chunk_start < end_pos or 
-                    start_pos <= chunk_middle < end_pos or 
+                if (start_pos <= chunk_start < end_pos or
+                    start_pos <= chunk_middle < end_pos or
                     start_pos <= chunk_end <= end_pos or
                     (chunk_start <= start_pos and chunk_end >= end_pos)):  # 청크가 페이지를 완전히 포함하는 경우
                     return page_info["page_num"]
-            
+
             # 위치 기반으로 찾지 못한 경우, 가장 가까운 페이지 찾기
             min_distance = float('inf')
             closest_page = 1
-            
+
             for page_info in page_mapping:
                 start_pos = page_info["start_pos"]
                 end_pos = page_info["end_pos"]
-                
+
                 # 청크 중간점과 페이지 중간점의 거리 계산
                 page_middle = (start_pos + end_pos) // 2
                 distance = abs(chunk_middle - page_middle)
-                
+
                 if distance < min_distance:
                     min_distance = distance
                     closest_page = page_info["page_num"]
-            
+
             logger.debug(f"Assigned chunk at position {chunk_pos} to closest page {closest_page}")
             return closest_page
-            
+
         except Exception as e:
             logger.warning(f"Error calculating page number for chunk: {e}")
             return 1
