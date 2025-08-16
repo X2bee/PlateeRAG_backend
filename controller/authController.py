@@ -9,6 +9,7 @@ import secrets
 import logging
 from datetime import datetime, timedelta
 from service.database.models.user import User
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("auth-controller")
 

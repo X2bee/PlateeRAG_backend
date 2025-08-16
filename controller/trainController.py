@@ -17,24 +17,10 @@ from controller.controller_helper import extract_user_id_from_request
 from datetime import datetime
 from service.database.models.train import TrainMeta
 from controller.vastController import CreateInstanceRequest, get_vast_service, _broadcast_status_change
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("train-controller")
 router = APIRouter(prefix="/api/train", tags=["training"])
-
-def get_db_manager(request: Request):
-    """데이터베이스 매니저 의존성 주입"""
-    if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
-        return request.app.state.app_db
-    else:
-        raise HTTPException(status_code=500, detail="Database connection not available")
-
-def get_config_composer(request: Request):
-    """request.app.state에서 config_composer 가져오기"""
-    if hasattr(request.app.state, 'config_composer') and request.app.state.config_composer:
-        return request.app.state.config_composer
-    else:
-        from config.config_composer import config_composer
-        return config_composer
 
 # ========== Request Models ==========
 class MLFlowParams(BaseModel):

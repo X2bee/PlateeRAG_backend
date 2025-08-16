@@ -14,6 +14,7 @@ import json
 import asyncio
 from urllib import request as urllib_request
 from service.vast.vast_service import VastService
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 router = APIRouter(prefix="/api/vast", tags=["vastAI"])
 logger = logging.getLogger("vast-controller")
@@ -181,22 +182,12 @@ def get_vast_service(request: Request) -> VastService:
     """VastService 인스턴스 생성"""
     try:
         service = request.app.state.vast_service
-
-        # 동기 SSE 브로드캐스트 콜백 설정
         service.set_status_change_callback(_sync_broadcast_status_change)
 
         return service
     except Exception as e:
         logger.error(f"VastService 초기화 실패: {e}")
         raise HTTPException(status_code=500, detail="VastService 초기화 실패")
-
-def get_config_composer(request: Request):
-    """ConfigComposer 인스턴스 가져오기"""
-    try:
-        return request.app.state.config_composer
-    except Exception as e:
-        logger.error(f"ConfigComposer 가져오기 실패: {e}")
-        raise HTTPException(status_code=500, detail="ConfigComposer 초기화 실패")
 
 # ========== SSE 관련 함수들 ==========
 def _sync_broadcast_status_change(instance_id: str, status: str):

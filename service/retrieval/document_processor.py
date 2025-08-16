@@ -7,6 +7,9 @@
 
 import logging
 import re
+import bisect
+import asyncio
+import os
 import base64
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -37,11 +40,25 @@ except ImportError:
     PDFMINER_AVAILABLE = False
 
 try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+    print("✅ pdfplumber available")
+except Exception:
+    PDFPLUMBER_AVAILABLE = False
+
+try:
     from pdf2image import convert_from_path
     PDF2IMAGE_AVAILABLE = True
     print("✅ pdf2image available")
 except ImportError:
     PDF2IMAGE_AVAILABLE = False
+
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+    print("✅ PyMuPDF available")
+except Exception:
+    PYMUPDF_AVAILABLE = False
 
 try:
     from langchain_openai import ChatOpenAI
@@ -219,6 +236,25 @@ class DocumentProcessor:
         # 연속된 줄바꿈을 두 개로 제한
         text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
         return text.strip()
+
+    def _is_text_quality_sufficient(self, text: Optional[str], min_chars: int = 500, min_word_ratio: float = 0.6) -> bool:
+        """간단한 휴리스틱으로 텍스트 품질 판단
+
+        - min_chars 미만이면 낮음
+        - 텍스트 내 알파벳/한글 등 단어 문자의 비율이 낮으면(이미지 OCR 잡음 가능) 낮음
+        """
+        try:
+            if not text:
+                return False
+            if len(text) < min_chars:
+                return False
+            # 단어 문자 비율 (한글/라틴/숫자 등)
+            import re
+            word_chars = re.findall(r"[\w\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]", text)
+            ratio = len(word_chars) / max(1, len(text))
+            return ratio >= min_word_ratio
+        except Exception:
+            return False
     
     def clean_code_text(self, text: str, file_type: str) -> str:
         """코드 텍스트 정리 (코드의 구조를 보존)"""
@@ -533,20 +569,104 @@ class DocumentProcessor:
             # no_model인 경우에만 기본 텍스트 추출
             if provider == 'no_model':
                 logger.info("Using text extraction mode (no_model)")
-                
-                # 1단계: pdfminer 시도
-                if PDFMINER_AVAILABLE:
-                    logger.info(f"Using pdfminer for {file_path}")
+
+                # PyMuPDF 우선 사용: 페이지와 라인 정보를 보다 정확하게 추출
+                if PYMUPDF_AVAILABLE:
                     try:
+                        fitz_text = self._extract_text_from_pdf_fitz(file_path)
+                        if fitz_text and fitz_text.strip():
+                            logger.info(f"Text extracted via PyMuPDF: {len(fitz_text)} chars")
+                            # 품질 검사: 너무 짧거나 문자 비율이 낮으면 pdfplumber/pdfminer로 폴백
+                            if not self._is_text_quality_sufficient(fitz_text):
+                                logger.info("PyMuPDF extraction seems low quality, attempting pdfplumber/pdfminer fallbacks")
+                                # 시도 1: pdfplumber (테이블/레이아웃 보존에 강함)
+                                if PDFPLUMBER_AVAILABLE:
+                                    try:
+                                        import pdfplumber
+                                        with pdfplumber.open(file_path) as pdf:
+                                            pages = [p.extract_text() or "" for p in pdf.pages]
+                                        pb_text = "\n".join(pages).strip()
+                                        if pb_text and self._is_text_quality_sufficient(pb_text):
+                                            logger.info(f"Text extracted via pdfplumber: {len(pb_text)} chars")
+                                            return self.clean_text(pb_text)
+                                        else:
+                                            logger.info("pdfplumber result not sufficient, will try pdfminer")
+                                    except Exception as e:
+                                        logger.warning(f"pdfplumber extraction failed: {e}")
+
+                                # 시도 2: pdfminer layout extraction
+                                if PDFMINER_AVAILABLE:
+                                    try:
+                                        layout_text = await asyncio.to_thread(self._extract_text_from_pdf_layout, file_path)
+                                        if layout_text and layout_text.strip() and self._is_text_quality_sufficient(layout_text):
+                                            logger.info(f"Text extracted via pdfminer layout (after PyMuPDF fallback): {len(layout_text)} chars")
+                                            return self.clean_text(layout_text)
+                                    except Exception as e:
+                                        logger.debug(f"pdfminer fallback failed: {e}")
+
+                            # 기본적으로 PyMuPDF 결과 반환 (품질이 충분하면)
+                            if self._is_text_quality_sufficient(fitz_text):
+                                return fitz_text
+                            else:
+                                # 품질 부족이지만 다른 방법도 실패한 경우 이후 폴백으로 진행
+                                logger.info("PyMuPDF result kept as last-resort; continuing with other fallbacks")
+                    except Exception as e:
+                        logger.warning(f"PyMuPDF extraction failed: {e}")
+                
+                # 1단계: pdfminer를 사용할 수 있으면 layout 기반으로 라인 단위 추출 시도
+                if PDFMINER_AVAILABLE:
+                    logger.info(f"Attempting pdfminer layout extraction for {file_path}")
+                    try:
+                        # layout 기반 라인 추출을 우선 시도
+                        layout_text = await asyncio.to_thread(self._extract_text_from_pdf_layout, file_path)
+                        if layout_text and layout_text.strip():
+                            cleaned_text = self.clean_text(layout_text)
+                            if cleaned_text.strip():
+                                logger.info(f"Text extracted via pdfminer layout: {len(cleaned_text)} chars")
+                                return cleaned_text
+
+                        # layout 실패 시 기존 per-page 병렬 추출로 폴백
+                        try:
+                            pdf_reader = PyPDF2.PdfReader(file_path)
+                            num_pages = len(pdf_reader.pages)
+                        except Exception:
+                            num_pages = None
+
+                        all_text = ""
+                        if num_pages and num_pages > 0:
+                            max_workers = 2
+                            page_texts = await self._extract_pages_pdfminer(file_path, num_pages, max_workers)
+                            for i, page_text in enumerate(page_texts):
+                                if page_text and page_text.strip():
+                                    all_text += f"\n=== 페이지 {i+1} ===\n"
+                                    all_text += page_text + "\n"
+
+                            cleaned_text = self.clean_text(all_text)
+                            if cleaned_text.strip():
+                                logger.info(f"Text extracted per-page via pdfminer: {len(cleaned_text)} chars, pages: {num_pages}")
+                                return cleaned_text
+
+                        # 최후 폴백: 전체 추출
                         text = extract_text(file_path)
                         cleaned_text = self.clean_text(text)
                         if len(cleaned_text.strip()) > 100:
-                            logger.info(f"Text extracted via pdfminer: {len(cleaned_text)} chars")
+                            logger.info(f"Text extracted via pdfminer (full): {len(cleaned_text)} chars")
                             return cleaned_text
                     except Exception as e:
-                        logger.warning(f"pdfminer failed: {e}")
+                        logger.warning(f"pdfminer extraction failed: {e}")
                         
-                # 2단계: PyPDF2 fallback
+                # 2단계: PyMuPDF를 런타임에서 우선 시도하고, 불가능하면 PyPDF2로 폴백
+                try:
+                    import fitz
+                    logger.info("PyMuPDF detected at runtime, attempting extraction via PyMuPDF")
+                    fitz_text = await asyncio.to_thread(self._extract_text_from_pdf_fitz, file_path)
+                    if fitz_text and fitz_text.strip():
+                        logger.info(f"Text extracted via PyMuPDF: {len(fitz_text)} chars")
+                        return fitz_text
+                except Exception as e:
+                    logger.debug(f"PyMuPDF runtime attempt failed or not available: {e}")
+
+                # PyMuPDF가 없거나 실패하면 기존 PyPDF2 fallback 사용
                 logger.info(f"Using PyPDF2 fallback for {file_path}")
                 text = await self._extract_text_from_pdf_fallback(file_path)
                 logger.info(f"Text extracted via PyPDF2: {len(text)} chars")
@@ -573,6 +693,102 @@ class DocumentProcessor:
             else:
                 # 다른 프로바이더인 경우 OCR 시도
                 return await self._extract_text_from_pdf_via_ocr(file_path)
+
+    def _extract_single_page_pdfminer(self, file_path: str, page_number: int) -> Optional[str]:
+        """단일 페이지를 pdfminer로 추출 (동기 실행, to_thread로 래핑됨)"""
+        try:
+            # pdfminer.extract_text은 page_numbers로 집합을 받음
+            page_text = extract_text(file_path, page_numbers={page_number})
+            return page_text
+        except Exception as e:
+            logger.debug(f"pdfminer single page extraction failed for page {page_number}: {e}")
+            return None
+
+    def _extract_text_from_pdf_fitz(self, file_path: str) -> str:
+        """PyMuPDF(fitz)를 사용해 페이지별 텍스트를 추출하고 페이지 마커를 포함한 문자열 반환"""
+        try:
+            import fitz
+            doc = fitz.open(file_path)
+            all_text = ""
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                # get_text("text")는 페이지의 텍스트를 라인 단위로 반환
+                page_text = page.get_text("text")
+                # ensure we preserve original newlines; add page marker
+                all_text += f"\n=== 페이지 {page_num+1} ===\n"
+                all_text += page_text
+                if not page_text.endswith("\n"):
+                    all_text += "\n"
+            doc.close()
+            return all_text
+        except Exception as e:
+            logger.error(f"PyMuPDF extraction error: {e}")
+            raise
+
+    async def _extract_pages_pdfminer(self, file_path: str, num_pages: int, max_workers: int = 4) -> List[Optional[str]]:
+        """여러 페이지를 병렬/배치로 추출하여 리스트로 반환
+
+        Args:
+            file_path: PDF 경로
+            num_pages: 전체 페이지 수
+            max_workers: 병렬 작업 수 (배치 크기)
+        Returns:
+            페이지 인덱스 순서의 텍스트 리스트(실패한 페이지는 None)
+        """
+        results: List[Optional[str]] = [None] * num_pages
+        try:
+            batch_size = max_workers
+            for start in range(0, num_pages, batch_size):
+                batch = list(range(start, min(start + batch_size, num_pages)))
+                tasks = [asyncio.to_thread(self._extract_single_page_pdfminer, file_path, p) for p in batch]
+                try:
+                    completed = await asyncio.gather(*tasks)
+                except Exception as e:
+                    logger.debug(f"Error during concurrent pdfminer page extraction batch {batch}: {e}")
+                    completed = [None] * len(batch)
+
+                for idx, page_text in zip(batch, completed):
+                    results[idx] = page_text
+
+            return results
+        except Exception as e:
+            logger.error(f"Failed to extract pages via pdfminer in batches: {e}")
+            return results
+
+    def _extract_text_from_pdf_layout(self, file_path: str) -> Optional[str]:
+        """pdfminer 레이아웃 분석을 사용해 페이지별 라인 단위로 텍스트를 추출
+
+        반환값은 페이지 마커(=== 페이지 N ===)와 각 라인을 줄바꿈으로 결합한 전체 문자열입니다.
+        """
+        try:
+            # 지역 임포트로 pdfminer 의존성 안전하게 처리
+            from pdfminer.high_level import extract_pages
+            from pdfminer.layout import LTTextContainer, LTTextLine, LAParams
+
+            all_text = ""
+            laparams = LAParams()
+            for page_num, page_layout in enumerate(extract_pages(file_path, laparams=laparams)):
+                lines = []
+                for element in page_layout:
+                    if isinstance(element, LTTextContainer):
+                        for obj in element:
+                            # LTTextLine 또는 하위 요소에서 텍스트 획득
+                            try:
+                                text_line = obj.get_text()
+                            except Exception:
+                                continue
+                            if text_line and text_line.strip():
+                                lines.append(text_line.rstrip('\n'))
+
+                if lines:
+                    all_text += f"\n=== 페이지 {page_num+1} ===\n"
+                    for ln in lines:
+                        all_text += ln + "\n"
+
+            return all_text if all_text.strip() else None
+        except Exception as e:
+            logger.debug(f"PDF layout extraction failed: {e}")
+            return None
 
     async def _extract_text_from_pdf_fallback(self, file_path: str) -> str:
         """PDF 파일에서 텍스트 추출 (PyPDF2 fallback)"""
@@ -788,11 +1004,17 @@ class DocumentProcessor:
             doc = Document(file_path)
             text = ""
             processed_tables = set()  # 중복 처리 방지
+            current_page = 1
             
             # 방법 1: 문서의 모든 요소를 순서대로 처리 (고급 방법)
             try:
                 for element in doc.element.body:
                     if element.tag.endswith('p'):  # 단락(paragraph)
+                        # 페이지 브레이크 체크
+                        if self._has_page_break(element):
+                            current_page += 1
+                            text += f"\n=== 페이지 {current_page} ===\n"
+                        
                         para_text = self._extract_paragraph_text(element, doc)
                         if para_text.strip():
                             text += para_text + "\n"
@@ -808,7 +1030,13 @@ class DocumentProcessor:
                 logger.warning(f"Advanced parsing failed, falling back to simple method: {e}")
                 # Fallback: 간단한 방법으로 모든 단락 추출
                 text = ""
+                current_page = 1
                 for paragraph in doc.paragraphs:
+                    # 페이지 브레이크 체크 (간단한 방법)
+                    if self._paragraph_has_page_break(paragraph):
+                        current_page += 1
+                        text += f"\n=== 페이지 {current_page} ===\n"
+                    
                     if paragraph.text.strip():
                         text += paragraph.text + "\n"
             
@@ -826,7 +1054,12 @@ class DocumentProcessor:
                         text += f"\n=== 표 {i+1} ===\n" + table_text + "\n=== 표 끝 ===\n\n"
                         processed_tables.add(table_text)
             
-            logger.info(f"Extracted {len(processed_tables)} tables from DOCX")
+            logger.info(f"Extracted {len(processed_tables)} tables from DOCX, detected {current_page} pages")
+            
+            # 첫 번째 페이지 헤더 추가 (페이지가 여러 개인 경우)
+            if current_page > 1 and not text.startswith("=== 페이지 1 ==="):
+                text = f"=== 페이지 1 ===\n{text}"
+            
             return self.clean_text(text)
         except Exception as e:
             logger.error(f"Error extracting text from DOCX {file_path}: {e}")
@@ -1250,6 +1483,357 @@ class DocumentProcessor:
             logger.debug(f"Error extracting simple table text: {e}")
             return ""
     
+    def _has_page_break(self, element) -> bool:
+        """XML 요소에서 페이지 브레이크 확인"""
+        try:
+            # Word XML에서 페이지 브레이크 확인
+            # w:br 요소의 w:type이 "page"인 경우
+            nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+            
+            # 페이지 브레이크 찾기
+            page_breaks = element.findall('.//w:br[@w:type="page"]', nsmap)
+            if page_breaks:
+                return True
+                
+            # lastRenderedPageBreak도 확인
+            last_page_breaks = element.findall('.//w:lastRenderedPageBreak', nsmap)
+            if last_page_breaks:
+                return True
+                
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking page break: {e}")
+            return False
+    
+    def _paragraph_has_page_break(self, paragraph) -> bool:
+        """python-docx Paragraph 객체에서 페이지 브레이크 확인"""
+        try:
+            # paragraph의 runs을 검사하여 페이지 브레이크 찾기
+            for run in paragraph.runs:
+                if run.element.findall('.//w:br[@w:type="page"]', 
+                                     {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
+                    return True
+                    
+            # paragraph._element를 직접 검사
+            if hasattr(paragraph, '_element'):
+                return self._has_page_break(paragraph._element)
+                
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking paragraph page break: {e}")
+            return False
+    
+    def _extract_page_mapping(self, text: str, file_extension: str) -> List[Dict[str, Any]]:
+        """텍스트에서 페이지 정보 추출
+        
+        Args:
+            text: 원본 텍스트
+            file_extension: 파일 확장자
+            
+        Returns:
+            페이지 정보 리스트 [{"page_num": 1, "start_pos": 0, "end_pos": 100}, ...]
+        """
+        try:
+            page_mapping = []
+            
+            # PDF, PPT, DOCX에서 페이지 구분자 패턴 찾기
+            if file_extension in ['pdf', 'ppt', 'pptx', 'docx', 'doc']:
+                import re
+                
+                # 페이지 구분자 패턴들
+                patterns = [
+                    r'=== 페이지 (\d+) ===',  # PDF PyPDF2 fallback, DOCX 기본 텍스트 추출
+                    r'=== 페이지 (\d+) \(OCR\) ===',  # PDF OCR
+                    r'=== 슬라이드 (\d+) ===',  # PPT 기본
+                    r'=== 슬라이드 (\d+) \(OCR\) ===',  # PPT OCR
+                ]
+                
+                found_pages = False
+                for pattern in patterns:
+                    matches = list(re.finditer(pattern, text))
+                    if matches:
+                        logger.info(f"Found {len(matches)} page markers with pattern: {pattern}")
+                        
+                        for i, match in enumerate(matches):
+                            page_num = int(match.group(1))
+                            start_pos = match.end()  # 페이지 제목 다음부터
+                            
+                            # 다음 페이지의 시작 위치 또는 텍스트 끝
+                            if i + 1 < len(matches):
+                                end_pos = matches[i + 1].start()
+                            else:
+                                end_pos = len(text)
+                            
+                            page_mapping.append({
+                                "page_num": page_num,
+                                "start_pos": start_pos,
+                                "end_pos": end_pos
+                            })
+                        
+                        # 페이지 번호 순으로 정렬
+                        page_mapping.sort(key=lambda x: x["page_num"])
+                        found_pages = True
+                        break
+                
+                if not found_pages and file_extension in ['docx', 'doc']:
+                    # OCR 페이지 구분자도 없으면 텍스트 길이 기준으로 가상 페이지 생성
+                    # DOCX의 경우 대략 1500자당 1페이지로 추정
+                    chars_per_page = 1500
+                    text_length = len(text)
+                    
+                    if text_length > chars_per_page:
+                        estimated_pages = (text_length + chars_per_page - 1) // chars_per_page
+                        logger.info(f"Creating {estimated_pages} virtual pages for DOCX based on text length ({text_length} chars)")
+                        
+                        for page_num in range(1, estimated_pages + 1):
+                            start_pos = (page_num - 1) * chars_per_page
+                            end_pos = min(page_num * chars_per_page, text_length)
+                            
+                            page_mapping.append({
+                                "page_num": page_num,
+                                "start_pos": start_pos,
+                                "end_pos": end_pos
+                            })
+                        found_pages = True
+                
+                if not found_pages:
+                    logger.info("No page markers found, treating as single page document")
+                    page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
+            
+            elif file_extension in ['xlsx', 'xls']:
+                # Excel: 시트별로 페이지 구분
+                import re
+                sheet_pattern = r'=== 시트: ([^=]+) ==='
+                matches = list(re.finditer(sheet_pattern, text))
+                
+                if matches:
+                    for i, match in enumerate(matches):
+                        sheet_name = match.group(1).strip()
+                        start_pos = match.end()
+                        
+                        if i + 1 < len(matches):
+                            end_pos = matches[i + 1].start()
+                        else:
+                            end_pos = len(text)
+                        
+                        page_mapping.append({
+                            "page_num": i + 1,
+                            "start_pos": start_pos,
+                            "end_pos": end_pos,
+                            "sheet_name": sheet_name
+                        })
+                else:
+                    page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
+            
+            else:
+                # 기타 파일: 1000줄당 1페이지로 가상 페이지 생성
+                lines = text.split('\n')
+                lines_per_page = 1000
+                
+                if len(lines) > lines_per_page:
+                    page_count = (len(lines) + lines_per_page - 1) // lines_per_page
+                    current_pos = 0
+                    
+                    for page_num in range(1, page_count + 1):
+                        start_line = (page_num - 1) * lines_per_page
+                        end_line = min(page_num * lines_per_page, len(lines))
+                        
+                        page_text = '\n'.join(lines[start_line:end_line])
+                        start_pos = current_pos
+                        end_pos = current_pos + len(page_text)
+                        
+                        page_mapping.append({
+                            "page_num": page_num,
+                            "start_pos": start_pos,
+                            "end_pos": end_pos
+                        })
+                        
+                        current_pos = end_pos + 1  # +1 for the newline
+                else:
+                    page_mapping = [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
+            
+            return page_mapping
+            
+        except Exception as e:
+            logger.error(f"Failed to extract page mapping: {e}")
+            return [{"page_num": 1, "start_pos": 0, "end_pos": len(text)}]
+    
+    def _find_chunk_position(self, chunk: str, full_text: str, start_pos: int = 0) -> int:
+        """청크의 전체 텍스트 내 위치 찾기"""
+        try:
+            # 1차: 전체 청크 텍스트로 검색
+            pos = full_text.find(chunk, start_pos)
+            if pos != -1:
+                return pos
+            
+            # 2차: 청크의 첫 줄로 검색 (10자 이상인 경우만)
+            chunk_lines = chunk.strip().split('\n')
+            if chunk_lines and len(chunk_lines[0]) >= 10:
+                first_line = chunk_lines[0].strip()
+                pos = full_text.find(first_line, start_pos)
+                if pos != -1:
+                    # 실제 청크 시작 위치 재탐색
+                    chunk_start = full_text.find(chunk[:50] if len(chunk) > 50 else chunk, pos)
+                    if chunk_start != -1:
+                        return chunk_start
+                    return pos
+            
+            # 3차: 청크의 첫 50자로 검색 (10자 이상인 경우만)
+            if len(chunk.strip()) >= 10:
+                chunk_start = chunk.strip()[:50]
+                pos = full_text.find(chunk_start, start_pos)
+                if pos != -1:
+                    return pos
+            
+            return -1
+            
+        except Exception as e:
+            logger.debug(f"Error finding chunk position: {e}")
+            return -1
+    
+    def _build_line_starts(self, text: str) -> List[int]:
+        """텍스트에서 각 라인의 시작 인덱스 리스트 생성"""
+        try:
+            starts = [0]
+            for idx, ch in enumerate(text):
+                if ch == '\n':
+                    # 다음 문자 인덱스가 라인 시작
+                    if idx + 1 < len(text):
+                        starts.append(idx + 1)
+            return starts
+        except Exception as e:
+            logger.debug(f"Error building line starts: {e}")
+            return [0]
+
+    def _build_line_offset_table(self, text: str, file_extension: str) -> List[Dict[str, int]]:
+        """텍스트에서 각 라인의 글로벌 오프셋(start/end)과 페이지 정보를 포함한 테이블 생성
+
+        반환값: [{"line_num": 1, "start": 0, "end": 10, "page": 1}, ...]
+        """
+        try:
+            lines = text.split('\n')
+            table: List[Dict[str, int]] = []
+            pos = 0
+
+            # 페이지 매핑을 미리 생성해두면 라인별로 페이지를 빠르게 찾을 수 있음
+            page_mapping = self._extract_page_mapping(text, file_extension)
+
+            def _page_for_pos(p: int) -> int:
+                try:
+                    for pinfo in page_mapping:
+                        if pinfo["start_pos"] <= p < pinfo["end_pos"]:
+                            return pinfo["page_num"]
+                except Exception:
+                    pass
+                return 1
+
+            for i, line in enumerate(lines):
+                start = pos
+                end = pos + len(line)
+                mid = start + max(0, (end - start) // 2)
+                page = _page_for_pos(mid)
+
+                table.append({
+                    "line_num": i + 1,
+                    "start": start,
+                    "end": end,
+                    "page": page,
+                })
+
+                # +1 for the '\n' character that was removed by split (except maybe last line)
+                pos = end + 1
+
+            return table
+        except Exception as e:
+            logger.debug(f"Error building line offset table: {e}")
+            return [{"line_num": 1, "start": 0, "end": len(text), "page": 1}]
+
+    def _find_line_index_by_pos(self, pos: int, line_table: List[Dict[str, int]]) -> int:
+        """이분탐색으로 위치에 해당하는 라인 인덱스(0-based)를 반환"""
+        try:
+            if not line_table:
+                return 0
+            starts = [l["start"] for l in line_table]
+            idx = bisect.bisect_right(starts, pos) - 1
+            if idx < 0:
+                return 0
+            return min(idx, len(line_table) - 1)
+        except Exception as e:
+            logger.debug(f"Error finding line index by pos: {e}")
+            return 0
+
+    def _build_sentence_starts(self, text: str) -> List[int]:
+        """문장 단위로 텍스트를 분리해 각 문장의 시작 인덱스 리스트를 생성
+
+        한국어의 경우 문장 종결어미(예: '다.')를 기준으로 분리하여
+        문장 단위의 라인 번호를 제공함으로써 PDF에서의 시각적 라인과
+        유사한 구분을 얻습니다.
+        """
+        try:
+            starts: List[int] = []
+            if not text:
+                return [0]
+
+            # 정규식: 가능한 문장 종결 패턴(다. 또는 영어권 . ? !)을 포괄
+            # non-greedy로 문장 단위를 캡쳐
+            pattern = re.compile(r'.*?(?:다\.|[.?!])(?=\s+|$)', re.DOTALL)
+            pos = 0
+            for m in pattern.finditer(text):
+                start = m.start()
+                # 첫 문장의 시작이 0이 아닐 수 있으므로 보장
+                if not starts or start != starts[-1]:
+                    starts.append(start)
+                pos = m.end()
+
+            # 남은 텍스트가 있으면 마지막 시작 추가
+            if not starts:
+                return [0]
+            # Ensure first is 0
+            if starts[0] != 0:
+                starts.insert(0, 0)
+            return starts
+        except Exception as e:
+            logger.debug(f"Error building sentence starts: {e}")
+            return [0]
+
+    def _pos_to_line(self, pos: int, line_starts: List[int]) -> int:
+        """문자열의 포지션을 라인 번호(1-based)로 변환"""
+        try:
+            if pos < 0:
+                return 1
+            # bisect로 가장 큰 start <= pos를 찾음
+            idx = bisect.bisect_right(line_starts, pos) - 1
+            return max(1, idx + 1)
+        except Exception as e:
+            logger.debug(f"Error mapping pos to line: {e}")
+            return 1
+    
+    def _get_page_number_for_chunk(self, chunk: str, chunk_pos: int, page_mapping: List[Dict[str, Any]]) -> int:
+        """청크의 페이지 번호 계산"""
+        try:
+            if not page_mapping:
+                return 1
+            
+            if chunk_pos == -1:
+                # 위치를 찾지 못한 경우 첫 번째 페이지로 설정
+                return 1
+            
+            # 청크의 중간 위치를 기준으로 페이지 결정
+            chunk_mid_pos = chunk_pos + len(chunk) // 2
+            
+            for page_info in page_mapping:
+                if page_info["start_pos"] <= chunk_mid_pos < page_info["end_pos"]:
+                    return page_info["page_num"]
+            
+            # 매핑에서 찾지 못한 경우 가장 가까운 페이지 선택
+            closest_page = min(page_mapping, key=lambda p: abs(p["start_pos"] - chunk_pos))
+            logger.debug(f"Chunk position {chunk_pos} not in any page range, using closest page {closest_page['page_num']}")
+            return closest_page["page_num"]
+            
+        except Exception as e:
+            logger.error(f"Error calculating page number for chunk: {e}")
+            return 1
+    
     async def extract_text_from_file(self, file_path: str, file_extension: str) -> str:
         """파일에서 텍스트 추출"""
         category = self.get_file_category(file_extension)
@@ -1412,9 +1996,9 @@ class DocumentProcessor:
                         
                     logger.info(f"Processing major section {i+1}/{len(major_sections)}")
                     
-                    # 각 섹션이 chunk_size보다 작으면 그대로 사용
+                    # 각 섹션이 chunk_size보다 작으면 원본(공백 포함) 그대로 사용
                     if len(section) <= chunk_size:
-                        all_chunks.append(section.strip())
+                        all_chunks.append(section)
                     else:
                         # 큰 섹션은 추가로 청킹
                         text_splitter = RecursiveCharacterTextSplitter(
@@ -1444,6 +2028,76 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"Error chunking text: {e}")
             raise
+    
+    def chunk_text_with_metadata(self, text: str, file_extension: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> List[Dict[str, Any]]:
+        """텍스트를 청크로 분할하고 각 청크의 메타데이터(페이지, 라인 정보) 포함
+        
+        Args:
+            text: 원본 텍스트
+            file_extension: 파일 확장자
+            chunk_size: 청크 크기
+            chunk_overlap: 청크 간 겹침 크기
+            
+        Returns:
+            청크별 메타데이터 리스트 [{"text": str, "page_number": int, "line_start": int, "line_end": int}, ...]
+        """
+        try:
+            # 1. 오프셋 기반으로 청크 생성 (문자 오프셋 기준)
+            text_len = len(text)
+            if chunk_size <= 0:
+                raise ValueError("chunk_size must be > 0")
+
+            # 안전한 overlap
+            if chunk_overlap >= chunk_size:
+                chunk_overlap = max(1, chunk_size - 1)
+
+            chunks_with_metadata = []
+            line_table = self._build_line_offset_table(text, file_extension)
+            page_mapping = self._extract_page_mapping(text, file_extension)
+
+            start = 0
+            idx = 0
+            step = chunk_size - chunk_overlap
+            while start < text_len:
+                end = min(start + chunk_size, text_len)
+                chunk_text = text[start:end]
+
+                # 글로벌 오프셋
+                global_start = start
+                global_end = end - 1 if end > 0 else 0
+
+                # 라인 인덱스 매핑
+                start_line_idx = self._find_line_index_by_pos(global_start, line_table)
+                end_line_idx = self._find_line_index_by_pos(global_end, line_table)
+
+                line_start = line_table[start_line_idx]["line_num"]
+                line_end = line_table[end_line_idx]["line_num"]
+
+                # 페이지는 시작 위치 기준
+                page_number = line_table[start_line_idx].get("page", 1)
+
+                chunks_with_metadata.append({
+                    "text": chunk_text,
+                    "page_number": page_number,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                    "global_start": global_start,
+                    "global_end": global_end,
+                    "chunk_index": idx
+                })
+
+                idx += 1
+                start += step
+            
+            logger.info(f"Created {len(chunks_with_metadata)} chunks with metadata for {file_extension} file")
+            return chunks_with_metadata
+            
+        except Exception as e:
+            logger.error(f"Failed to chunk text with metadata: {e}")
+            # 실패 시 기본 청크만 반환
+            chunks = self.chunk_text(text, chunk_size, chunk_overlap)
+            return [{"text": chunk, "page_number": 1, "line_start": i+1, "line_end": i+1, "chunk_index": i} 
+                   for i, chunk in enumerate(chunks)]
     
     def chunk_code_text(self, text: str, file_type: str, chunk_size: int = 1500, chunk_overlap: int = 300) -> List[str]:
         """코드 텍스트를 청크로 분할 (언어별 구문 구조를 고려한 분할)

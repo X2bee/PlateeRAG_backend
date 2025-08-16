@@ -20,6 +20,7 @@ from service.database.models.user import User
 from service.database.models.executor import ExecutionMeta, ExecutionIO
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.performance import NodePerformance
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 import uuid
 import time
@@ -47,19 +48,6 @@ def extract_collection_name(collection_full_name: str) -> str:
 
     return clean_name
 
-def get_db_manager(request: Request):
-    """데이터베이스 매니저 의존성 주입"""
-    if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
-        return request.app.state.app_db
-    else:
-        raise HTTPException(status_code=500, detail="Database connection not available")
-
-def get_rag_service(request: Request):
-    """RAG 서비스 의존성 주입"""
-    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
-        return request.app.state.rag_service
-    else:
-        raise HTTPException(status_code=500, detail="RAG service not available")
 
 @router.get("/list")
 async def list_workflows(request: Request):

@@ -70,13 +70,24 @@ class AgentOpenAIStreamNode(Node):
 
             additional_rag_context = ""
             if rag_context:
-                if rag_context['search_params']['use_model_prompt']:
-                    query = rag_context['search_params']['embedding_model_prompt'] + text
+                # rag_context.search_params에서 옵션을 지원 (rerank 등)
+                search_params = rag_context.get('search_params', {})
+                rerank_flag = search_params.get('rerank', False)
+                rerank_top_k = search_params.get('rerank_top_k', search_params.get('top_k', 20))
+
+                # use_model_prompt 옵션 처리
+                if search_params.get('use_model_prompt', False):
+                    query = search_params.get('embedding_model_prompt', '') + text
+                else:
+                    query = text
+
                 search_result = sync_run_async(rag_context['rag_service'].search_documents(
-                    collection_name=rag_context['search_params']['collection_name'],
+                    collection_name=search_params.get('collection_name'),
                     query_text=query,
-                    limit=rag_context['search_params']['top_k'],
-                    score_threshold=rag_context['search_params']['score_threshold']
+                    limit=search_params.get('top_k', 5),
+                    score_threshold=search_params.get('score_threshold', 0.7),
+                    rerank=rerank_flag,
+                    rerank_top_k=rerank_top_k
                 ))
                 results = search_result.get("results", [])
                 if results:

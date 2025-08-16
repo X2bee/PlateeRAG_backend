@@ -12,24 +12,10 @@ import logging
 
 from service.database.models.user import User
 from service.retrieval import RAGService
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("app-controller")
 router = APIRouter(prefix="/app", tags=["app"])
-
-def get_rag_service(request: Request) -> RAGService:
-    """RAG 서비스 의존성 주입"""
-    if hasattr(request.app.state, 'rag_service') and request.app.state.rag_service:
-        return request.app.state.rag_service
-    else:
-        raise HTTPException(status_code=500, detail="RAG service not initialized")
-
-def get_config_composer(request: Request):
-    """request.app.state에서 config_composer 가져오기"""
-    if hasattr(request.app.state, 'config_composer') and request.app.state.config_composer:
-        return request.app.state.config_composer
-    else:
-        from config.config_composer import config_composer
-        return config_composer
 
 class ConfigUpdateRequest(BaseModel):
     value: Any
@@ -385,6 +371,7 @@ async def get_rag_config(request: Request):
     try:
         if config_composer:
             vectordb_config = config_composer.get_config_by_category_name("vectordb")
+            huggingface_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value
 
             return {
                 "vectordb": {
@@ -406,7 +393,7 @@ async def get_rag_config(request: Request):
                     },
                     "huggingface": {
                         "model_name": vectordb_config.HUGGINGFACE_MODEL_NAME.value,
-                        "api_key_configured": bool(vectordb_config.HUGGINGFACE_API_KEY.value)
+                        "api_key_configured": bool(huggingface_token)
                     },
                     "custom_http": {
                         "url": vectordb_config.CUSTOM_EMBEDDING_URL.value,

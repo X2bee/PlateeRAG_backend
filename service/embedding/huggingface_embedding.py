@@ -41,6 +41,7 @@ class HuggingFaceEmbedding(BaseEmbedding):
                     self.model_device == 'gpu' or
                     self.model_device == 'cuda'
                 )
+                logger.info(f"Using device: {self.model_device} (GPU: {is_gpu_device})")
                 device = 'cuda' if is_gpu_device else 'cpu'
                 self.model = SentenceTransformer(
                     self.model_name,
@@ -61,6 +62,7 @@ class HuggingFaceEmbedding(BaseEmbedding):
 
                 # 대체 모델 시도
                 fallback_models = [
+                    "Qwen/Qwen3-Embedding-0.6B",
                     "sentence-transformers/all-MiniLM-L6-v2",
                     "sentence-transformers/paraphrase-MiniLM-L6-v2",
                     "sentence-transformers/all-mpnet-base-v2",
@@ -71,8 +73,15 @@ class HuggingFaceEmbedding(BaseEmbedding):
                 for fallback_model in fallback_models:
                     if fallback_model != self.model_name:
                         try:
+                            is_gpu_device = (
+                                self.model_device == 'gpu' or
+                                self.model_device == 'cuda'
+                            )
+                            logger.info(f"Using device: {self.model_device} (GPU: {is_gpu_device})")
+                            device = 'cuda' if is_gpu_device else 'cpu'
+                            logger.info(f"Model loaded on ==={device}=== device")
                             logger.info(f"Trying fallback model: {fallback_model}")
-                            self.model = SentenceTransformer(fallback_model, device='cpu')
+                            self.model = SentenceTransformer(fallback_model, device=device)
                             self.model_name = fallback_model  # 성공한 모델명으로 업데이트
 
                             # 차원 수 확인

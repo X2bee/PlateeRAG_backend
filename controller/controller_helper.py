@@ -190,3 +190,4 @@ def check_token_validity(token: str, app_state) -> bool:
     except Exception:
         logger.warning("Token validity check failed")
         return False
+

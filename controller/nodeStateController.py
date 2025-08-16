@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Dict, Any
 import logging
+from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("node-controller-state")
 router = APIRouter(prefix="/api/node-state", tags=["node-state"])
@@ -15,7 +16,7 @@ async def get_node_registry_from_state(request: Request):
         # app.state에서 직접 접근
         node_registry = request.app.state.node_registry
         node_count = request.app.state.node_count
-        
+
         return {
             "status": "success",
             "source": "app.state",
@@ -23,7 +24,7 @@ async def get_node_registry_from_state(request: Request):
             "available_nodes": [node["id"] for node in node_registry],
             "registry_data": node_registry
         }
-        
+
     except AttributeError as e:
         logger.error(f"app.state attributes not found: {e}")
         raise HTTPException(status_code=500, detail="Node registry not initialized in app.state")
@@ -38,7 +39,7 @@ async def get_all_nodes_from_state(request: Request):
     """
     try:
         return request.app.state.node_registry
-        
+
     except AttributeError:
         raise HTTPException(status_code=500, detail="Node registry not initialized in app.state")
     except Exception as e:
@@ -52,13 +53,13 @@ async def get_node_by_id_from_state(node_id: str, request: Request):
     """
     try:
         node_registry = request.app.state.node_registry
-        
+
         for node in node_registry:
             if node["id"] == node_id:
                 return node
-        
+
         raise HTTPException(status_code=404, detail=f"Node with id '{node_id}' not found")
-        
+
     except AttributeError:
         raise HTTPException(status_code=500, detail="Node registry not initialized in app.state")
     except HTTPException:
@@ -81,16 +82,16 @@ async def search_nodes_from_state(
     try:
         node_registry = request.app.state.node_registry
         filtered_nodes = node_registry.copy()
-        
+
         # query로 description과 nodeName 검색
         if query:
             query_lower = query.lower()
             filtered_nodes = [
                 node for node in filtered_nodes
-                if query_lower in node.get("description", "").lower() or 
+                if query_lower in node.get("description", "").lower() or
                    query_lower in node.get("nodeName", "").lower()
             ]
-        
+
         # tags로 필터링
         if tags:
             search_tags = [tag.strip().lower() for tag in tags.split(",")]
@@ -101,23 +102,23 @@ async def search_nodes_from_state(
                     for search_tag in search_tags
                 )
             ]
-        
+
         # category로 필터링
         if category:
             filtered_nodes = [
                 node for node in filtered_nodes
                 if node.get("categoryId", "").lower() == category.lower()
             ]
-        
+
         # function으로 필터링
         if function:
             filtered_nodes = [
                 node for node in filtered_nodes
                 if node.get("functionId", "").lower() == function.lower()
             ]
-        
+
         return filtered_nodes
-        
+
     except AttributeError:
         raise HTTPException(status_code=500, detail="Node registry not initialized in app.state")
     except Exception as e:
@@ -131,20 +132,20 @@ async def get_categorized_parameters_from_state(node_id: str, request: Request):
     """
     try:
         node_registry = request.app.state.node_registry
-        
+
         for node in node_registry:
             if node["id"] == node_id:
                 parameters = node.get("parameters", [])
-                
+
                 basic_params = []
                 advanced_params = []
-                
+
                 for param in parameters:
                     if param.get("optional", False):
                         advanced_params.append(param)
                     else:
                         basic_params.append(param)
-                
+
                 return {
                     "node_id": node_id,
                     "node_name": node.get("nodeName", ""),
@@ -154,9 +155,9 @@ async def get_categorized_parameters_from_state(node_id: str, request: Request):
                     "has_advanced": len(advanced_params) > 0,
                     "source": "app.state"
                 }
-        
+
         raise HTTPException(status_code=404, detail=f"Node with id '{node_id}' not found")
-        
+
     except AttributeError:
         raise HTTPException(status_code=500, detail="Node registry not initialized in app.state")
     except HTTPException:
@@ -172,23 +173,23 @@ async def refresh_node_registry(request: Request):
     """
     try:
         from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
-        
+
         # 노드 재발견
         logger.info("Refreshing node registry...")
         run_discovery()
         generate_json_spec("constants/exported_nodes.json")
-        
+
         # app.state 업데이트
         request.app.state.node_registry = get_node_registry()
         request.app.state.node_count = len(request.app.state.node_registry)
-        
+
         return {
             "status": "success",
             "message": "Node registry refreshed successfully",
             "node_count": request.app.state.node_count,
             "timestamp": "refreshed"
         }
-        
+
     except Exception as e:
         logger.error(f"Error refreshing node registry: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
