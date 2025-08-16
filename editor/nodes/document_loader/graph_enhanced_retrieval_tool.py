@@ -50,9 +50,7 @@ class GraphEnhancedRetrievalTool(Node):
         # Graph enhancement parameters
         {"id": "enable_graph_expansion", "name": "Enable Graph Expansion", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "그래프 네트워크를 통한 검색 확장을 활성화합니다."},
         {"id": "expansion_depth", "name": "Expansion Depth", "type": "INT", "value": 1, "required": False, "optional": True, "min": 1, "max": 3, "step": 1, "description": "그래프 확장 깊이 (홉 수)"},
-        {"id": "concept_boost_weight", "name": "Concept Boost Weight", "type": "FLOAT", "value": 0.3, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1, "description": "개념 매칭 보너스 가중치"},
         {"id": "expansion_threshold", "name": "Expansion Threshold", "type": "FLOAT", "value": 0.3, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1, "description": "그래프 확장 포함 임계값"},
-        {"id": "enable_concept_rerank", "name": "Enable Concept Reranking", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "개념 기반 재순위를 활성화합니다."},
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
@@ -159,35 +157,6 @@ class GraphEnhancedRetrievalTool(Node):
 
         return list(related_chunks)
 
-    def calculate_concept_similarity(self, query_concepts: List[str], chunk_concepts: Dict[str, List[str]]) -> float:
-        """쿼리 개념과 청크 개념 간의 유사도 계산"""
-        if not query_concepts:
-            return 0.0
-
-        query_set = set(concept.lower() for concept in query_concepts)
-        total_matches = 0
-        total_chunk_concepts = 0
-
-        # 관계 타입별 가중치
-        type_weights = {
-            "entity": 1.0,
-            "main_concept": 1.2,
-            "topic": 0.8,
-            "keyword": 0.6
-        }
-
-        for rel_type, concept_list in chunk_concepts.items():
-            weight = type_weights.get(rel_type, 1.0)
-            chunk_concept_set = set(concept.lower() for concept in concept_list)
-            matches = len(query_set.intersection(chunk_concept_set))
-            total_matches += matches * weight
-            total_chunk_concepts += len(concept_list) * weight
-
-        if total_chunk_concepts == 0:
-            return 0.0
-
-        return total_matches / max(len(query_concepts), total_chunk_concepts)
-
     def execute(self, *args, **kwargs):
         # 파라미터 추출
         tool_name = kwargs.get("tool_name", "graph_enhanced_search")
@@ -201,10 +170,8 @@ class GraphEnhancedRetrievalTool(Node):
         rerank_top_k = kwargs.get("rerank_top_k", 5)
         enable_graph_expansion = kwargs.get("enable_graph_expansion", True)
         expansion_depth = kwargs.get("expansion_depth", 1)
-        concept_boost_weight = kwargs.get("concept_boost_weight", 0.3)
         expansion_threshold = kwargs.get("expansion_threshold", 0.3)
         relation_types = kwargs.get("relation_types", "entity,main_concept,topic,keyword")
-        enable_concept_rerank = kwargs.get("enable_concept_rerank", True)
 
         def create_graph_enhanced_tool():
             @tool(tool_name, description=description)
@@ -280,18 +247,48 @@ class GraphEnhancedRetrievalTool(Node):
 
                             for point in points:
                                 if point.payload and point.payload.get("chunk_text"):
-                                    # 확장된 청크의 개념들과 원본 개념들의 겹치는 정도 계산
+                                    # 확장된 청크의 개념들과 원본 개념들의 관계 타입별 겹치는 정도 계산
                                     expanded_concepts = self.get_chunk_concepts(point.id, collection_name, app_db, parsed_relation_types)
-                                    expanded_concept_set = set()
-                                    for concept_list in expanded_concepts.values():
-                                        expanded_concept_set.update(concept_list)
 
-                                    # 개념 겹치는 비율 계산
-                                    if original_concepts and expanded_concept_set:
-                                        overlap_ratio = len(original_concepts.intersection(expanded_concept_set)) / len(original_concepts.union(expanded_concept_set))
-                                        expansion_score = overlap_ratio
-                                    else:
-                                        expansion_score = 0.0
+                                    # 관계 타입별 가중치
+                                    type_weights = {
+                                        "entity": 1.4,
+                                        "main_concept": 1.2,
+                                        "topic": 0.7,
+                                        "keyword": 0.7
+                                    }
+
+                                    # 관계 타입별 개별 점수 계산
+                                    type_scores = {}
+                                    total_weighted_score = 0.0
+                                    total_weight = 0.0
+
+                                    for rel_type in parsed_relation_types:
+                                        # 원본 개념들에서 해당 타입만 추출
+                                        original_type_concepts = set()
+                                        for result in results:
+                                            orig_concepts = self.get_chunk_concepts(result.get("id"), collection_name, app_db, [rel_type])
+                                            if rel_type in orig_concepts:
+                                                original_type_concepts.update(orig_concepts[rel_type])
+
+                                        # 확장된 청크에서 해당 타입 개념들
+                                        expanded_type_concepts = set(expanded_concepts.get(rel_type, []))
+
+                                        # 타입별 Jaccard 유사도 계산
+                                        if original_type_concepts and expanded_type_concepts:
+                                            intersection = len(original_type_concepts.intersection(expanded_type_concepts))
+                                            union = len(original_type_concepts.union(expanded_type_concepts))
+                                            type_score = intersection / union if union > 0 else 0.0
+                                        else:
+                                            type_score = 0.0
+
+                                        type_scores[rel_type] = type_score
+                                        weight = type_weights.get(rel_type, 1.0)
+                                        total_weighted_score += type_score * weight
+                                        total_weight += weight
+
+                                    # 최종 확장 점수 (가중 평균)
+                                    expansion_score = total_weighted_score / total_weight if total_weight > 0 else 0.0
 
                                     # threshold 넘는 것만 포함
                                     if expansion_score >= expansion_threshold:
@@ -302,47 +299,23 @@ class GraphEnhancedRetrievalTool(Node):
                                             "file_name": point.payload.get("file_name", ""),
                                             "chunk_index": point.payload.get("chunk_index", 0),
                                             "is_expanded": True,
-                                            "concept_overlap_ratio": overlap_ratio
+                                            "type_scores": type_scores,  # 관계 타입별 개별 점수 추가
+                                            "weighted_score": expansion_score
                                         })
-                                        logger.info("확장 청크 포함: %s, 개념겹침비율: %.3f, 점수: %.3f", point.id, overlap_ratio, expansion_score)
+                                        logger.info("확장 청크 포함: %s, 가중점수: %.3f, 타입별점수: %s",
+                                                  point.id, expansion_score,
+                                                  {k: f"{v:.3f}" for k, v in type_scores.items()})
                                     else:
-                                        logger.info("확장 청크 제외: %s, 개념겹침비율: %.3f < threshold: %.3f", point.id, overlap_ratio if 'overlap_ratio' in locals() else 0.0, expansion_threshold)
+                                        logger.info("확장 청크 제외: %s, 가중점수: %.3f < threshold: %.3f, 타입별점수: %s",
+                                                  point.id, expansion_score, expansion_threshold,
+                                                  {k: f"{v:.3f}" for k, v in type_scores.items()})
 
                         except (AttributeError, ValueError, KeyError) as e:
                             logger.warning("확장된 청크 내용 가져오기 실패: %s", str(e))
 
-                    # 4. 개념 기반 재순위 (옵션)
+                    # 4. 결과 병합 및 포맷팅 (상위 top_k개만)
                     all_results = results + expanded_results
-                    logger.info("재순위 전 전체 결과 수: %d (기본: %d, 확장: %d)", len(all_results), len(results), len(expanded_results))
-
-                    if enable_concept_rerank and app_db:
-                        # 간단한 쿼리 개념 추출 (실제로는 더 정교한 NLP 사용 가능)
-                        query_concepts = [word for word in query.replace(embedding_model_prompt, "").split() if len(word) > 2]
-                        parsed_relation_types = [rt.strip() for rt in relation_types.split(",")]
-
-                        for result in all_results:
-                            chunk_id = result.get("id")
-                            if chunk_id:
-                                chunk_concepts = self.get_chunk_concepts(chunk_id, collection_name, app_db, parsed_relation_types)
-
-                                # 개념 유사도 계산
-                                concept_sim = self.calculate_concept_similarity(query_concepts, chunk_concepts)
-
-                                # 기존 스코어에 개념 보너스 추가
-                                original_score = result.get("score", 0.0)
-                                enhanced_score = original_score + (concept_sim * concept_boost_weight)
-
-                                result["enhanced_score"] = enhanced_score
-                                result["concept_similarity"] = concept_sim
-                                result["connected_concepts"] = chunk_concepts
-
-                        # 향상된 스코어로 재정렬
-                        all_results.sort(key=lambda x: x.get("enhanced_score", x.get("score", 0)), reverse=True)
-                        logger.info("재순위 후 상위 5개 결과 점수:")
-                        for i, result in enumerate(all_results[:5]):
-                            score = result.get("enhanced_score", result.get("score", 0.0))
-                            is_expanded = result.get("is_expanded", False)
-                            logger.info("  %d. 점수: %.3f, 확장여부: %s, chunk_id: %s", i+1, score, is_expanded, result.get("id", ""))
+                    logger.info("전체 결과 수: %d (기본: %d, 확장: %d)", len(all_results), len(results), len(expanded_results))
 
                     # 5. 결과 포맷팅 (상위 top_k개만)
                     final_results = all_results[:top_k]
@@ -352,31 +325,22 @@ class GraphEnhancedRetrievalTool(Node):
 
                     for i, item in enumerate(final_results, 1):
                         if "chunk_text" in item and item["chunk_text"]:
-                            score = item.get("enhanced_score", item.get("score", 0.0))
+                            score = item.get("score", 0.0)
                             chunk_text = item["chunk_text"]
                             is_expanded = item.get("is_expanded", False)
 
                             if is_expanded:
                                 expansion_count += 1
 
-                            # 개념 정보 추가
-                            concept_info = ""
-                            if "connected_concepts" in item:
-                                concepts = item["connected_concepts"]
-                                concept_summary = []
-                                for rel_type, concept_list in concepts.items():
-                                    if concept_list:
-                                        concept_summary.append(f"{rel_type}: {', '.join(concept_list[:2])}")
-                                if concept_summary:
-                                    concept_info = f" [연결개념: {'; '.join(concept_summary[:2])}]"
-
                             # 확장 표시 및 개념 겹침 정보
                             expansion_marker = ""
                             if is_expanded:
-                                overlap_ratio = item.get("concept_overlap_ratio", 0.0)
-                                expansion_marker = f" [그래프확장|개념겹침:{overlap_ratio:.2f}]"
+                                weighted_score = item.get("weighted_score", 0.0)
+                                type_scores = item.get("type_scores", {})
+                                type_info = ", ".join([f"{k}:{v:.2f}" for k, v in type_scores.items()])
+                                expansion_marker = f" [그래프확장|가중점수:{weighted_score:.2f}|{type_info}]"
 
-                            context_parts.append(f"[문서 {i}] (관련도: {score:.3f}){concept_info}{expansion_marker}\n{chunk_text}")
+                            context_parts.append(f"[문서 {i}] (관련도: {score:.3f}){expansion_marker}\n{chunk_text}")
 
                     if context_parts:
                         context_text = "\n".join(context_parts)
@@ -390,7 +354,7 @@ class GraphEnhancedRetrievalTool(Node):
                             logger.info("=== 그래프 확장으로 발견된 청크들 ===")
                             for result in expanded_results:
                                 chunk_id = result.get("id", "")
-                                score = result.get("enhanced_score", result.get("score", 0.0))
+                                score = result.get("score", 0.0)
                                 content = result.get("chunk_text", "")
                                 # 내용을 100자까지만 자르기
                                 content_preview = content[:100] + "..." if len(content) > 100 else content
