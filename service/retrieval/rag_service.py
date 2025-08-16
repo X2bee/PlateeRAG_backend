@@ -30,14 +30,14 @@ logger = logging.getLogger("rag-service")
 class DocumentMetadata(BaseModel):
     """문서 메타데이터를 위한 Pydantic 모델"""
     summary: str = Field(description="주어진 데이터의 핵심 요소를 반드시 추출하여 요약문을 작성하십시오. 이 요약문의 길이 제한은 없으며, 반드시 핵심 정보는 모두 포함되어야 합니다. 특히 연령, 성별, 수치적 요소, 계절, 주기성 등의 메타적 요소가 존재하면 이것은 반드시 포함되어야 합니다.")
-    keywords: List[str] = Field(description="핵심 키워드들 (3-5개)", min_items=1, max_items=5)
-    topics: List[str] = Field(description="주요 주제들 (2-4개)", min_items=1, max_items=5)
+    keywords: List[str] = Field(description="핵심 키워드들 (1-3개)", min_items=1, max_items=3)
+    topics: List[str] = Field(description="주요 주제들 (1-3개)", min_items=1, max_items=3)
     entities: List[str] = Field(description="개체명들 (인명, 지명, 기관명 등)", max_items=5)
     sentiment: str = Field(description="문서의 감정 톤", pattern="^(positive|negative|neutral)$")
     document_type: str = Field(description="문서 유형", pattern="^(기술문서|보고서|매뉴얼|학술논문|뉴스|기타)$")
     language: str = Field(description="언어 코드 (ko, en, ja, zh 등)", max_length=1)
     complexity_level: str = Field(description="복잡도 수준", pattern="^(beginner|intermediate|advanced)$")
-    main_concepts: List[str] = Field(description="핵심 개념들 (2-4개)", min_items=1, max_items=5)
+    main_concepts: List[str] = Field(description="핵심 개념들 (1-3개)", min_items=1, max_items=3)
 
 class LLMMetadataGenerator:
     """LLM 기반 메타데이터 생성 클래스"""
@@ -1130,7 +1130,7 @@ class RAGService:
                 ))
                 # document_type이 존재할 때만 엣지로 저장 (NULL 삽입 방지)
                 doc_type_val = payload.get("document_type")
-                if doc_type_val:
+                if doc_type_val and doc_type_val.strip() != "기타":
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
                         collection_name=collection_name,
