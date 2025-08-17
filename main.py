@@ -19,6 +19,7 @@ from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
 from controller.nodeApiController import router as nodeApiRouter, register_node_api_routes
+from controller.documentController import router as documentRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
@@ -181,6 +182,7 @@ app.include_router(appRouter)
 app.include_router(nodeApiRouter)
 app.include_router(vastRouter)
 app.include_router(huggingfaceRouter)
+app.include_router(documentRouter)
 
 if __name__ == "__main__":
     try:
