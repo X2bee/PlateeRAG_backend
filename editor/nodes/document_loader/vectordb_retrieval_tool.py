@@ -99,7 +99,6 @@ class QdrantRetrievalTool(Node):
                     if context_parts:
                         context_text = "\n".join(context_parts)
                         enhanced_prompt = f"""{enhance_prompt}:
-[참고 문서]
 {context_text}"""
                         return enhanced_prompt
                 except Exception as e:
