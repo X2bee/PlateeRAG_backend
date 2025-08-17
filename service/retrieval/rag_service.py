@@ -505,17 +505,33 @@ class RAGService:
                     # 임베딩 차원 수 확인 및 로깅
                     try:
                         dimension = self.embeddings_client.get_embedding_dimension()
-                        logger.info(f"Embedding client initialized successfully: {provider}, dimension: {dimension}")
 
-                        # 설정에서 AUTO_DETECT_EMBEDDING_DIM이 True면 차원 수 업데이트
-                        if self.config.AUTO_DETECT_EMBEDDING_DIM.value:
-                            old_dimension = self.config.VECTOR_DIMENSION.value
-                            if old_dimension != dimension:
-                                logger.info(f"Updating vector dimension from {old_dimension} to {dimension}")
-                                self.config.VECTOR_DIMENSION.value = dimension
-                                self._reinitialize_vector_manager()
+                        # dimension이 유효한 정수일 때만 업데이트 시도
+                        if isinstance(dimension, int) and dimension > 0:
+                            logger.info(f"Embedding client initialized successfully: {provider}, dimension: {dimension}")
 
-                        return
+                            # 설정에서 AUTO_DETECT_EMBEDDING_DIM이 True면 차원 수 업데이트
+                            if self.config.AUTO_DETECT_EMBEDDING_DIM.value:
+                                old_dimension = self.config.VECTOR_DIMENSION.value
+                                if old_dimension != dimension:
+                                    logger.info(f"Updating vector dimension from {old_dimension} to {dimension}")
+                                    # 메모리와 DB에 모두 저장하여 _config_refresh 시 변경이 유지되도록 함
+                                    try:
+                                        self.config.VECTOR_DIMENSION.value = dimension
+                                        try:
+                                            self.config.VECTOR_DIMENSION.save()
+                                        except Exception as save_e:
+                                            logger.warning(f"Failed to persist VECTOR_DIMENSION to DB: {save_e}")
+
+                                        # reinitialize vector manager with new persisted value
+                                        self._reinitialize_vector_manager()
+                                    except Exception as e:
+                                        logger.warning(f"Failed while updating VECTOR_DIMENSION: {e}")
+
+                            return
+                        else:
+                            logger.info("Embedding dimension unknown at init time; skipping VECTOR_DIMENSION update")
+                            return
                     except Exception as dim_error:
                         logger.warning(f"Could not get embedding dimension: {dim_error}")
                         logger.info(f"Embedding client initialized successfully: {provider}")
