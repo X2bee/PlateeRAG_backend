@@ -7,6 +7,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 
@@ -99,7 +100,8 @@ class AgentOpenAINode(Node):
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
+                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}{citation_prompt}
+
 [Context]
 {context_text}"""
 
