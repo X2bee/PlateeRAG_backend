@@ -64,7 +64,7 @@ class AgentOpenAINode(Node):
         default_prompt: str = default_prompt,
     ) -> str:
         try:
-            default_prompt  = prefix_prompt+default_prompt
+            default_prompt  = prefix_prompt+default_prompt+citation_prompt
             if tools is None:
                 logger.info(f"[AGENT_EXECUTE] Tools가 None으로 설정됨")
                 tools = None
@@ -100,7 +100,7 @@ class AgentOpenAINode(Node):
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}{citation_prompt}
+                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 
 [Context]
 {context_text}"""

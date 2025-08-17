@@ -140,11 +140,11 @@ class AgentVLLMNode(Node):
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}{citation_prompt}
+                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 
 [Context]
 {context_text}"""
-            prompt = prefix_prompt+default_prompt
+            prompt = prefix_prompt+default_prompt+citation_prompt
 
             # OpenAI API를 사용하여 응답 생성
             response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, additional_rag_context)

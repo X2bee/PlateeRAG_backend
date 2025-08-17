@@ -66,7 +66,7 @@ class AgentOpenAIStreamNode(Node):
     ) -> Generator[str, None, None]:
 
         try:
-            default_prompt= prefix_prompt+default_prompt
+            default_prompt= prefix_prompt+default_prompt+citation_prompt
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
 
             additional_rag_context = ""
@@ -100,7 +100,7 @@ class AgentOpenAIStreamNode(Node):
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}{citation_prompt}
+                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 
 [Context]
 {context_text}"""
