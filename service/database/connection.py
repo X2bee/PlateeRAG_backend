@@ -188,7 +188,7 @@ class AppDatabaseManager:
 
     def find_by_condition(self, model_class: Type[BaseModel],
                          conditions: Dict[str, Any],
-                         limit: int = 100,
+                         limit: int = 1000,
                          offset: int = 0,
                          orderby: str = "id",
                          orderby_asc: bool = False,

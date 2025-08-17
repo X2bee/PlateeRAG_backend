@@ -51,6 +51,7 @@ class GraphEnhancedRetrievalTool(Node):
         {"id": "enable_graph_expansion", "name": "Enable Graph Expansion", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "그래프 네트워크를 통한 검색 확장을 활성화합니다."},
         {"id": "expansion_depth", "name": "Expansion Depth", "type": "INT", "value": 1, "required": False, "optional": True, "min": 1, "max": 3, "step": 1, "description": "그래프 확장 깊이 (홉 수)"},
         {"id": "expansion_threshold", "name": "Expansion Threshold", "type": "FLOAT", "value": 0.3, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1, "description": "그래프 확장 포함 임계값"},
+        {"id": "collection_limit", "name": "Collection Limit", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "컬렉션 제한 여부 (false일 경우 모든 컬렉션에서 확장 검색)"},
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
@@ -63,7 +64,7 @@ class GraphEnhancedRetrievalTool(Node):
         )
         return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
-    def get_chunk_concepts(self, chunk_id: str, collection_name: str, app_db, relation_types: List[str] = None) -> Dict[str, List[str]]:
+    def get_chunk_concepts(self, chunk_id: str, collection_name: str, app_db, relation_types: List[str] = None, collection_limit: bool = True) -> Dict[str, List[str]]:
         """청크와 연결된 개념들을 관계 타입별로 반환 (양방향 검색)"""
         if relation_types is None:
             relation_types = ["entity", "main_concept", "topic", "keyword"]
@@ -71,25 +72,31 @@ class GraphEnhancedRetrievalTool(Node):
         concept_map = {}
         for rel_type in relation_types:
             # chunk_id가 source인 경우 (일반적인 경우)
+            conditions_source = {
+                "source": chunk_id,
+                "relation_type": rel_type
+            }
+            if collection_limit:
+                conditions_source["collection_name"] = collection_name
+
             edges_as_source = app_db.find_by_condition(
                 VectorDBChunkEdge,
-                {
-                    "source": chunk_id,
-                    "collection_name": collection_name,
-                    "relation_type": rel_type
-                },
+                conditions_source,
                 return_list=False  # 모델 객체로 반환받기
             )
 
             # chunk_id가 target인 경우 (indirect 관계에서 가능)
+            conditions_target = {
+                "target": chunk_id,
+                "relation_type": rel_type,
+                "edge_type": "indirect"  # indirect 엣지만 고려
+            }
+            if collection_limit:
+                conditions_target["collection_name"] = collection_name
+
             edges_as_target = app_db.find_by_condition(
                 VectorDBChunkEdge,
-                {
-                    "target": chunk_id,
-                    "collection_name": collection_name,
-                    "relation_type": rel_type,
-                    "edge_type": "indirect"  # indirect 엣지만 고려
-                },
+                conditions_target,
                 return_list=False  # 모델 객체로 반환받기
             )
 
@@ -110,7 +117,7 @@ class GraphEnhancedRetrievalTool(Node):
 
         return concept_map
 
-    def find_related_chunks_by_concepts(self, concepts: Dict[str, List[str]], collection_name: str, app_db, exclude_chunks: Set[str] = None) -> List[str]:
+    def find_related_chunks_by_concepts(self, concepts: Dict[str, List[str]], collection_name: str, app_db, exclude_chunks: Set[str] = None, collection_limit: bool = True) -> List[str]:
         """개념들과 연결된 다른 청크들 찾기 (양방향 검색)"""
         if exclude_chunks is None:
             exclude_chunks = set()
@@ -123,25 +130,31 @@ class GraphEnhancedRetrievalTool(Node):
                     continue
 
                 # 개념이 target인 경우 (일반적)
+                conditions_to_concept = {
+                    "target": concept,
+                    "relation_type": rel_type
+                }
+                if collection_limit:
+                    conditions_to_concept["collection_name"] = collection_name
+
                 edges_to_concept = app_db.find_by_condition(
                     VectorDBChunkEdge,
-                    {
-                        "target": concept,
-                        "collection_name": collection_name,
-                        "relation_type": rel_type
-                    },
+                    conditions_to_concept,
                     return_list=False  # 모델 객체로 반환
                 )
 
                 # 개념이 source인 경우 (indirect 관계에서 가능)
+                conditions_from_concept = {
+                    "source": concept,
+                    "relation_type": rel_type,
+                    "edge_type": "indirect"
+                }
+                if collection_limit:
+                    conditions_from_concept["collection_name"] = collection_name
+
                 edges_from_concept = app_db.find_by_condition(
                     VectorDBChunkEdge,
-                    {
-                        "source": concept,
-                        "collection_name": collection_name,
-                        "relation_type": rel_type,
-                        "edge_type": "indirect"
-                    },
+                    conditions_from_concept,
                     return_list=False  # 모델 객체로 반환
                 )
 
@@ -171,6 +184,7 @@ class GraphEnhancedRetrievalTool(Node):
         enable_graph_expansion = kwargs.get("enable_graph_expansion", True)
         expansion_depth = kwargs.get("expansion_depth", 1)
         expansion_threshold = kwargs.get("expansion_threshold", 0.3)
+        collection_limit = kwargs.get("collection_limit", True)
         relation_types = kwargs.get("relation_types", "entity,main_concept,topic,keyword")
 
         def create_graph_enhanced_tool():
@@ -211,11 +225,11 @@ class GraphEnhancedRetrievalTool(Node):
 
                             for chunk_id in current_chunks:
                                 # 청크의 개념들 가져오기
-                                concepts = self.get_chunk_concepts(chunk_id, collection_name, app_db, parsed_relation_types)
+                                concepts = self.get_chunk_concepts(chunk_id, collection_name, app_db, parsed_relation_types, collection_limit)
 
                                 # 관련 청크들 찾기
                                 related_chunks = self.find_related_chunks_by_concepts(
-                                    concepts, collection_name, app_db, initial_chunk_ids.union(expanded_chunk_ids)
+                                    concepts, collection_name, app_db, initial_chunk_ids.union(expanded_chunk_ids), collection_limit
                                 )
                                 next_level_chunks.update(related_chunks)
 
@@ -235,7 +249,7 @@ class GraphEnhancedRetrievalTool(Node):
                             # 원본 검색 결과들의 개념 수집
                             original_concepts = set()
                             for result in results:
-                                chunk_concepts = self.get_chunk_concepts(result.get("id"), collection_name, app_db, parsed_relation_types)
+                                chunk_concepts = self.get_chunk_concepts(result.get("id"), collection_name, app_db, parsed_relation_types, collection_limit)
                                 for concept_list in chunk_concepts.values():
                                     original_concepts.update(concept_list)
 
@@ -248,7 +262,7 @@ class GraphEnhancedRetrievalTool(Node):
                             for point in points:
                                 if point.payload and point.payload.get("chunk_text"):
                                     # 확장된 청크의 개념들과 원본 개념들의 관계 타입별 겹치는 정도 계산
-                                    expanded_concepts = self.get_chunk_concepts(point.id, collection_name, app_db, parsed_relation_types)
+                                    expanded_concepts = self.get_chunk_concepts(point.id, collection_name, app_db, parsed_relation_types, collection_limit)
 
                                     # 관계 타입별 가중치
                                     type_weights = {
@@ -267,7 +281,7 @@ class GraphEnhancedRetrievalTool(Node):
                                         # 원본 개념들에서 해당 타입만 추출
                                         original_type_concepts = set()
                                         for result in results:
-                                            orig_concepts = self.get_chunk_concepts(result.get("id"), collection_name, app_db, [rel_type])
+                                            orig_concepts = self.get_chunk_concepts(result.get("id"), collection_name, app_db, [rel_type], collection_limit)
                                             if rel_type in orig_concepts:
                                                 original_type_concepts.update(orig_concepts[rel_type])
 
