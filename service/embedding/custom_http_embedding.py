@@ -6,6 +6,7 @@ import asyncio
 from typing import List, Dict, Any
 import logging
 import aiohttp
+import requests
 import json
 from service.embedding.base_embedding import BaseEmbedding
 
@@ -20,6 +21,14 @@ class CustomHTTPEmbedding(BaseEmbedding):
         self.api_key = config.get("api_key", "")
         self.model = config.get("model", "text-embedding-ada-002")
         self._dimension = None
+        if "/embeddings" in self.base_url:
+            self.embeddings_endpoint = self.base_url
+            # Derive a clean base_root by removing the first occurrence of /embeddings
+            parts = self.base_url.split("/embeddings", 1)
+            self.base_root = parts[0] if parts and parts[0] else self.base_url
+        else:
+            self.embeddings_endpoint = f"{self.base_url}/embeddings"
+            self.base_root = self.base_url
         
         # HTTP 설정
         self.timeout = aiohttp.ClientTimeout(total=300)  # 5분
@@ -30,7 +39,7 @@ class CustomHTTPEmbedding(BaseEmbedding):
         if self.api_key:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
         
-        logger.info(f"Custom HTTP embedding client initialized: {self.base_url}")
+        logger.info(f"Custom HTTP embedding client initialized: base_url={self.base_root}, embeddings_endpoint={self.embeddings_endpoint}")
     
     async def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """여러 문서를 임베딩으로 변환"""
@@ -71,7 +80,7 @@ class CustomHTTPEmbedding(BaseEmbedding):
     
     async def _create_embeddings(self, session: aiohttp.ClientSession, texts: List[str]) -> List[List[float]]:
         """HTTP API를 통해 임베딩 생성"""
-        url = f"{self.base_url}/embeddings"
+        url = self.embeddings_endpoint
         
         payload = {
             "model": self.model,
@@ -110,9 +119,41 @@ class CustomHTTPEmbedding(BaseEmbedding):
         """임베딩 차원 수 반환"""
         if self._dimension is not None:
             return self._dimension
-        
-        # 기본값 (실제 호출 시 업데이트됨)
-        return 1536
+
+        # _dimension이 아직 설정되지 않은 경우, 동기적으로 간단한 프로브를 시도하여 차원 확인
+        try:
+            url = self.embeddings_endpoint
+            payload = {
+                "model": self.model,
+                "input": ["test"],
+                "encoding_format": "float"
+            }
+            headers = dict(self.headers) if isinstance(self.headers, dict) else {}
+            # 짧은 타임아웃으로 동기 요청 수행
+            resp = requests.post(url, json=payload, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                try:
+                    result = resp.json()
+                except Exception:
+                    result = None
+
+                embedding = None
+                if isinstance(result, dict):
+                    if "data" in result and isinstance(result["data"], list) and result["data"]:
+                        embedding = result["data"][0].get("embedding")
+                    elif "embeddings" in result and isinstance(result["embeddings"], list) and result["embeddings"]:
+                        embedding = result["embeddings"][0]
+
+                if embedding and isinstance(embedding, (list, tuple)):
+                    self._dimension = len(embedding)
+                    logger.info(f"Detected embedding dimension via sync probe: {self._dimension}")
+                    return self._dimension
+
+        except Exception as e:
+            logger.debug(f"Sync probe for embedding dimension failed: {e}")
+
+        # 차원 정보를 아직 알 수 없음
+        return None
     
     async def is_available(self) -> bool:
         """Custom HTTP API 서비스 사용 가능성 확인"""
@@ -120,11 +161,12 @@ class CustomHTTPEmbedding(BaseEmbedding):
             timeout = aiohttp.ClientTimeout(total=5)  # 짧은 타임아웃
             
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                # 헬스 체크 먼저 시도
+                # 헬스 체크 먼저 시도 (우선 embeddings endpoint 기반의 health 경로를 확인)
                 health_endpoints = [
-                    f"{self.base_url}/health",
-                    f"{self.base_url}/v1/health", 
-                    f"{self.base_url}/"
+                    f"{self.embeddings_endpoint}/health",
+                    f"{self.base_root}/health",
+                    f"{self.base_root}/v1/health",
+                    f"{self.base_root}/"
                 ]
                 
                 health_ok = False
@@ -161,7 +203,8 @@ class CustomHTTPEmbedding(BaseEmbedding):
         """Custom HTTP 제공자 정보 반환"""
         return {
             "provider": "custom_http",
-            "base_url": self.base_url,
+            "base_url": self.base_root,
+            "embeddings_endpoint": self.embeddings_endpoint,
             "model": self.model,
             "dimension": self.get_embedding_dimension(),
             "api_key_configured": bool(self.api_key),
@@ -170,7 +213,7 @@ class CustomHTTPEmbedding(BaseEmbedding):
     
     async def cleanup(self):
         """Custom HTTP 클라이언트 리소스 정리"""
-        logger.info("Cleaning up Custom HTTP embedding client: %s", self.base_url)
+        logger.info("Cleaning up Custom HTTP embedding client: %s", self.embeddings_endpoint)
         
         try:
             # 설정 초기화
