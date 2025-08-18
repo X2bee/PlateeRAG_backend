@@ -524,7 +524,7 @@ async def test_collection_connection(category: str):
         configs = get_all_persistent_configs()
         config_dict = {config.env_name: config.value for config in configs}
 
-        logging.info(config_dict)
+        #logging.info(config_dict)
         # IMAGE_TEXT 관련 설정에서 제공자 결정 (예: "openai" 또는 "vllm")
         const_provider = config_dict.get("IMAGE_TEXT_MODEL_PROVIDER", "no_model").lower()
         if const_provider not in ("openai", "vllm"):
@@ -548,11 +548,13 @@ async def test_collection_connection(category: str):
                     "completion_test": True ,
                 }
         elif const_provider == "vllm":
+            
             config_data = {
                 'base_url':  config_dict.get("IMAGE_TEXT_BASE_URL"),  # ← 여기를 IMAGE_TEXT_BASE_URL로
                 'api_key':   config_dict.get("IMAGE_TEXT_API_KEY"),
                 'model_name':config_dict.get("IMAGE_TEXT_MODEL_NAME")
             }
+            logging.info(f"Testing vLLM connection with config: {config_data}")
             return await llm_service.test_vllm_connection(config_data)
     except HTTPException:
         raise
