@@ -1,6 +1,6 @@
-from typing import Dict, Any, Optional, Generator
-from pydantic import BaseModel
 import logging
+from pydantic import BaseModel
+from typing import Dict, Any, Optional, Generator
 from editor.node_composer import Node
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, execute_agent_streaming
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -10,19 +10,20 @@ from editor.utils.prefix_prompt import prefix_prompt
 from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
+from fastapi import Request
 from langchain_core.output_parsers import JsonOutputParser
 
 logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
 
-class AgentOpenAIStreamNode(Node):
+class AgentVLLMStreamNode(Node):
     categoryId = "xgen"
     functionId = "agents"
-    nodeId = "agents/openai_stream"
-    nodeName = "Agent OpenAI Stream"
+    nodeId = "agents/vllm_stream"
+    nodeName = "Agent VLLM Stream"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드"
-    tags = ["agent", "chat", "rag", "openai", "stream"]
+    tags = ["agent", "chat", "rag", "vllm", "stream"]
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
@@ -35,24 +36,36 @@ class AgentOpenAIStreamNode(Node):
         {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}
     ]
     parameters = [
-        {
-            "id": "model", "name": "Model", "type": "STR", "value": "gpt-5", "required": True,
-            "options": [
-                {"value": "gpt-oss-20b", "label": "GPT-OSS-20B"},
-                {"value": "gpt-oss-120b", "label": "GPT-OSS-120B"},
-                {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
-                {"value": "gpt-4", "label": "GPT-4"},
-                {"value": "gpt-4o", "label": "GPT-4o"},
-                {"value": "gpt-5", "label": "GPT-5"},
-                {"value": "gpt-5-mini", "label": "GPT-5 Mini"},
-            ]
-        },
-        {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "min": 0.0, "max": 2.0, "step": 0.1},
-        {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "min": 1, "max": 65536, "step": 1},
+        {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": True},
+        {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.0, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
+        {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
-        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "optional": True},
+        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
     ]
+
+    def __init__(self, user_id: str = None, **kwargs):
+        super().__init__(**kwargs)
+        self.user_id = user_id
+        self.config_composer = AppServiceManager.get_config_composer()
+        self.llm_provider = self.config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
+        self.vllm_api_base_url = self.config_composer.get_config_by_name("VLLM_API_BASE_URL").value
+        self.vllm_model_name = self.config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+        self.vllm_temperature_default = self.config_composer.get_config_by_name("VLLM_TEMPERATURE_DEFAULT").value
+        self.vllm_max_tokens_default = self.config_composer.get_config_by_name("VLLM_MAX_TOKENS_DEFAULT").value
+        self.vllm_top_p = self.config_composer.get_config_by_name("VLLM_TOP_P").value
+        self.vllm_top_k = self.config_composer.get_config_by_name("VLLM_TOP_K").value
+        self.vllm_frequency_penalty = self.config_composer.get_config_by_name("VLLM_FREQUENCY_PENALTY").value
+        self.vllm_repetition_penalty = self.config_composer.get_config_by_name("VLLM_REPETITION_PENALTY").value
+        self.vllm_best_of = self.config_composer.get_config_by_name("VLLM_BEST_OF").value
+
+    def api_vllm_model_name(self, request: Request) -> Dict[str, Any]:
+        config_composer = request.app.state.config_composer
+        return config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+
+    def api_vllm_api_base_url(self, request: Request) -> Dict[str, Any]:
+        config_composer = request.app.state.config_composer
+        return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
 
     def execute(
         self,
@@ -61,27 +74,27 @@ class AgentOpenAIStreamNode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
-        model: str = "gpt-5",
+        model: str = "x2bee/Polar-14B",
         temperature: float = 0.7,
         max_tokens: int = 8192,
         n_messages: int = 3,
-        base_url: str = "https://api.openai.com/v1",
+        base_url: str = "",
         default_prompt: str = default_prompt,
     ) -> Generator[str, None, None]:
 
         try:
-            default_prompt= prefix_prompt+default_prompt+citation_prompt
+            default_prompt = prefix_prompt + default_prompt
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
 
             additional_rag_context = ""
             if rag_context:
-                # rag_context.search_params에서 옵션을 지원 (rerank 등)
+                # rag_context['search_params']에서 옵션을 받아서 처리
                 search_params = rag_context.get('search_params', {})
                 rerank_flag = search_params.get('rerank', False)
                 rerank_top_k = search_params.get('rerank_top_k', search_params.get('top_k', 20))
 
-                # use_model_prompt 옵션 처리
-                if search_params.get('use_model_prompt', False):
+                # use_model_prompt 옵션이 있으면 embedding_model_prompt를 query에 추가
+                if search_params.get('use_model_prompt'):
                     query = search_params.get('embedding_model_prompt', '') + text
                 else:
                     query = text
@@ -103,6 +116,7 @@ class AgentOpenAIStreamNode(Node):
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
+                        default_prompt = default_prompt + citation_prompt
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 
@@ -117,24 +131,34 @@ class AgentOpenAIStreamNode(Node):
                 default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
+                
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
                         ("user", "{additional_rag_context}"),
-                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                        MessagesPlaceholder(variable_name="agent_scratchpad")
                     ])
                 else:
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
-                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                        MessagesPlaceholder(variable_name="agent_scratchpad")
                     ])
 
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
-                agent_executor = AgentExecutor(agent=agent, tools=tools_list, verbose=True, handle_parsing_errors=True)
+                # Agent가 더 많은 반복(iteration)을 할 수 있도록 max_iterations 증가
+                agent_executor = AgentExecutor(
+                    agent=agent,
+                    tools=tools_list,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    max_iterations=10,  # 최대 10번까지 tool 호출 가능
+                    max_execution_time=300,  # 최대 5분까지 실행
+                    early_stopping_method="generate"  # 충분한 정보를 얻으면 조기 종료
+                )
                 handler = EnhancedAgentStreamingHandler()
 
                 # Helper 함수를 사용하여 Agent 실행을 스트리밍으로 처리
@@ -159,7 +183,6 @@ class AgentOpenAIStreamNode(Node):
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}")
                     ])
-
                 chain = final_prompt | llm
                 for chunk in chain.stream(inputs):
                     yield chunk.content
@@ -169,35 +192,8 @@ class AgentOpenAIStreamNode(Node):
             yield f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
 
     def _prepare_llm_and_inputs(self, tools, memory, model, temperature, max_tokens, base_url):
-        # (기존 _generate_chat_response와 유사한 로직으로 LLM 및 입력 준비)
         from langchain_openai import ChatOpenAI
-
-        config_composer = AppServiceManager.get_config_composer()
-        if not config_composer:
-            raise ValueError("Config Composer가 설정되지 않았습니다.")
-
-        llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
-
-        if llm_provider == "openai":
-            api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
-            print(api_key)
-            if not api_key:
-                logger.error(f"[CHAT_RESPONSE] OpenAI API 키가 설정되지 않았습니다")
-                return "OpenAI API 키가 설정되지 않았습니다."
-
-        elif llm_provider == "vllm":
-            api_key = None # 현재 vLLM API 키는 별도로 설정하지 않음
-            logger.info(f"[CHAT_RESPONSE] vLLM API 키는 None으로 설정")
-
-            # TODO: vLLM API 키 설정 로직 추가
-            # api_key = config_composer.get_config_by_name("VLLM_API_KEY").value
-            # if not api_key:
-            #     return "vLLM API 키가 설정되지 않았습니다."
-        else:
-            logger.error(f"[CHAT_RESPONSE] 지원하지 않는 LLM Provider: {llm_provider}")
-            return f"지원하지 않는 LLM Provider: {llm_provider}"
-
-        llm = ChatOpenAI(api_key=api_key, model=model, temperature=temperature, max_tokens=max_tokens, base_url=base_url, streaming=True)
+        llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, base_url=base_url, streaming=True)
 
         tools_list = []
         if tools:
