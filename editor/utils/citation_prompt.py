@@ -7,6 +7,6 @@ citation_prompt = """
 [Cite. {{"file_name": "파일명", "file_path": "파일경로", "page_number": 페이지번호, "line_start": 시작줄, "line_end": 종료줄}}]
 
 예시:
-플래티어는 전문연구요원 제도를 운영하고 있습니다. [Cite. {{"file_name": "플래티어 전문연구요원.pdf", "file_path": "/경로/플래티어 전문연구요원.pdf", "page_number": 1, "line_start": 15, "line_end": 38}}] [Cite. {{"file_name": "플래티어 전문연구요원.pdf", "file_path": "/경로/플래티어 전문연구요원.pdf", "page_number": 2, "line_start": 3, "line_end": 8}}] 
+플래티어는 전문연구요원 제도를 운영하고 있습니다. [Cite. {{"file_name": "플래티어 전문연구요원.pdf", "file_path": "/collection_abc_1234_asd/플래티어 전문연구요원.pdf", "page_number": 1, "line_start": 15, "line_end": 38}}] [Cite. {{"file_name": "플래티어 전문연구요원.pdf", "file_path": "/경로/플래티어 전문연구요원.pdf", "page_number": 2, "line_start": 3, "line_end": 8}}] 
 
 """

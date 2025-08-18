@@ -83,7 +83,7 @@ class AgentVLLMStreamNode(Node):
     ) -> Generator[str, None, None]:
 
         try:
-            default_prompt = prefix_prompt + default_prompt +citation_prompt
+            default_prompt = prefix_prompt + default_prompt
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
 
             additional_rag_context = ""
@@ -116,6 +116,7 @@ class AgentVLLMStreamNode(Node):
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
                     if context_parts:
+                        default_prompt = default_prompt + citation_prompt
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 
@@ -130,6 +131,7 @@ class AgentVLLMStreamNode(Node):
                 default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
+                
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
