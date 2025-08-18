@@ -7,6 +7,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from langchain_core.output_parsers import JsonOutputParser
@@ -65,7 +66,7 @@ class AgentOpenAIStreamNode(Node):
     ) -> Generator[str, None, None]:
 
         try:
-            default_prompt= prefix_prompt+default_prompt
+            default_prompt= prefix_prompt+default_prompt+citation_prompt
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
 
             additional_rag_context = ""
@@ -100,6 +101,7 @@ class AgentOpenAIStreamNode(Node):
                     if context_parts:
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
+
 [Context]
 {context_text}"""
             inputs = {"input": text, "chat_history": chat_history, "additional_rag_context": additional_rag_context if rag_context else ""}
