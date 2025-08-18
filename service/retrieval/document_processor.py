@@ -340,7 +340,7 @@ class DocumentProcessor:
             
             # 배치 OCR 프롬프트
             prompt = f"""다음 {len(image_paths)}개의 이미지를 각각 정확한 텍스트로 변환해주세요. 
-
+            
                    **중요한 규칙:**
                    1. 각 이미지의 결과를 명확히 구분해주세요
                    2. 다음 형식으로 응답해주세요:
@@ -510,6 +510,7 @@ class DocumentProcessor:
             # OCR 프롬프트
             prompt = """이 이미지를 정확한 텍스트로 변환해주세요. 다음 규칙을 철저히 지켜주세요:
 
+
                    1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요 또한 병합된 셀의 경우, 각각 해당 사항에 모두 넣어주세요.
                    2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
                    3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
@@ -543,7 +544,7 @@ class DocumentProcessor:
                    **표 내용 완전 텍스트 변환**: 이 표는 상가건물 지역별 임대 현황을 나타내는 표로, 총 3개 지역의 상가 정보가 포함되어 있습니다. 첫 번째는 강남구 상가로 평균임대료가 450만원, 보증금이 8,500만원이며, 면적은 65.2㎡이고 음식점 업종으로 계약이 완료된 상태입니다. 두 번째는 서초구 상가로 평균임대료가 320만원, 보증금이 6,200만원이며, 면적은 48.7㎡이고 의류 업종으로 현재 협의중인 상태입니다. 세 번째는 마포구 상가로 평균임대료가 280만원, 보증금이 4,800만원이며, 면적은 52.3㎡이고 카페 업종으로 계약이 완료된 상태입니다.
 
                    텍스트만 출력하고, 추가 설명은 하지 마세요."""
-
+            
             # 이미지 메시지 생성
             message = HumanMessage(
                 content=[
@@ -1990,22 +1991,60 @@ class DocumentProcessor:
                 return [""]
             
             # \n\n\n이 포함되어 있으면 먼저 이것으로 분할
-            if "\n\n\n" in text:
-                logger.info("Found \\n\\n\\n in text, splitting by major sections first")
-                major_sections = text.split("\n\n\n")
-                all_chunks = []
+            # [색션 구분] 또는 [표 구분]이 포함되어 있으면 먼저 이것으로 분할
+            if "[색션 구분]" in text or "[표 구분]" in text:
+                logger.info("Found section markers in text, splitting by major sections first")
+                
+                # 두 구분자를 모두 고려해서 분할
+                # 먼저 [색션 구분]으로 분할하고, 각 섹션에서 [표 구분]으로 추가 분할
+                temp_sections = text.split("[색션 구분]")
+                major_sections = []
+                
+                for section in temp_sections:
+                    if "[표 구분]" in section:
+                        table_sections = section.split("[표 구분]")
+                        major_sections.extend([s.strip() for s in table_sections if s.strip()])
+                    else:
+                        if section.strip():
+                            major_sections.append(section.strip())
+                
+                logger.info(f"Split into {len(major_sections)} sections using markers")
+                
+                # 작은 섹션들을 합치기
+                merged_sections = []
+                current_merged = ""
                 
                 for i, section in enumerate(major_sections):
-                    if not section.strip():
-                        continue
-                        
-                    logger.info(f"Processing major section {i+1}/{len(major_sections)}")
-                    
-                    # 각 섹션이 chunk_size보다 작으면 원본(공백 포함) 그대로 사용
-                    if len(section) <= chunk_size:
-                        all_chunks.append(section)
+                    # 현재 합쳐진 것과 새 섹션을 합쳤을 때의 길이 계산
+                    if current_merged:
+                        potential_merged = current_merged + "\n\n" + section
                     else:
-                        # 큰 섹션은 추가로 청킹
+                        potential_merged = section
+                    
+                    if len(potential_merged) <= chunk_size:
+                        # chunk_size를 넘지 않으면 계속 합치기
+                        current_merged = potential_merged
+                        logger.info(f"Merging section {i+1} (total length: {len(current_merged)})")
+                    else:
+                        # chunk_size를 넘으면 이전까지 합친 것을 저장하고 새로 시작
+                        if current_merged:
+                            merged_sections.append(current_merged)
+                            logger.info(f"Added merged section with length: {len(current_merged)}")
+                        current_merged = section
+                
+                # 마지막 섹션 추가
+                if current_merged:
+                    merged_sections.append(current_merged)
+                    logger.info(f"Added final merged section with length: {len(current_merged)}")
+                
+                # 합쳐진 섹션들을 최종 청킹
+                all_chunks = []
+                for i, section in enumerate(merged_sections):
+                    logger.info(f"Processing merged section {i+1}/{len(merged_sections)} (length: {len(section)})")
+                    
+                    # 섹션이 chunk_size의 2배를 초과하면 추가로 청킹
+                    if len(section) > chunk_size * 2:
+                        logger.info(f"Merged section {i+1} is too large ({len(section)} chars), splitting further")
                         text_splitter = RecursiveCharacterTextSplitter(
                             chunk_size=chunk_size,
                             chunk_overlap=chunk_overlap,
@@ -2014,8 +2053,11 @@ class DocumentProcessor:
                         )
                         section_chunks = text_splitter.split_text(section)
                         all_chunks.extend(section_chunks)
+                    else:
+                        # 섹션이 적당한 크기면 그대로 사용
+                        all_chunks.append(section)
                 
-                logger.info(f"Text split into {len(all_chunks)} chunks using major sections (\\n\\n\\n)")
+                logger.info(f"Text split into {len(all_chunks)} chunks after merging small sections")
                 return all_chunks
             
             else:
@@ -2047,54 +2089,52 @@ class DocumentProcessor:
             청크별 메타데이터 리스트 [{"text": str, "page_number": int, "line_start": int, "line_end": int}, ...]
         """
         try:
-            # 1. 오프셋 기반으로 청크 생성 (문자 오프셋 기준)
-            text_len = len(text)
-            if chunk_size <= 0:
-                raise ValueError("chunk_size must be > 0")
-
-            # 안전한 overlap
-            if chunk_overlap >= chunk_size:
-                chunk_overlap = max(1, chunk_size - 1)
-
+            # 1. self.chunk_text로 청킹 수행
+            chunks = self.chunk_text(text, chunk_size, chunk_overlap)
+            
+            # 2. 청크들을 합쳐서 재구성된 텍스트 생성 (구분자 제거된 상태)
+            reconstructed_text = self._reconstruct_text_from_chunks(chunks, chunk_overlap)
+            
+            # 3. 재구성된 텍스트를 기준으로 메타데이터 테이블 구성
+            line_table = self._build_line_offset_table(reconstructed_text, file_extension)
+            
+            # 4. 재구성된 텍스트에서 각 청크의 위치 찾기
             chunks_with_metadata = []
-            line_table = self._build_line_offset_table(text, file_extension)
-            page_mapping = self._extract_page_mapping(text, file_extension)
-
-            start = 0
-            idx = 0
-            step = chunk_size - chunk_overlap
-            while start < text_len:
-                end = min(start + chunk_size, text_len)
-                chunk_text = text[start:end]
-
-                # 글로벌 오프셋
-                global_start = start
-                global_end = end - 1 if end > 0 else 0
-
-                # 라인 인덱스 매핑
-                start_line_idx = self._find_line_index_by_pos(global_start, line_table)
-                end_line_idx = self._find_line_index_by_pos(global_end, line_table)
-
+            current_pos = 0
+            
+            for idx, chunk in enumerate(chunks):
+                # 재구성된 텍스트에서의 청크 위치
+                chunk_start = current_pos
+                chunk_end = current_pos + len(chunk) - 1
+                
+                # 라인 정보 추출 (재구성된 텍스트 기준)
+                start_line_idx = self._find_line_index_by_pos(chunk_start, line_table)
+                end_line_idx = self._find_line_index_by_pos(chunk_end, line_table)
+                
                 line_start = line_table[start_line_idx]["line_num"]
                 line_end = line_table[end_line_idx]["line_num"]
-
-                # 페이지는 시작 위치 기준
                 page_number = line_table[start_line_idx].get("page", 1)
-
+                
                 chunks_with_metadata.append({
-                    "text": chunk_text,
+                    "text": chunk,
                     "page_number": page_number,
                     "line_start": line_start,
                     "line_end": line_end,
-                    "global_start": global_start,
-                    "global_end": global_end,
+                    "global_start": chunk_start,
+                    "global_end": chunk_end,
                     "chunk_index": idx
                 })
-
-                idx += 1
-                start += step
+                
+                # 다음 청크 위치로 이동
+                current_pos += len(chunk)
+                
+                # 오버랩 처리 (마지막 청크가 아닌 경우)
+                if idx < len(chunks) - 1:
+                    next_chunk = chunks[idx + 1]
+                    overlap_length = self._find_overlap_length(chunk, next_chunk, chunk_overlap)
+                    current_pos -= overlap_length
             
-            logger.info(f"Created {len(chunks_with_metadata)} chunks with metadata for {file_extension} file")
+            logger.info(f"Created {len(chunks_with_metadata)} chunks with metadata using reconstructed text")
             return chunks_with_metadata
             
         except Exception as e:
@@ -2102,7 +2142,45 @@ class DocumentProcessor:
             # 실패 시 기본 청크만 반환
             chunks = self.chunk_text(text, chunk_size, chunk_overlap)
             return [{"text": chunk, "page_number": 1, "line_start": i+1, "line_end": i+1, "chunk_index": i} 
-                   for i, chunk in enumerate(chunks)]
+                for i, chunk in enumerate(chunks)]
+
+    def _reconstruct_text_from_chunks(self, chunks: List[str], chunk_overlap: int) -> str:
+        """청크들을 합쳐서 텍스트 재구성 (오버랩 제거)"""
+        if not chunks:
+            return ""
+        
+        if len(chunks) == 1:
+            return chunks[0]
+        
+        reconstructed = chunks[0]
+        
+        for i in range(1, len(chunks)):
+            current_chunk = chunks[i]
+            prev_chunk = chunks[i-1]
+            
+            # 이전 청크와 현재 청크 간의 오버랩 길이 찾기
+            overlap_length = self._find_overlap_length(prev_chunk, current_chunk, chunk_overlap)
+            
+            # 오버랩 부분을 제거하고 추가
+            if overlap_length > 0:
+                reconstructed += current_chunk[overlap_length:]
+            else:
+                reconstructed += current_chunk
+        
+        return reconstructed
+
+    def _find_overlap_length(self, chunk1: str, chunk2: str, max_overlap: int) -> int:
+        """두 청크 간의 실제 오버랩 길이 찾기"""
+        max_check = min(len(chunk1), len(chunk2), max_overlap)
+        
+        for overlap_len in range(max_check, 0, -1):
+            chunk1_suffix = chunk1[-overlap_len:]
+            chunk2_prefix = chunk2[:overlap_len]
+            
+            if chunk1_suffix == chunk2_prefix:
+                return overlap_len
+        
+        return 0
     
     def chunk_code_text(self, text: str, file_type: str, chunk_size: int = 1500, chunk_overlap: int = 300) -> List[str]:
         """코드 텍스트를 청크로 분할 (언어별 구문 구조를 고려한 분할)
