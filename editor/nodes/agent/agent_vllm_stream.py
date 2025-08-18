@@ -36,11 +36,11 @@ class AgentVLLMStreamNode(Node):
         {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}
     ]
     parameters = [
-        {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": False, "optional": True},
+        {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": True},
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.0, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
-        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": False, "optional": True},
+        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
     ]
 
@@ -136,17 +136,27 @@ class AgentVLLMStreamNode(Node):
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
                         ("user", "{additional_rag_context}"),
-                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                        MessagesPlaceholder(variable_name="agent_scratchpad")
                     ])
                 else:
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
-                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                        MessagesPlaceholder(variable_name="agent_scratchpad")
                     ])
+
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
-                agent_executor = AgentExecutor(agent=agent, tools=tools_list, verbose=True, handle_parsing_errors=True)
+                # Agent가 더 많은 반복(iteration)을 할 수 있도록 max_iterations 증가
+                agent_executor = AgentExecutor(
+                    agent=agent,
+                    tools=tools_list,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    max_iterations=10,  # 최대 10번까지 tool 호출 가능
+                    max_execution_time=300,  # 최대 5분까지 실행
+                    early_stopping_method="generate"  # 충분한 정보를 얻으면 조기 종료
+                )
                 handler = EnhancedAgentStreamingHandler()
 
                 # Helper 함수를 사용하여 Agent 실행을 스트리밍으로 처리
