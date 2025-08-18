@@ -34,11 +34,15 @@ class AgentOpenAINode(Node):
     ]
     parameters = [
         {
-            "id": "model", "name": "Model", "type": "STR", "value": "gpt-4o", "required": True, "optional": False,
+            "id": "model", "name": "Model", "type": "STR", "value": "gpt-5", "required": True,
             "options": [
+                {"value": "gpt-oss-20b", "label": "GPT-OSS-20B"},
+                {"value": "gpt-oss-120b", "label": "GPT-OSS-120B"},
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
                 {"value": "gpt-4", "label": "GPT-4"},
-                {"value": "gpt-4o", "label": "GPT-4o"}
+                {"value": "gpt-4o", "label": "GPT-4o"},
+                {"value": "gpt-5", "label": "GPT-5"},
+                {"value": "gpt-5-mini", "label": "GPT-5 Mini"},
             ]
         },
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
@@ -55,7 +59,7 @@ class AgentOpenAINode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
-        model: str = "gpt-4o",
+        model: str = "gpt-5",
         temperature: float = 0.7,
         max_tokens: int = 8192,
         n_messages: int = 3,

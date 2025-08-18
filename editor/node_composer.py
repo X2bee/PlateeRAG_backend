@@ -6,7 +6,7 @@ import importlib
 from pathlib import Path
 from typing import List, Dict, Type, Callable
 from abc import ABC, abstractmethod
-from editor.model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP, validate_parameters
+from editor.type_model.node import NodeSpec, Port, Parameter, CATEGORIES_LABEL_MAP, FUNCTION_LABEL_MAP, ICON_LABEL_MAP, validate_parameters
 
 NODE_REGISTRY = []
 NODE_CLASS_REGISTRY: Dict[str, Type['Node']] = {}

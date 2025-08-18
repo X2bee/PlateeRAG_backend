@@ -292,7 +292,7 @@ async def validate_all_parameters():
     등록된 모든 노드의 파라미터 유효성을 검사합니다.
     """
     try:
-        from editor.model.node import validate_parameters
+        from editor.type_model.node import validate_parameters
 
         node_registry = get_node_registry()
         validation_results = []

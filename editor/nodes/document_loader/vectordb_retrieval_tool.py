@@ -47,7 +47,6 @@ class QdrantRetrievalTool(Node):
         {"id": "rerank", "name": "Enable Rerank", "type": "BOOL", "value": False, "required": False, "optional": True},
         {"id": "rerank_top_k", "name": "Rerank Top K", "type": "INT", "value": 5, "required": False, "optional": True, "min": 1, "max": 100, "step": 1},
         {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True, "description": "검색된 자료를 어떻게 사용할 것인지 지시합니다."},
-
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
