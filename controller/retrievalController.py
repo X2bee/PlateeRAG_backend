@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 import logging
 import aiofiles
+import aiofiles.os
 import os
 import json
 from pathlib import Path
@@ -211,9 +212,14 @@ async def upload_document(
         upload_dir.mkdir(parents=True, exist_ok=True)
 
         file_path = upload_dir / file.filename
+
+        await file.seek(0)
         async with aiofiles.open(file_path, 'wb') as f:
-            content = await file.read()
-            await f.write(content)
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1MB
+                if not chunk:
+                    break
+                await f.write(chunk)
 
         # 메타데이터 파싱
         doc_metadata = {}
@@ -234,11 +240,11 @@ async def upload_document(
             doc_metadata,
         )
 
-        # 임시 파일 삭제
-        try:
-            os.unlink(file_path)
-        except Exception:
-            pass
+        # # 임시 파일 삭제
+        # try:
+        #     await aiofiles.os.remove(file_path)
+        # except Exception:
+        #     pass
 
         return result
 

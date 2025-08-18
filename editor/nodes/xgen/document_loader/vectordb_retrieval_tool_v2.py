@@ -4,6 +4,7 @@ import asyncio
 from collections import Counter
 from typing import Optional, Dict, Any
 from editor.node_composer import Node
+from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import tool
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
@@ -170,6 +171,7 @@ Context: {chunked_text}"""
                                 score = item.get("score", 0.0)
                                 chunk_text = item["chunk_text"]
                                 context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
+                                context_parts.append(f"{citation_prompt}")
                         if context_parts:
                             context_text = "\n".join(context_parts)
                             enhanced_prompt = f"""{enhance_prompt}:
