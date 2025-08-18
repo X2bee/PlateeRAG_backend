@@ -45,7 +45,7 @@ class VLLMConfigRequest(BaseModel):
     """VLLM 설정 요청"""
     # 모델 설정
     vllm_serve_model_name: str = Field("Qwen/Qwen3-1.7B", description="사용할 모델명", example="Qwen/Qwen3-1.7B")
-    vllm_max_model_len: int = Field(4096, description="최대 모델 길이", example=2048, ge=512, le=32768)
+    vllm_max_model_len: int = Field(4096, description="최대 모델 길이", example=2048, ge=512, le=131072)
 
     # 네트워크 설정
     vllm_host_ip: str = Field("0.0.0.0", description="호스트 IP", example="0.0.0.0")

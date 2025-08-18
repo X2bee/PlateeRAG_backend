@@ -30,14 +30,14 @@ logger = logging.getLogger("rag-service")
 class DocumentMetadata(BaseModel):
     """문서 메타데이터를 위한 Pydantic 모델"""
     summary: str = Field(description="주어진 데이터의 핵심 요소를 반드시 추출하여 요약문을 작성하십시오. 이 요약문의 길이 제한은 없으며, 반드시 핵심 정보는 모두 포함되어야 합니다. 특히 연령, 성별, 수치적 요소, 계절, 주기성 등의 메타적 요소가 존재하면 이것은 반드시 포함되어야 합니다.")
-    keywords: List[str] = Field(description="핵심 키워드들 (3-5개)", min_items=1, max_items=5)
-    topics: List[str] = Field(description="주요 주제들 (2-4개)", min_items=1, max_items=5)
-    entities: List[str] = Field(description="개체명들 (인명, 지명, 기관명 등)", max_items=5)
+    keywords: List[str] = Field(description="핵심 키워드들 (1-3개)", min_items=1, max_items=3)
+    topics: List[str] = Field(description="주요 주제들 (1-3개)", min_items=1, max_items=3)
+    entities: List[str] = Field(description="개체명들 (인명, 지명, 기관명, 상품명 등)", max_items=5)
     sentiment: str = Field(description="문서의 감정 톤", pattern="^(positive|negative|neutral)$")
-    document_type: str = Field(description="문서 유형", pattern="^(기술문서|보고서|매뉴얼|학술논문|뉴스|기타)$")
+    document_type: str = Field(description="문서 유형", pattern="^(상품설명서|기술설명서|보고서|매뉴얼|학술논문|뉴스|사회법률|회사내규|지침서|기타)$")
     language: str = Field(description="언어 코드 (ko, en, ja, zh 등)", max_length=1)
     complexity_level: str = Field(description="복잡도 수준", pattern="^(beginner|intermediate|advanced)$")
-    main_concepts: List[str] = Field(description="핵심 개념들 (2-4개)", min_items=1, max_items=5)
+    main_concepts: List[str] = Field(description="핵심 개념들 (1-3개)", min_items=1, max_items=3)
 
 class LLMMetadataGenerator:
     """LLM 기반 메타데이터 생성 클래스"""
@@ -159,7 +159,7 @@ class LLMMetadataGenerator:
 {escaped_instructions}
 
 === 추가 지침 ===
-- 한국어 텍스트는 language를 "ko"로 설정
+- 반드시 한국어(KOREAN), 영어(ENGLISH) 및 숫자 특수문자만 사용할 것
 - 감정 분석에서 중립적인 경우 "neutral" 사용
 - 문서 유형이 명확하지 않으면 "기타" 사용
 - 키워드와 개념은 중복되지 않도록 주의
@@ -171,6 +171,39 @@ class LLMMetadataGenerator:
 
         return prompt
 
+    def _validate_parsed_metadata_language(self, parsed_metadata: Dict[str, Any]) -> bool:
+        """파싱된 메타데이터의 각 값이 허용된 언어인지 검증"""
+        import re
+
+        # 한국어 (한글), 영어 (알파벳), 숫자, 특수문자, 공백, 개행 허용
+        allowed_pattern = r'^[\u0020-\u007F\u00A0-\u00FF\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F\s\n\r\t]*$'
+
+        def check_value(value):
+            if isinstance(value, str):
+                if not re.match(allowed_pattern, value):
+                    # 다른 언어 문자 확인
+                    chinese_chars = re.findall(r'[\u4e00-\u9fff]', value)
+                    japanese_chars = re.findall(r'[\u3040-\u309f\u30a0-\u30ff]', value)
+                    arabic_chars = re.findall(r'[\u0600-\u06ff]', value)
+                    if chinese_chars or japanese_chars or arabic_chars:
+                        logger.warning(f"Invalid language in value '{value}': Chinese({len(chinese_chars)}), Japanese({len(japanese_chars)}), Arabic({len(arabic_chars)})")
+                        return False
+                return True
+            elif isinstance(value, list):
+                for item in value:
+                    if not check_value(item):
+                        return False
+                return True
+            else:
+                return True  # 숫자나 다른 타입은 통과
+
+        for key, value in parsed_metadata.items():
+            if not check_value(value):
+                logger.warning(f"Language validation failed for key '{key}' with value: {value}")
+                return False
+
+        return True
+
     async def generate_metadata(self, text: str, existing_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """LLM을 사용해서 메타데이터 생성 (JsonOutputParser 사용)"""
 
@@ -180,50 +213,82 @@ class LLMMetadataGenerator:
             logger.debug("LLM client not available, skipping metadata generation")
             return {}
 
-        try:
-            from langchain_core.messages import HumanMessage, SystemMessage
+        max_retries = 3
 
-            # JsonOutputParser 초기화
-            parser = JsonOutputParser(pydantic_object=DocumentMetadata)
-
-            system_msg = SystemMessage(content="당신은 문서 분석 전문가입니다. 주어진 텍스트를 분석해서 구조화된 메타데이터를 JSON 형식으로 정확하게 생성해주세요.")
-            human_msg = HumanMessage(content=self._create_metadata_prompt(text, existing_metadata))
-
-            response = await self.llm_client.ainvoke([system_msg, human_msg])
-            content = response.content.strip()
-
-            # JsonOutputParser를 사용하여 파싱
+        for attempt in range(max_retries):
             try:
-                parsed_result = parser.parse(content)
-                logger.info(f"Generated metadata using LLM: {list(parsed_result.keys())}")
-                return parsed_result
-            except Exception as parse_error:
-                logger.warning(f"JsonOutputParser failed: {parse_error}")
+                from langchain_core.messages import HumanMessage, SystemMessage
 
-                # 파싱 실패 시 수동 JSON 파싱 시도
+                # JsonOutputParser 초기화
+                parser = JsonOutputParser(pydantic_object=DocumentMetadata)
+
+                system_msg = SystemMessage(content="당신은 문서 분석 전문가입니다. 주어진 텍스트를 분석해서 구조화된 메타데이터를 JSON 형식으로 정확하게 생성해주세요. 응답은 반드시 한국어 또는 영어만 사용해주세요.")
+                human_msg = HumanMessage(content=self._create_metadata_prompt(text, existing_metadata))
+
+                response = await self.llm_client.ainvoke([system_msg, human_msg])
+                content = response.content.strip()
+
+                # JsonOutputParser를 사용하여 파싱
                 try:
-                    # JSON 마크다운 블록 제거
-                    if content.startswith('```json'):
-                        content = content[7:]
-                    if content.endswith('```'):
-                        content = content[:-3]
+                    parsed_result = parser.parse(content)
 
-                    # 수동 JSON 파싱
-                    parsed_result = json.loads(content.strip())
+                    # 파싱된 결과의 언어 검증
+                    if not self._validate_parsed_metadata_language(parsed_result):
+                        logger.warning(f"Parsed metadata language validation failed on attempt {attempt + 1}/{max_retries}")
+                        if attempt < max_retries - 1:
+                            continue
+                        else:
+                            logger.error("All parsed metadata language validation attempts failed, returning empty metadata")
+                            return {}
 
-                    # Pydantic 모델로 검증
-                    validated_result = DocumentMetadata(**parsed_result)
-                    logger.info(f"Generated metadata using fallback JSON parsing: {list(validated_result.dict().keys())}")
-                    return validated_result.dict()
+                    logger.info(f"Generated metadata using LLM: {list(parsed_result.keys())} (attempt {attempt + 1})")
+                    return parsed_result
+                except Exception as parse_error:
+                    logger.warning(f"JsonOutputParser failed: {parse_error}")
 
-                except (json.JSONDecodeError, Exception) as fallback_error:
-                    logger.error(f"Both JsonOutputParser and manual parsing failed: {fallback_error}")
-                    logger.debug(f"Raw content: {content}")
+                    # 파싱 실패 시 수동 JSON 파싱 시도
+                    try:
+                        # JSON 마크다운 블록 제거
+                        if content.startswith('```json'):
+                            content = content[7:]
+                        if content.endswith('```'):
+                            content = content[:-3]
+
+                        # 수동 JSON 파싱
+                        parsed_result = json.loads(content.strip())
+
+                        # Pydantic 모델로 검증
+                        validated_result = DocumentMetadata(**parsed_result)
+                        validated_dict = validated_result.dict()
+
+                        # 파싱된 결과의 언어 검증
+                        if not self._validate_parsed_metadata_language(validated_dict):
+                            logger.warning(f"Fallback parsed metadata language validation failed on attempt {attempt + 1}/{max_retries}")
+                            if attempt < max_retries - 1:
+                                continue
+                            else:
+                                logger.error("All fallback parsed metadata language validation attempts failed, returning empty metadata")
+                                return {}
+
+                        logger.info(f"Generated metadata using fallback JSON parsing: {list(validated_dict.keys())} (attempt {attempt + 1})")
+                        return validated_dict
+
+                    except (json.JSONDecodeError, Exception) as fallback_error:
+                        logger.error(f"Both JsonOutputParser and manual parsing failed: {fallback_error}")
+                        logger.debug(f"Raw content: {content}")
+                        if attempt < max_retries - 1:
+                            continue
+                        else:
+                            return {}
+
+            except Exception as e:
+                logger.error(f"Error generating metadata with LLM (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    continue
+                else:
                     return {}
 
-        except Exception as e:
-            logger.error(f"Error generating metadata with LLM: {e}")
-            return {}
+        return {}
 
     async def generate_batch_metadata(self, texts: List[str],
                                     existing_metadatas: List[Dict[str, Any]] = None,
@@ -505,17 +570,33 @@ class RAGService:
                     # 임베딩 차원 수 확인 및 로깅
                     try:
                         dimension = self.embeddings_client.get_embedding_dimension()
-                        logger.info(f"Embedding client initialized successfully: {provider}, dimension: {dimension}")
 
-                        # 설정에서 AUTO_DETECT_EMBEDDING_DIM이 True면 차원 수 업데이트
-                        if self.config.AUTO_DETECT_EMBEDDING_DIM.value:
-                            old_dimension = self.config.VECTOR_DIMENSION.value
-                            if old_dimension != dimension:
-                                logger.info(f"Updating vector dimension from {old_dimension} to {dimension}")
-                                self.config.VECTOR_DIMENSION.value = dimension
-                                self._reinitialize_vector_manager()
+                        # dimension이 유효한 정수일 때만 업데이트 시도
+                        if isinstance(dimension, int) and dimension > 0:
+                            logger.info(f"Embedding client initialized successfully: {provider}, dimension: {dimension}")
 
-                        return
+                            # 설정에서 AUTO_DETECT_EMBEDDING_DIM이 True면 차원 수 업데이트
+                            if self.config.AUTO_DETECT_EMBEDDING_DIM.value:
+                                old_dimension = self.config.VECTOR_DIMENSION.value
+                                if old_dimension != dimension:
+                                    logger.info(f"Updating vector dimension from {old_dimension} to {dimension}")
+                                    # 메모리와 DB에 모두 저장하여 _config_refresh 시 변경이 유지되도록 함
+                                    try:
+                                        self.config.VECTOR_DIMENSION.value = dimension
+                                        try:
+                                            self.config.VECTOR_DIMENSION.save()
+                                        except Exception as save_e:
+                                            logger.warning(f"Failed to persist VECTOR_DIMENSION to DB: {save_e}")
+
+                                        # reinitialize vector manager with new persisted value
+                                        self._reinitialize_vector_manager()
+                                    except Exception as e:
+                                        logger.warning(f"Failed while updating VECTOR_DIMENSION: {e}")
+
+                            return
+                        else:
+                            logger.info("Embedding dimension unknown at init time; skipping VECTOR_DIMENSION update")
+                            return
                     except Exception as dim_error:
                         logger.warning(f"Could not get embedding dimension: {dim_error}")
                         logger.info(f"Embedding client initialized successfully: {provider}")
@@ -1130,7 +1211,7 @@ class RAGService:
                 ))
                 # document_type이 존재할 때만 엣지로 저장 (NULL 삽입 방지)
                 doc_type_val = payload.get("document_type")
-                if doc_type_val:
+                if doc_type_val and doc_type_val.strip() != "기타":
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
                         collection_name=collection_name,

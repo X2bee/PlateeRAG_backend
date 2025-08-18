@@ -366,6 +366,24 @@ async def get_document_detail_meta(request: Request, collection_name: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
 
+@router.get("/collections-all/detail/documents")
+async def get_all_document_detail_meta(request: Request):
+    """모든 문서의 메타데이터 조회"""
+    try:
+        app_db = get_db_manager(request)
+        user_id = extract_user_id_from_request(request)
+        existing_data = app_db.find_by_condition(
+            VectorDBChunkMeta,
+            {
+                "user_id": user_id,
+            },
+            limit=10000,
+            return_list=True
+        )
+        return existing_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
+
 @router.get("/collections/detail/{collection_name}/edges")
 async def get_document_detail_edges(request: Request, collection_name: str):
     """특정 문서의 엣지 메타데이터 조회"""
@@ -377,6 +395,24 @@ async def get_document_detail_edges(request: Request, collection_name: str):
             {
                 "user_id": user_id,
                 "collection_name": collection_name,
+            },
+            limit=10000,
+            return_list=True
+        )
+        return existing_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
+
+@router.get("/collections-all/detail/edges")
+async def get_all_document_detail_edges(request: Request):
+    """모든 문서의 엣지 메타데이터 조회"""
+    try:
+        app_db = get_db_manager(request)
+        user_id = extract_user_id_from_request(request)
+        existing_data = app_db.find_by_condition(
+            VectorDBChunkEdge,
+            {
+                "user_id": user_id,
             },
             limit=10000,
             return_list=True

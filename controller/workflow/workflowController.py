@@ -1311,7 +1311,7 @@ async def process_batch_group(
     execution_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # 결과 처리
-    for i, (test_case, exec_result) in enumerate(zip(test_cases, execution_results)):
+    for test_case, exec_result in zip(test_cases, execution_results):
         if isinstance(exec_result, Exception):
             result = BatchTestResult(
                 id=test_case.id,
@@ -1352,12 +1352,12 @@ async def process_batch_group(
 
         results.append(result)
 
-        # 진행 상황 업데이트
-        if batch_id in batch_status_storage:
-            batch_status_storage[batch_id]["completed_count"] += 1
-            progress = (batch_status_storage[batch_id]["completed_count"] /
-                       batch_status_storage[batch_id]["total_count"]) * 100
-            batch_status_storage[batch_id]["progress"] = progress
+    # 진행 상황 업데이트 (배치 그룹 처리 완료 후 한 번에 업데이트)
+    if batch_id in batch_status_storage:
+        batch_status_storage[batch_id]["completed_count"] += len(test_cases)
+        progress = (batch_status_storage[batch_id]["completed_count"] /
+                   batch_status_storage[batch_id]["total_count"]) * 100
+        batch_status_storage[batch_id]["progress"] = progress
 
     return results
 
