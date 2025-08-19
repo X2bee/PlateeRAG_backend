@@ -1365,6 +1365,151 @@ async def process_batch_group(
 # 배치 실행 API 엔드포인트 / batch로 만듦.
 # ==================================================
 
+@router.post("/execute/batch/stream")
+async def execute_workflow_batch_stream(request: Request, batch_request: BatchExecuteRequest):
+    """
+    워크플로우 배치 실행 스트리밍 엔드포인트
+    여러 테스트 케이스를 배치로 처리하며 실시간 진행 상황을 SSE로 스트리밍합니다.
+
+    Args:
+        batch_request: 배치 실행 요청 데이터
+
+    Returns:
+        StreamingResponse: SSE 형식의 실시간 배치 실행 결과
+    """
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+
+    async def batch_stream_generator():
+        batch_id = str(uuid.uuid4())
+        start_time = time.time()
+
+        try:
+            # 배치 상태 초기화
+            batch_status_storage[batch_id] = {
+                "status": "running",
+                "total_count": len(batch_request.test_cases),
+                "completed_count": 0,
+                "progress": 0.0,
+                "start_time": start_time
+            }
+
+            # 배치 시작 알림
+            initial_message = {
+                "type": "batch_start",
+                "batch_id": batch_id,
+                "total_count": len(batch_request.test_cases),
+                "batch_size": batch_request.batch_size,
+                "workflow_name": batch_request.workflow_name
+            }
+            yield f"data: {json.dumps(initial_message, ensure_ascii=False)}\n\n"
+
+            logger.info(f"배치 스트림 {batch_id} 시작: 워크플로우={batch_request.workflow_name}, "
+                       f"테스트 케이스={len(batch_request.test_cases)}개, 배치 크기={batch_request.batch_size}")
+
+            all_results = []
+
+            # 배치 크기만큼 나누어서 처리
+            for i in range(0, len(batch_request.test_cases), batch_request.batch_size):
+                batch_group = batch_request.test_cases[i:i + batch_request.batch_size]
+                group_number = i // batch_request.batch_size + 1
+
+                # 배치 그룹 시작 알림
+                group_start_message = {
+                    "type": "group_start",
+                    "batch_id": batch_id,
+                    "group_number": group_number,
+                    "group_size": len(batch_group),
+                    "progress": (i / len(batch_request.test_cases)) * 100
+                }
+                yield f"data: {json.dumps(group_start_message, ensure_ascii=False)}\n\n"
+
+                logger.info(f"배치 그룹 {group_number} 처리 중: {len(batch_group)}개 병렬 실행")
+
+                # 현재 배치 그룹 처리
+                group_results = await process_batch_group(
+                    user_id=user_id,
+                    workflow_name=batch_request.workflow_name,
+                    workflow_id=batch_request.workflow_id,
+                    test_cases=batch_group,
+                    interaction_id=batch_request.interaction_id,
+                    selected_collections=batch_request.selected_collections,
+                    batch_id=batch_id,
+                    app_db=app_db,
+                    request=request
+                )
+
+                all_results.extend(group_results)
+
+                # 그룹 완료 알림과 결과 스트리밍
+                for result in group_results:
+                    result_message = {
+                        "type": "test_result",
+                        "batch_id": batch_id,
+                        "result": result.dict()
+                    }
+                    yield f"data: {json.dumps(result_message, ensure_ascii=False)}\n\n"
+
+                # 진행 상황 업데이트
+                completed_count = len(all_results)
+                progress = (completed_count / len(batch_request.test_cases)) * 100
+
+                progress_message = {
+                    "type": "progress",
+                    "batch_id": batch_id,
+                    "completed_count": completed_count,
+                    "total_count": len(batch_request.test_cases),
+                    "progress": round(progress, 2),
+                    "group_number": group_number,
+                    "elapsed_time": int((time.time() - start_time) * 1000)
+                }
+                yield f"data: {json.dumps(progress_message, ensure_ascii=False)}\n\n"
+
+                # 다음 배치 그룹 처리 전 잠시 대기 (서버 부하 방지)
+                if i + batch_request.batch_size < len(batch_request.test_cases):
+                    await asyncio.sleep(0.5)
+
+            # 최종 결과 계산
+            total_execution_time = int((time.time() - start_time) * 1000)
+            success_count = sum(1 for r in all_results if r.status == "success")
+            error_count = len(all_results) - success_count
+
+            # 배치 상태 완료로 업데이트
+            batch_status_storage[batch_id]["status"] = "completed"
+            batch_status_storage[batch_id]["progress"] = 100.0
+
+            # 최종 완료 메시지
+            final_message = {
+                "type": "batch_complete",
+                "batch_id": batch_id,
+                "total_count": len(all_results),
+                "success_count": success_count,
+                "error_count": error_count,
+                "total_execution_time": total_execution_time,
+                "message": f"배치 처리 완료: 성공={success_count}개, 실패={error_count}개"
+            }
+            yield f"data: {json.dumps(final_message, ensure_ascii=False)}\n\n"
+
+            logger.info(f"배치 스트림 {batch_id} 완료: 성공={success_count}개, 실패={error_count}개, "
+                       f"총 소요시간={total_execution_time}ms")
+
+        except Exception as e:
+            logger.error(f"배치 스트림 실행 중 오류: {str(e)}", exc_info=True)
+
+            if 'batch_id' in locals() and batch_id in batch_status_storage:
+                batch_status_storage[batch_id]["status"] = "error"
+                batch_status_storage[batch_id]["error"] = str(e)
+
+            error_message = {
+                "type": "error",
+                "batch_id": batch_id if 'batch_id' in locals() else "unknown",
+                "error": str(e),
+                "message": "배치 실행 중 오류가 발생했습니다"
+            }
+            yield f"data: {json.dumps(error_message, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(batch_stream_generator(), media_type="text/event-stream")
+
 @router.post("/execute/batch", response_model=BatchExecuteResponse)
 async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRequest):
     """
@@ -1419,6 +1564,12 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
 
             all_results.extend(group_results)
 
+            # 배치 그룹 완료 후 진행 상황 로깅
+            completed_count = len(all_results)
+            progress = (completed_count / len(batch_request.test_cases)) * 100
+            logger.info(f"배치 그룹 {i//batch_request.batch_size + 1} 완료: "
+                       f"진행률 {progress:.1f}% ({completed_count}/{len(batch_request.test_cases)})")
+
             # 다음 배치 그룹 처리 전 잠시 대기 (서버 부하 방지위해서)
             if i + batch_request.batch_size < len(batch_request.test_cases):
                 await asyncio.sleep(0.5)
@@ -1455,21 +1606,6 @@ async def execute_workflow_batch(request: Request, batch_request: BatchExecuteRe
 
         raise HTTPException(status_code=500, detail=f"배치 실행 실패: {str(e)}")
 
-@router.get("/batch/status/{batch_id}")
-async def get_batch_status(batch_id: str):
-    """
-    배치 실행 상태 조회 (선택사항 - 실시간 진행 상황 확인용)
-
-    Args:
-        batch_id: 배치 작업 ID
-
-    Returns:
-        배치 작업 상태 정보
-    """
-    if batch_id not in batch_status_storage:
-        raise HTTPException(status_code=404, detail="배치를 찾을 수 없습니다")
-
-    return JSONResponse(content=batch_status_storage[batch_id])
 
 @router.get("/execution/status")
 async def get_all_execution_status():
