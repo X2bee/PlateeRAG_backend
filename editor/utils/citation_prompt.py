@@ -19,9 +19,6 @@ citation_prompt = """
 예시 3 (여러 문서 참조):
 "플래티어의 매출은 전년 대비 30% 증가했으며 [Cite. {{"file_name": "재무제표_2023.pdf", "file_path": "/finance/재무제표_2023.pdf", "page_number": 2, "line_start": 10, "line_end": 12}}], 이는 주요 고객사와의 계약 확대가 주요 원인입니다. [Cite. {{"file_name": "영업보고서_Q4.pdf", "file_path": "/sales/영업보고서_Q4.pdf", "page_number": 7, "line_start": 3, "line_end": 9}}]"
 
-예시 4 (표나 그래프 참조):
-"2023년 분기별 매출 현황을 보면 4분기에 가장 높은 성과를 기록했습니다. [Cite. {{"file_name": "분기별_실적.xlsx", "file_path": "/data/분기별_실적.xlsx", "page_number": 1, "line_start": 8, "line_end": 15}}]"
-
 # 잘못된 출처 표시:
 - 출처 없이 사실을 주장하는 경우
 - JSON 형식을 지키지 않는 경우
