@@ -108,8 +108,8 @@ class AgentOpenAINode(Node):
                             score = item.get("score", 0.0)
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
-                            context_parts.append(f"{citation_prompt}")
                     if context_parts:
+                        context_parts.append(f"{citation_prompt}")
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 {context_text}"""
