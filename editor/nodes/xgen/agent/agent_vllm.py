@@ -145,11 +145,11 @@ class AgentVLLMNode(Node):
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
                     if context_parts:
-                        context_parts.append(f"{citation_prompt}")
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 {context_text}"""
             prompt = prefix_prompt+default_prompt
+            prompt = f"{prompt}\n{citation_prompt}"
 
             # OpenAI API를 사용하여 응답 생성
             response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, additional_rag_context)
