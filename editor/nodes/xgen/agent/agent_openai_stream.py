@@ -109,7 +109,6 @@ class AgentOpenAIStreamNode(Node):
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
                     if context_parts:
-                        context_parts.append(f"{citation_prompt}")
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 {context_text}"""
@@ -119,7 +118,7 @@ class AgentOpenAIStreamNode(Node):
                 parser = JsonOutputParser(pydantic_object=args_schema)
                 format_instructions = parser.get_format_instructions()
                 escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
-                default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
+                default_prompt = f"{default_prompt}\n\n{escaped_instructions}\n{default_prompt}"
 
             if tools_list:
                 if additional_rag_context and additional_rag_context.strip():
