@@ -99,15 +99,19 @@ class AgentOpenAINode(Node):
                     context_parts = []
                     for i, item in enumerate(results, 1):
                         if "chunk_text" in item and item["chunk_text"]:
+                            item_file_name = item.get("file_name", "Unknown")
+                            item_file_path = item.get("file_path", "Unknown")
+                            item_page_number = item.get("page_number", 0)
+                            item_line_start = item.get("line_start", 0)
+                            item_line_end = item.get("line_end", 0)
+
                             score = item.get("score", 0.0)
                             chunk_text = item["chunk_text"]
-                            context_parts.append(f"[문서 {i}] (관련도: {score:.3f})\n{chunk_text}")
+                            context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
                     if context_parts:
-                        default_prompt = default_prompt + citation_prompt
+                        context_parts.append(f"{citation_prompt}")
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
-
-[Context]
 {context_text}"""
 
             response = self._generate_chat_response(text, default_prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, additional_rag_context)
