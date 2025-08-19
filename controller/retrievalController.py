@@ -20,6 +20,7 @@ from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, Vector
 from controller.controller_helper import extract_user_id_from_request
 from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from service.embedding import get_fastembed_service
+from service.retrieval.rag_service import RAGService
 
 logger = logging.getLogger("retrieval-controller")
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
@@ -580,5 +581,29 @@ async def get_retrieval_config(request: Request):
             }
         else:
             raise HTTPException(status_code=500, detail="Configuration not available")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get retrieval config: {str(e)}")
+
+@router.post("/refresh-db")
+async def refresh_retrieval_config(request: Request):
+    """현재 retrieval 시스템 설정 조회"""
+    try:
+        config_composer = get_config_composer(request)
+        vectordb_category = config_composer.get_config_by_category_name('vectordb')
+        collection_category = config_composer.get_config_by_category_name('collection')
+        openai_category = config_composer.get_config_by_category_name('openai')
+
+        logger.info("Initializing RAG services...")
+        rag_service = RAGService(vectordb_category, collection_category, openai_category)
+
+        request.app.state.rag_service = rag_service
+        request.app.state.vector_manager = rag_service.vector_manager
+        request.app.state.embedding_client = rag_service.embeddings_client
+        request.app.state.document_processor = rag_service.document_processor
+
+        return {
+            "message": "Retrieval configuration refreshed successfully"
+        }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get retrieval config: {str(e)}")

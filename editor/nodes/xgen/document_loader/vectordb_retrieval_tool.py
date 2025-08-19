@@ -100,7 +100,7 @@ class QdrantRetrievalTool(Node):
                             context_parts.append(f"{citation_prompt}")
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        enhanced_prompt = f"""{enhance_prompt}:
+                        enhanced_prompt = f"""{enhance_prompt}
 {context_text}"""
                         return enhanced_prompt
                 except Exception as e:
