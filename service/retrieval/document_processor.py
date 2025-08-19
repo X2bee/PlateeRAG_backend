@@ -812,98 +812,214 @@ class DocumentProcessor:
             # 🔥 참고 텍스트가 있는 경우와 없는 경우로 프롬프트 구분
             if reference_text and reference_text.strip():
                 # 참고 텍스트 포함 프롬프트
-                prompt = f"""이 이미지를 정확한 텍스트로 변환해주세요. 
+                prompt = f"""이 이미지를 정확한 HTML 텍스트로 변환해주세요. 
 
-                            **🔥 중요: 기계적 파싱 참고 텍스트 활용**
-                            아래는 같은 페이지에서 기계적으로 추출된 텍스트입니다. 이를 참고하여 OCR 정확도를 높여주세요:
-                            {reference_text}
-                                **변환 규칙:**
-                            1. **참고 텍스트 활용**: 위의 참고 텍스트를 활용하여 누락된 단어나 부정확한 인식을 보완해주세요
-                                이 이미지를 정확한 텍스트로 변환해주세요. 다음 규칙을 철저히 지켜주세요:
+                    **🔥 중요: 기계적 파싱 참고 텍스트 활용**
+                    아래는 같은 페이지에서 기계적으로 추출된 텍스트입니다. 이를 참고하여 OCR 정확도를 높여주세요:
+                    {reference_text}
 
-                                1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요 또한 병합된 셀의 경우, 각각 해당 사항에 모두 넣어주세요.
-                                => 표의 머지된 부분을 정확하게 고려해서 표 아래에 모든 내용을 텍스트로 변환하여 적어주세요.
-                                2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
-                                3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
-                                4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
-                                5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
-                                6. **슬라이드 구조**: 슬라이드 제목, 내용, 차트/그래프 설명을 구분해주세요
-                                7. **섹션 구분**: MarkDown 형식을 철저히 준수해서 섹션 구분을 철저히 나눠주세요.
-                                8. **참고 텍스트 활용**: 위의 참고 텍스트를 활용하여 누락된 단어나 부정확한 인식을 보완해주세요
-                                9. **표 구분**: 각 이미지 내에서 표는 [표 구분]으로 명확히 구분하고, 표의 제목, 설명, 표 본체, 텍스트 변환을 모두 포함해주세요
-                                10. **언어*** : 한국어/영어가 아닌 문자를 포함하지 않도록 주의해주세요. 한자의 경우 한국어로 넣어주세요.
-                                **섹션 구분 예시:**
-                                - 서로 다른 주제나 단락 사이 
-                                - 표와 다른 내용 사이
-                                - 각 표는 제목부터 텍스트 설명까지 하나의 [표 구분]을 이룹니다.
-                                - 단 상품의 제목 과 설명 / 표의 제목 및 설명 등 같은 내용은 하나의 색션을 구성해야합니다
+                    **HTML 변환 규칙:**
+                    1. **참고 텍스트 활용**: 위의 참고 텍스트를 활용하여 누락된 단어나 부정확한 인식을 보완해주세요
+                    2. **HTML 구조 보존**: 문서의 구조를 semantic HTML로 정확히 표현해주세요
+                    3. **표 구조**: 표가 있다면 `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>` 태그를 사용하여 정확한 구조로 변환해주세요
+                    4. **병합된 셀**: `colspan`, `rowspan` 속성을 사용하여 병합된 셀을 정확히 표현해주세요
+                    5. **레이아웃 유지**: 원본의 레이아웃과 계층 구조를 HTML로 보존해주세요
+                    6. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
+                    7. **구조화**: 제목(`<h1>-<h6>`), 단락(`<p>`), 목록(`<ul>`, `<ol>`, `<li>`) 등을 적절히 사용해주세요
+                    8. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
+                    9. **섹션 구분**: `<section>`, `<div>`, `<article>` 등을 사용하여 논리적 구분을 명확히 해주세요
+                    10. **표 구분**: 각 표는 `<div class="table-section">` 으로 감싸서 명확히 구분해주세요
+                    11. **언어**: 한국어/영어가 아닌 문자를 포함하지 않도록 주의해주세요. 한자의 경우 한국어로 변환해주세요
 
-                                **출력 형식 예시:**
-                                # 제목
-                                [섹션 구분]
-                                본문 내용이 여기에...
-
-                                [섹션 구분]
-                                ## 소제목
-                                다른 섹션의 내용...
-
-                                [표 구분]
-                                ### 상가건물 지역별 임대 현황
-                                출처: 부동산 통계청 (2024년 3분기)
-                                ※ 단위: 면적(㎡), 임대료(만원/월), 보증금(만원)
-                                
-                                | 구분 | 지역명 | 평균임대료(만원) | 보증금(만원) | 면적(㎡) | 업종분류 | 계약현황 |
-                                |------|--------|------------------|--------------|----------|----------|----------|
-                                | 상가 | 강남구 | 450 | 8,500 | 65.2 | 음식점 | 계약완료 |
-                                | 상가 | 서초구 | 320 | 6,200 | 48.7 | 의류 | 협의중 |
-                                | 상가 | 마포구 | 280 | 4,800 | 52.3 | 카페 | 계약완료 |
-                                
-                                **표 내용 완전 텍스트 변환**: 이 표는 상가건물 지역별 임대 현황을 나타내는 표로, 부동산 통계청에서 발표한 2024년 3분기 자료입니다. 면적은 제곱미터, 임대료는 월 단위 만원, 보증금은 만원 단위로 표시되어 있습니다. 총 3개 지역의 상가 정보가 포함되어 있습니다. 첫 번째는 강남구 상가로 평균임대료가 450만원, 보증금이 8,500만원이며, 면적은 65.2㎡이고 음식점 업종으로 계약이 완료된 상태입니다. 두 번째는 서초구 상가로 평균임대료가 320만원, 보증금이 6,200만원이며, 면적은 48.7㎡이고 의류 업종으로 현재 협의중인 상태입니다. 세 번째는 마포구 상가로 평균임대료가 280만원, 보증금이 4,800만원이며, 면적은 52.3㎡이고 카페 업종으로 계약이 완료된 상태입니다.
-
-                                반드시 한국어 및 영어로 된 텍스트만 출력하고, 추가 설명은 하지 마세요."""
+                    **HTML 출력 형식 예시:**
+                    ```html
+                    <!DOCTYPE html>
+                    <html lang="ko">
+                    <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>문서 제목</title>
+                    </head>
+                    <body>
+                    <header>
+                        <h1>제목</h1>
+                    </header>
+                    
+                    <main>
+                        <section>
+                            <p>본문 내용이 여기에...</p>
+                        </section>
+                        
+                        <section>
+                            <h2>소제목</h2>
+                            <p>다른 섹션의 내용...</p>
+                        </section>
+                        
+                        <div class="table-section">
+                            <h3>상가건물 지역별 임대 현황</h3>
+                            <p class="source">출처: 부동산 통계청 (2024년 3분기)</p>
+                            <p class="note">※ 단위: 면적(㎡), 임대료(만원/월), 보증금(만원)</p>
+                            
+                            <table border="1">
+                                <thead>
+                                    <tr>
+                                        <th>구분</th>
+                                        <th>지역명</th>
+                                        <th>평균임대료(만원)</th>
+                                        <th>보증금(만원)</th>
+                                        <th>면적(㎡)</th>
+                                        <th>업종분류</th>
+                                        <th>계약현황</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>상가</td>
+                                        <td>강남구</td>
+                                        <td>450</td>
+                                        <td>8,500</td>
+                                        <td>65.2</td>
+                                        <td>음식점</td>
+                                        <td>계약완료</td>
+                                    </tr>
+                                    <tr>
+                                        <td>상가</td>
+                                        <td>서초구</td>
+                                        <td>320</td>
+                                        <td>6,200</td>
+                                        <td>48.7</td>
+                                        <td>의류</td>
+                                        <td>협의중</td>
+                                    </tr>
+                                    <tr>
+                                        <td>상가</td>
+                                        <td>마포구</td>
+                                        <td>280</td>
+                                        <td>4,800</td>
+                                        <td>52.3</td>
+                                        <td>카페</td>
+                                        <td>계약완료</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            
+                            <div class="table-description">
+                                <p><strong>표 내용 완전 텍스트 변환</strong>: 이 표는 상가건물 지역별 임대 현황을 나타내는 표로, 부동산 통계청에서 발표한 2024년 3분기 자료입니다. 면적은 제곱미터, 임대료는 월 단위 만원, 보증금은 만원 단위로 표시되어 있습니다. 총 3개 지역의 상가 정보가 포함되어 있습니다. 첫 번째는 강남구 상가로 평균임대료가 450만원, 보증금이 8,500만원이며, 면적은 65.2㎡이고 음식점 업종으로 계약이 완료된 상태입니다. 두 번째는 서초구 상가로 평균임대료가 320만원, 보증금이 6,200만원이며, 면적은 48.7㎡이고 의류 업종으로 현재 협의중인 상태입니다. 세 번째는 마포구 상가로 평균임대료가 280만원, 보증금이 4,800만원이며, 면적은 52.3㎡이고 카페 업종으로 계약이 완료된 상태입니다.</p>
+                            </div>
+                        </div>
+                    </main>
+                    </body>
+                    </html>"""
             else:
-                # 기존 프롬프트 (참고 텍스트 없음)
-                prompt = """이 이미지를 정확한 텍스트로 변환해주세요. 다음 규칙을 철저히 지켜주세요:
+                # 참고 텍스트 포함 프롬프트
+                prompt = f"""이 이미지를 정확한 HTML 텍스트로 변환해주세요. 
 
-                    1. **표 구조 보존**: 표가 있다면 정확한 행과 열 구조를 유지하고, 마크다운 표 형식으로 변환해주세요 또한 병합된 셀의 경우, 각각 해당 사항에 모두 넣어주세요.
-                    2. **레이아웃 유지**: 원본의 레이아웃, 들여쓰기, 줄바꿈을 최대한 보존해주세요
-                    3. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
-                    4. **구조 정보**: 제목, 부제목, 목록, 단락 구분을 명확히 표현해주세요
-                    5. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
-                    6. **슬라이드 구조**: 슬라이드 제목, 내용, 차트/그래프 설명을 구분해주세요
-                    7. **섹션 구분**: MarkDown 형식을 철저히 준수해서 섹션 구분을 철저히 나눠주세요.
+                    **🔥 중요: 기계적 파싱 참고 텍스트 활용**
+                    아래는 같은 페이지에서 기계적으로 추출된 텍스트입니다. 이를 참고하여 OCR 정확도를 높여주세요:
+                    {reference_text}
 
-                    8. **표 구분**: 각 이미지 내에서 표는 [표 구분]으로 명확히 구분하고, 표의 제목, 설명, 표 본체, 텍스트 변환을 모두 포함해주세요
-                    9. **언어*** : 한국어/영어가 아닌 문자를 포함하지 않도록 주의해주세요. 한자의 경우 한국어로 넣어주세요.
+                    **HTML 변환 규칙:**
+                    1. **참고 텍스트 활용**: 위의 참고 텍스트를 활용하여 누락된 단어나 부정확한 인식을 보완해주세요
+                    2. **HTML 구조 보존**: 문서의 구조를 semantic HTML로 정확히 표현해주세요
+                    3. **표 구조**: 표가 있다면 `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>` 태그를 사용하여 정확한 구조로 변환해주세요
+                    4. **병합된 셀**: `colspan`, `rowspan` 속성을 사용하여 병합된 셀을 정확히 표현해주세요
+                    5. **레이아웃 유지**: 원본의 레이아웃과 계층 구조를 HTML로 보존해주세요
+                    6. **정확한 텍스트**: 모든 문자, 숫자, 기호를 정확히 인식해주세요
+                    7. **섹션 구분**: <!-- [section] -->를 의미론적 구분자로 사용하고 이를 철저히 삽입해서 섹션 구분을 철저히 나눠주세요.
+                    8. **특수 형식**: 날짜, 금액, 주소, 전화번호 등의 형식을 정확히 유지해주세요
+                    9. **표 구분**: 각 표는 `<div class="table-section">` 으로 감싸서 명확히 구분해주세요
+                    10. **언어**: 한국어/영어가 아닌 문자를 포함하지 않도록 주의해주세요. 한자의 경우 한국어로 변환해주세요
+
                     **섹션 구분 예시:**
                     - 서로 다른 주제나 단락 사이 
                     - 표와 다른 내용 사이
                     - 각 표는 제목부터 텍스트 설명까지 하나의 [표 구분]을 이룹니다.
-                    - 단 상품의 제목 과 설명 / 표의 제목 및 설명 등 같은 내용은 하나의 색션을 구성해야합니다
+                    - 단 상품의 제목과 설명 / 표의 제목 및 설명 등 같은 내용은 하나의 섹션을 구성해야합니다
 
-                    **출력 형식 예시:**
-                    # 제목
-                    [섹션 구분]
-                    본문 내용이 여기에...
-
-                    [섹션 구분]
-                    ## 소제목
-                    다른 섹션의 내용...
-
-                    [표 구분]
-                    ### 상가건물 지역별 임대 현황
-                    출처: 부동산 통계청 (2024년 3분기)
-                    ※ 단위: 면적(㎡), 임대료(만원/월), 보증금(만원)
+                    **HTML 출력 형식 예시:**
+                    ```html
+                    <!DOCTYPE html>
+                    <html lang="ko">
+                    <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>문서 제목</title>
+                    </head>
+                    <body>
+                    <header>
+                        <h1>제목</h1>
+                    </header>
                     
-                    | 구분 | 지역명 | 평균임대료(만원) | 보증금(만원) | 면적(㎡) | 업종분류 | 계약현황 |
-                    |------|--------|------------------|--------------|----------|----------|----------|
-                    | 상가 | 강남구 | 450 | 8,500 | 65.2 | 음식점 | 계약완료 |
-                    | 상가 | 서초구 | 320 | 6,200 | 48.7 | 의류 | 협의중 |
-                    | 상가 | 마포구 | 280 | 4,800 | 52.3 | 카페 | 계약완료 |
-                    
-                    **표 내용 완전 텍스트 변환**: 이 표는 상가건물 지역별 임대 현황을 나타내는 표로, 부동산 통계청에서 발표한 2024년 3분기 자료입니다. 면적은 제곱미터, 임대료는 월 단위 만원, 보증금은 만원 단위로 표시되어 있습니다. 총 3개 지역의 상가 정보가 포함되어 있습니다. 첫 번째는 강남구 상가로 평균임대료가 450만원, 보증금이 8,500만원이며, 면적은 65.2㎡이고 음식점 업종으로 계약이 완료된 상태입니다. 두 번째는 서초구 상가로 평균임대료가 320만원, 보증금이 6,200만원이며, 면적은 48.7㎡이고 의류 업종으로 현재 협의중인 상태입니다. 세 번째는 마포구 상가로 평균임대료가 280만원, 보증금이 4,800만원이며, 면적은 52.3㎡이고 카페 업종으로 계약이 완료된 상태입니다.
+                    <!-- [section] -->
+                    <main>
+                        <section>
+                            <p>본문 내용이 여기에...</p>
+                        </section>
+                        
+                        <!-- [section] -->
+                        <section>
+                            <h2>소제목</h2>
+                            <p>다른 섹션의 내용...</p>
+                        </section>
+                        
+                        <!-- [section] -->
+                        <div class="table-section">
+                            <h3>상가건물 지역별 임대 현황</h3>
+                            <p class="source">출처: 부동산 통계청 (2024년 3분기)</p>
+                            <p class="note">※ 단위: 면적(㎡), 임대료(만원/월), 보증금(만원)</p>
+                            
+                            <table border="1">
+                                <thead>
+                                    <tr>
+                                        <th>구분</th>
+                                        <th>지역명</th>
+                                        <th>평균임대료(만원)</th>
+                                        <th>보증금(만원)</th>
+                                        <th>면적(㎡)</th>
+                                        <th>업종분류</th>
+                                        <th>계약현황</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>상가</td>
+                                        <td>강남구</td>
+                                        <td>450</td>
+                                        <td>8,500</td>
+                                        <td>65.2</td>
+                                        <td>음식점</td>
+                                        <td>계약완료</td>
+                                    </tr>
+                                    <tr>
+                                        <td>상가</td>
+                                        <td>서초구</td>
+                                        <td>320</td>
+                                        <td>6,200</td>
+                                        <td>48.7</td>
+                                        <td>의류</td>
+                                        <td>협의중</td>
+                                    </tr>
+                                    <tr>
+                                        <td>상가</td>
+                                        <td>마포구</td>
+                                        <td>280</td>
+                                        <td>4,800</td>
+                                        <td>52.3</td>
+                                        <td>카페</td>
+                                        <td>계약완료</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            
+                            <div class="table-description">
+                                <p><strong>표 내용 완전 텍스트 변환</strong>: 이 표는 상가건물 지역별 임대 현황을 나타내는 표로, 부동산 통계청에서 발표한 2024년 3분기 자료입니다. 면적은 제곱미터, 임대료는 월 단위 만원, 보증금은 만원 단위로 표시되어 있습니다. 총 3개 지역의 상가 정보가 포함되어 있습니다. 첫 번째는 강남구 상가로 평균임대료가 450만원, 보증금이 8,500만원이며, 면적은 65.2㎡이고 음식점 업종으로 계약이 완료된 상태입니다. 두 번째는 서초구 상가로 평균임대료가 320만원, 보증금이 6,200만원이며, 면적은 48.7㎡이고 의류 업종으로 현재 협의중인 상태입니다. 세 번째는 마포구 상가로 평균임대료가 280만원, 보증금이 4,800만원이며, 면적은 52.3㎡이고 카페 업종으로 계약이 완료된 상태입니다.</p>
+                            </div>
+                        </div>
+                    </main>
+                    </body>
+                    </html>
+                    ```"""
 
-                    반드시 한국어 및 영어로 된 텍스트만 출력하고, 추가 설명은 하지 마세요."""
             
             # 이미지 메시지 생성
             message = HumanMessage(
@@ -2390,38 +2506,31 @@ class DocumentProcessor:
                 logger.warning("Empty text provided for chunking")
                 return [""]
             
-            # \n\n\n이 포함되어 있으면 먼저 이것으로 분할
-            # [색션 구분] 또는 [표 구분]이 포함되어 있으면 먼저 이것으로 분할
-            if "[색션 구분]" in text or "[표 구분]" in text or "[섹션 구분]" in text:
+            # HTML 주석 구분자도 포함해서 확인
+            section_markers = ["[색션 구분]", "[표 구분]", "[섹션 구분]", "<!-- [섹션 구분] -->", "<!-- [표 구분] -->", "<!-- [section] -->"]
+            has_markers = any(marker in text for marker in section_markers)
+            
+            if has_markers:
                 logger.info("Found section markers in text, splitting by major sections first")
                 
-                # 세 가지 구분자를 모두 고려해서 분할
-                # 먼저 [색션 구분] 또는 [섹션 구분]으로 분할하고, 각 섹션에서 [표 구분]으로 추가 분할
+                # 모든 구분자를 통합해서 분할
+                import re
+                # 정규식으로 모든 구분자를 찾아서 분할
+                pattern = r'(\[색션 구분\]|\[표 구분\]|\[섹션 구분\]|<!-- \[섹션 구분\] -->|<!-- \[표 구분\] -->|<!-- \[section\] -->)'
+                temp_sections = re.split(pattern, text)
                 
-                # 단계 1: [색션 구분] 또는 [섹션 구분]으로 먼저 분할
-                if "[색션 구분]" in text:
-                    temp_sections = text.split("[색션 구분]")
-                elif "[섹션 구분]" in text:
-                    temp_sections = text.split("[섹션 구분]")
-                else:
-                    temp_sections = [text]  # [표 구분]만 있는 경우
-                
+                # 구분자 제거하고 빈 섹션 제거
                 major_sections = []
-                
-                # 단계 2: 각 섹션에서 [표 구분]으로 추가 분할
                 for section in temp_sections:
-                    if "[표 구분]" in section:
-                        table_sections = section.split("[표 구분]")
-                        major_sections.extend([s.strip() for s in table_sections if s.strip()])
-                    else:
-                        if section.strip():
-                            major_sections.append(section.strip())
+                    if section.strip() and not any(marker in section for marker in section_markers):
+                        major_sections.append(section.strip())
                 
                 logger.info(f"Split into {len(major_sections)} sections using markers")
                 
-                # 작은 섹션들을 합치기
+                # 청크 간 오버랩을 고려한 섹션 합치기
                 merged_sections = []
                 current_merged = ""
+                previous_section_end = ""  # 이전 섹션의 끝부분 저장
                 
                 for i, section in enumerate(major_sections):
                     # 현재 합쳐진 것과 새 섹션을 합쳤을 때의 길이 계산
@@ -2437,16 +2546,37 @@ class DocumentProcessor:
                     else:
                         # chunk_size를 넘으면 이전까지 합친 것을 저장하고 새로 시작
                         if current_merged:
+                            # 이전 청크의 끝부분을 오버랩으로 저장
+                            if len(current_merged) > chunk_overlap:
+                                previous_section_end = current_merged[-chunk_overlap:]
+                            else:
+                                previous_section_end = current_merged
+                            
                             merged_sections.append(current_merged)
                             logger.info(f"Added merged section with length: {len(current_merged)}")
-                        current_merged = section
+                            
+                            # 새 청크 시작 시 이전 청크의 끝부분을 앞에 추가 (오버랩)
+                            if previous_section_end and i > 0:
+                                current_merged = previous_section_end + "\n\n" + section
+                                logger.info(f"Starting new section with overlap ({len(previous_section_end)} chars)")
+                            else:
+                                current_merged = section
+                        else:
+                            current_merged = section
                 
                 # 마지막 섹션 추가
                 if current_merged:
+                    # 마지막 섹션에도 오버랩 적용
+                    if previous_section_end and len(merged_sections) > 0:
+                        # 이미 오버랩이 포함되어 있지 않다면 추가
+                        if not current_merged.startswith(previous_section_end):
+                            current_merged = previous_section_end + "\n\n" + current_merged
+                            logger.info(f"Added overlap to final section ({len(previous_section_end)} chars)")
+                    
                     merged_sections.append(current_merged)
                     logger.info(f"Added final merged section with length: {len(current_merged)}")
                 
-                # 합쳐진 섹션들을 최종 청킹
+                # 합쳐진 섹션들을 최종 청킹 (오버랩 적용)
                 all_chunks = []
                 for i, section in enumerate(merged_sections):
                     logger.info(f"Processing merged section {i+1}/{len(merged_sections)} (length: {len(section)})")
@@ -2466,7 +2596,7 @@ class DocumentProcessor:
                         # 섹션이 적당한 크기면 그대로 사용
                         all_chunks.append(section)
                 
-                logger.info(f"Text split into {len(all_chunks)} chunks after merging small sections")
+                logger.info(f"Text split into {len(all_chunks)} chunks after merging small sections with overlap")
                 return all_chunks
 
             else:
