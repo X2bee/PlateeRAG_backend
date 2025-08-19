@@ -1018,7 +1018,9 @@ class DocumentProcessor:
                     </main>
                     </body>
                     </html>
-                    ```"""
+                    ```
+                    => 이미지 내용과 이에 대한 해석을 제외한 어떠한 추가 설명도 하지 마세요. 또한 표에 대한 완전 텍스트 변환은 표의 내용 및 주변 메타데이터이외 어떤 내용도 포함하지 마세요.
+                    """
 
             
             # 이미지 메시지 생성
@@ -2506,110 +2508,158 @@ class DocumentProcessor:
                 logger.warning("Empty text provided for chunking")
                 return [""]
             
-            # HTML 주석 구분자도 포함해서 확인
-            section_markers = ["[색션 구분]", "[표 구분]", "[섹션 구분]", "<!-- [섹션 구분] -->", "<!-- [표 구분] -->", "<!-- [section] -->"]
-            has_markers = any(marker in text for marker in section_markers)
+            # HTML 청크 분리 먼저 수행
+            html_chunks = []
+            remaining_text = text
             
-            if has_markers:
-                logger.info("Found section markers in text, splitting by major sections first")
+            import re
+            
+            # 1. ```html ... ``` 패턴과 <div class="table-section"> ... </div> 패턴 모두 찾기
+            html_code_pattern = r'```html\s*(.*?)\s*```'
+            table_section_pattern = r'<div class="table-section">(.*?)</div>'
+            
+            # 모든 HTML 관련 패턴을 하나로 합치기
+            combined_pattern = f'({html_code_pattern}|{table_section_pattern})'
+            
+            html_matches = list(re.finditer(combined_pattern, text, re.DOTALL))
+            
+            if html_matches:
+                logger.info(f"Found {len(html_matches)} HTML blocks (```html``` or table-section), treating each as separate chunk")
                 
-                # 모든 구분자를 통합해서 분할
-                import re
-                # 정규식으로 모든 구분자를 찾아서 분할
-                pattern = r'(\[색션 구분\]|\[표 구분\]|\[섹션 구분\]|<!-- \[섹션 구분\] -->|<!-- \[표 구분\] -->|<!-- \[section\] -->)'
-                temp_sections = re.split(pattern, text)
+                current_pos = 0
                 
-                # 구분자 제거하고 빈 섹션 제거
-                major_sections = []
-                for section in temp_sections:
-                    if section.strip() and not any(marker in section for marker in section_markers):
-                        major_sections.append(section.strip())
-                
-                logger.info(f"Split into {len(major_sections)} sections using markers")
-                
-                # 청크 간 오버랩을 고려한 섹션 합치기
-                merged_sections = []
-                current_merged = ""
-                previous_section_end = ""  # 이전 섹션의 끝부분 저장
-                
-                for i, section in enumerate(major_sections):
-                    # 현재 합쳐진 것과 새 섹션을 합쳤을 때의 길이 계산
-                    if current_merged:
-                        potential_merged = current_merged + "\n\n" + section
-                    else:
-                        potential_merged = section
+                for match in html_matches:
+                    start, end = match.span()
                     
-                    if len(potential_merged) <= chunk_size:
-                        # chunk_size를 넘지 않으면 계속 합치기
-                        current_merged = potential_merged
-                        logger.info(f"Merging section {i+1} (total length: {len(current_merged)})")
-                    else:
-                        # chunk_size를 넘으면 이전까지 합친 것을 저장하고 새로 시작
-                        if current_merged:
-                            # 이전 청크의 끝부분을 오버랩으로 저장
-                            if len(current_merged) > chunk_overlap:
-                                previous_section_end = current_merged[-chunk_overlap:]
+                    # HTML 블록 이전의 텍스트가 있으면 처리
+                    before_html = text[current_pos:start].strip()
+                    if before_html:
+                        html_chunks.append(('text', before_html))
+                    
+                    # HTML 블록 추가 (전체 매치된 부분 포함)
+                    html_block = text[start:end]
+                    html_chunks.append(('html', html_block))
+                    
+                    current_pos = end
+                
+                # 마지막 HTML 블록 이후 텍스트가 있으면 추가
+                after_last_html = text[current_pos:].strip()
+                if after_last_html:
+                    html_chunks.append(('text', after_last_html))
+            else:
+                # HTML 블록이 없으면 전체를 텍스트로 처리
+                html_chunks = [('text', text)]
+            
+            # 이제 각 청크를 처리
+            final_chunks = []
+            
+            for chunk_type, chunk_content in html_chunks:
+                if chunk_type == 'html':
+                    # HTML 블록은 그대로 하나의 청크로 추가
+                    final_chunks.append(chunk_content)
+                    logger.info(f"Added HTML block as single chunk (length: {len(chunk_content)})")
+                
+                else:  # chunk_type == 'text'
+                    # 텍스트 부분은 기존 로직으로 처리
+                    section_markers = ["[색션 구분]", "[표 구분]", "[섹션 구분]", "<!-- [섹션 구분] -->", "<!-- [표 구분] -->", "<!-- [section] -->", '<div class="table-section">']
+                    has_markers = any(marker in chunk_content for marker in section_markers)
+                    
+                    if has_markers:
+                        logger.info("Found section markers in text chunk, splitting by major sections first")
+                        
+                        # 모든 구분자를 통합해서 분할
+                        pattern = r'(\[색션 구분\]|\[표 구분\]|\[섹션 구분\]|<!-- \[섹션 구분\] -->|<!-- \[표 구분\] -->|<!-- \[section\] -->|<div class="table-section">)'
+                        temp_sections = re.split(pattern, chunk_content)
+                        
+                        # 구분자 제거하고 빈 섹션 제거
+                        major_sections = []
+                        for section in temp_sections:
+                            if section.strip() and not any(marker in section for marker in section_markers):
+                                major_sections.append(section.strip())
+                        
+                        logger.info(f"Split into {len(major_sections)} sections using markers")
+                        
+                        # 청크 간 오버랩을 고려한 섹션 합치기
+                        merged_sections = []
+                        current_merged = ""
+                        previous_section_end = ""  # 이전 섹션의 끝부분 저장
+                        
+                        for i, section in enumerate(major_sections):
+                            # 현재 합쳐진 것과 새 섹션을 합쳤을 때의 길이 계산
+                            if current_merged:
+                                potential_merged = current_merged + "\n\n" + section
                             else:
-                                previous_section_end = current_merged
+                                potential_merged = section
+                            
+                            if len(potential_merged) <= chunk_size:
+                                # chunk_size를 넘지 않으면 계속 합치기
+                                current_merged = potential_merged
+                                logger.info(f"Merging section {i+1} (total length: {len(current_merged)})")
+                            else:
+                                # chunk_size를 넘으면 이전까지 합친 것을 저장하고 새로 시작
+                                if current_merged:
+                                    # 이전 청크의 끝부분을 오버랩으로 저장
+                                    if len(current_merged) > chunk_overlap:
+                                        previous_section_end = current_merged[-chunk_overlap:]
+                                    else:
+                                        previous_section_end = current_merged
+                                    
+                                    merged_sections.append(current_merged)
+                                    logger.info(f"Added merged section with length: {len(current_merged)}")
+                                    
+                                    # 새 청크 시작 시 이전 청크의 끝부분을 앞에 추가 (오버랩)
+                                    if previous_section_end and i > 0:
+                                        current_merged = previous_section_end + "\n\n" + section
+                                        logger.info(f"Starting new section with overlap ({len(previous_section_end)} chars)")
+                                    else:
+                                        current_merged = section
+                                else:
+                                    current_merged = section
+                        
+                        # 마지막 섹션 추가
+                        if current_merged:
+                            # 마지막 섹션에도 오버랩 적용
+                            if previous_section_end and len(merged_sections) > 0:
+                                # 이미 오버랩이 포함되어 있지 않다면 추가
+                                if not current_merged.startswith(previous_section_end):
+                                    current_merged = previous_section_end + "\n\n" + current_merged
+                                    logger.info(f"Added overlap to final section ({len(previous_section_end)} chars)")
                             
                             merged_sections.append(current_merged)
-                            logger.info(f"Added merged section with length: {len(current_merged)}")
+                            logger.info(f"Added final merged section with length: {len(current_merged)}")
+                        
+                        # 합쳐진 섹션들을 최종 청킹 (오버랩 적용)
+                        for i, section in enumerate(merged_sections):
+                            logger.info(f"Processing merged section {i+1}/{len(merged_sections)} (length: {len(section)})")
                             
-                            # 새 청크 시작 시 이전 청크의 끝부분을 앞에 추가 (오버랩)
-                            if previous_section_end and i > 0:
-                                current_merged = previous_section_end + "\n\n" + section
-                                logger.info(f"Starting new section with overlap ({len(previous_section_end)} chars)")
+                            # 섹션이 chunk_size의 2배를 초과하면 추가로 청킹
+                            if len(section) > chunk_size * 2:
+                                logger.info(f"Merged section {i+1} is too large ({len(section)} chars), splitting further")
+                                text_splitter = RecursiveCharacterTextSplitter(
+                                    chunk_size=chunk_size,
+                                    chunk_overlap=chunk_overlap,
+                                    length_function=len,
+                                    separators=["\n\n", "\n", " ", ""]
+                                )
+                                section_chunks = text_splitter.split_text(section)
+                                final_chunks.extend(section_chunks)
                             else:
-                                current_merged = section
-                        else:
-                            current_merged = section
-                
-                # 마지막 섹션 추가
-                if current_merged:
-                    # 마지막 섹션에도 오버랩 적용
-                    if previous_section_end and len(merged_sections) > 0:
-                        # 이미 오버랩이 포함되어 있지 않다면 추가
-                        if not current_merged.startswith(previous_section_end):
-                            current_merged = previous_section_end + "\n\n" + current_merged
-                            logger.info(f"Added overlap to final section ({len(previous_section_end)} chars)")
-                    
-                    merged_sections.append(current_merged)
-                    logger.info(f"Added final merged section with length: {len(current_merged)}")
-                
-                # 합쳐진 섹션들을 최종 청킹 (오버랩 적용)
-                all_chunks = []
-                for i, section in enumerate(merged_sections):
-                    logger.info(f"Processing merged section {i+1}/{len(merged_sections)} (length: {len(section)})")
-                    
-                    # 섹션이 chunk_size의 2배를 초과하면 추가로 청킹
-                    if len(section) > chunk_size * 2:
-                        logger.info(f"Merged section {i+1} is too large ({len(section)} chars), splitting further")
+                                # 섹션이 적당한 크기면 그대로 사용
+                                final_chunks.append(section)
+
+                    else:
+                        # 기존 방식으로 청킹
                         text_splitter = RecursiveCharacterTextSplitter(
                             chunk_size=chunk_size,
                             chunk_overlap=chunk_overlap,
                             length_function=len,
                             separators=["\n\n", "\n", " ", ""]
                         )
-                        section_chunks = text_splitter.split_text(section)
-                        all_chunks.extend(section_chunks)
-                    else:
-                        # 섹션이 적당한 크기면 그대로 사용
-                        all_chunks.append(section)
-                
-                logger.info(f"Text split into {len(all_chunks)} chunks after merging small sections with overlap")
-                return all_chunks
-
-            else:
-                # 기존 방식으로 청킹
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                    length_function=len,
-                    separators=["\n\n", "\n", " ", ""]
-                )
-                chunks = text_splitter.split_text(text)
-                logger.info(f"Text split into {len(chunks)} chunks (size: {chunk_size}, overlap: {chunk_overlap})")
-                return chunks
+                        text_chunks = text_splitter.split_text(chunk_content)
+                        final_chunks.extend(text_chunks)
+            
+            logger.info(f"Final text split into {len(final_chunks)} chunks with HTML blocks preserved")
+            return final_chunks
                 
         except Exception as e:
             logger.error(f"Error chunking text: {e}")
