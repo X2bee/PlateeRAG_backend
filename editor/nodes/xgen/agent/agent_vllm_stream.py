@@ -41,6 +41,7 @@ class AgentVLLMStreamNode(Node):
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": True},
+        {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
     ]
 
@@ -79,6 +80,7 @@ class AgentVLLMStreamNode(Node):
         max_tokens: int = 8192,
         n_messages: int = 3,
         base_url: str = "",
+        strict_citation: bool = True,
         default_prompt: str = default_prompt,
     ) -> Generator[str, None, None]:
 
@@ -122,7 +124,6 @@ class AgentVLLMStreamNode(Node):
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
                     if context_parts:
-                        context_parts.append(f"{citation_prompt}")
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 {context_text}"""
@@ -135,6 +136,10 @@ class AgentVLLMStreamNode(Node):
                 default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
+                if strict_citation:
+                    default_prompt = default_prompt + citation_prompt
+                logger.info(strict_citation)
+                logger.info(default_prompt)
 
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
