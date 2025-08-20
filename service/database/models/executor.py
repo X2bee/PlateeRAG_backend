@@ -13,10 +13,12 @@ class ExecutionIO(BaseModel):
         self.workflow_name: str = kwargs.get('workflow_name', '')
         self.input_data: Dict = kwargs.get('input_data', {})
         self.output_data: Dict = kwargs.get('output_data', {})
-    
+        self.expected_output: Optional[str] = kwargs.get('expected_output', None)
+        self.test_mode: Optional[bool] = kwargs.get('test_mode', False)
+
     def get_table_name(self) -> str:
         return "execution_io"
-    
+
     def get_schema(self) -> Dict[str, str]:
         return {
             'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
@@ -24,9 +26,11 @@ class ExecutionIO(BaseModel):
             'workflow_id': 'VARCHAR(100) NOT NULL',
             'workflow_name': 'VARCHAR(200) NOT NULL',
             'input_data': 'TEXT',
-            'output_data': 'TEXT'
+            'output_data': 'TEXT',
+            'expected_output': 'TEXT',
+            'test_mode': 'BOOLEAN DEFAULT FALSE'
         }
-        
+
 class ExecutionMeta(BaseModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -36,7 +40,7 @@ class ExecutionMeta(BaseModel):
         self.workflow_name: str = kwargs.get('workflow_name', '')
         self.interaction_count: int = kwargs.get('interaction_count', 0)
         self.metadata: Optional[Dict] = kwargs.get('metadata', {})
-    
+
     def get_table_name(self) -> str:
         return "execution_meta"
 

@@ -25,7 +25,9 @@ class AsyncWorkflowExecutor:
                  db_manager=None,
                  interaction_id: Optional[str] = None,
                  user_id: Optional[int] = None,
-                 executor_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None):
+                 executor_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None,
+                 expected_output: Optional[str] = None,
+                 test_mode: Optional[bool] = False):
         self.workflow_id: str = workflow_data['workflow_id']
         self.workflow_name: str = workflow_data['workflow_name']
         self.interaction_id: str = interaction_id or 'default'
@@ -49,6 +51,12 @@ class AsyncWorkflowExecutor:
         # 스트리밍을 위한 큐 (스레드 간 통신용)
         self._streaming_queue = queue.Queue()
         self._is_streaming = False
+
+        if expected_output and expected_output.strip() != "":
+            self.expected_output = expected_output
+        else:
+            self.expected_output = ""
+        self.test_mode = test_mode
 
     def _build_graph(self) -> None:
         """워크플로우 데이터로부터 그래프와 진입 차수를 계산합니다."""
@@ -395,7 +403,9 @@ class AsyncWorkflowExecutor:
                 workflow_id=self.workflow_id,
                 workflow_name=self.workflow_name,
                 input_data=input_json,
-                output_data=output_json
+                output_data=output_json,
+                expected_output=self.expected_output,
+                test_mode=self.test_mode
             )
             self.db_manager.insert(insert_data)
 
@@ -441,14 +451,18 @@ class WorkflowExecutionManager:
                        workflow_data: Dict[str, Any],
                        db_manager=None,
                        interaction_id: Optional[str] = None,
-                       user_id: Optional[int] = None) -> AsyncWorkflowExecutor:
+                       user_id: Optional[int] = None,
+                       expected_output: Optional[str] = None,
+                       test_mode: Optional[bool] = False) -> AsyncWorkflowExecutor:
         """새로운 비동기 워크플로우 실행기를 생성합니다."""
         executor = AsyncWorkflowExecutor(
             workflow_data=workflow_data,
             db_manager=db_manager,
             interaction_id=interaction_id,
             user_id=user_id,
-            executor_pool=self.executor_pool
+            executor_pool=self.executor_pool,
+            expected_output=expected_output,
+            test_mode=test_mode
         )
 
         # 실행 ID 생성 (interaction_id + workflow_id 조합)
