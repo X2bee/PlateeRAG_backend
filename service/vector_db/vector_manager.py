@@ -7,7 +7,9 @@
 
 import logging
 import uuid
+import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import List, Dict, Any, Union, Optional, Tuple
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -16,6 +18,9 @@ from qdrant_client.models import (
 )
 
 logger = logging.getLogger("vector-manager")
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 class VectorManager:
     """벡터 DB 관리를 담당하는 클래스"""
     def __init__(self, vectordb_config):
@@ -151,7 +156,7 @@ class VectorManager:
                     "type": "collection_metadata",
                     "collection_name": collection_name,
                     "description": description or "",
-                    "created_at": datetime.now().isoformat(),
+                    "created_at": datetime.now(TIMEZONE).isoformat(),
                     "vector_size": vector_size,
                     "distance_metric": distance,
                     "document_count": 0,
@@ -398,7 +403,7 @@ class VectorManager:
                 }
 
                 results.append(result)
-            
+
             logger.info(f"Search completed for '{collection_name}': {len(results)} results")
             return {
                 "results": results,
@@ -517,7 +522,7 @@ class VectorManager:
                 # 메타데이터 업데이트를 위한 새로운 포인트 생성
                 updated_payload = metadata_point.payload.copy()
                 updated_payload["document_count"] = new_count
-                updated_payload["last_updated"] = datetime.now().isoformat()
+                updated_payload["last_updated"] = datetime.now(TIMEZONE).isoformat()
 
                 # 메타데이터 포인트의 벡터 확인 및 수정
                 if metadata_point.vector is None or len(metadata_point.vector) == 0:

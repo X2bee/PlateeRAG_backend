@@ -2,9 +2,13 @@ import os
 import json
 import time
 import datetime
+from zoneinfo import ZoneInfo
 
 import psutil
 from service.database.connection import AppDatabaseManager
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 try:
     import pynvml
@@ -52,7 +56,7 @@ class PerformanceLogger:
             self._start_cpu_times = self._process.cpu_times()
             self._start_ram_usage = self._process.memory_info().rss
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """컨텍스트 종료: GPU 리소스 정리"""
         if PYNVML_AVAILABLE and self._gpu_handles:
@@ -71,7 +75,7 @@ class PerformanceLogger:
         end_cpu_times = self._process.cpu_times()
         cpu_time_diff = (end_cpu_times.user - self._start_cpu_times.user) + \
                         (end_cpu_times.system - self._start_cpu_times.system)
-        
+
         elapsed_time = time.perf_counter() - self._start_time
         cpu_usage_percent = 0.0
         if elapsed_time > 0:
@@ -100,26 +104,26 @@ class PerformanceLogger:
             "gpu_usage_percent": gpu_stats['gpu_usage_percent'],
             "gpu_memory_mb": gpu_stats['gpu_memory_mb']
         }
-    
+
     def log(self, input_data: dict, output_data: any):
         """
         성능 정보를 최종적으로 계산하고 데이터베이스에 기록합니다.
         """
         processing_time_ms = round((time.perf_counter() - self._start_time) * 1000, 2)
-        
+
         system_usage = self._get_system_usage()
-        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.datetime.now(TIMEZONE).isoformat()
 
         # 데이터베이스에 저장
         if self.db_manager:
             self._save_to_database(timestamp, processing_time_ms, system_usage, input_data, output_data)
-    
+
     def _save_to_database(self, timestamp: str, processing_time_ms: float, system_usage: dict, input_data: dict, output_data: any):
         """성능 데이터를 데이터베이스에 저장"""
         try:
             # 직접 SQL 삽입으로 시도
             db_type = self.db_manager.config_db_manager.db_type
-            
+
             if db_type == "postgresql":
                 query = """
                 INSERT INTO node_performance (
@@ -136,7 +140,7 @@ class PerformanceLogger:
                     gpu_usage_percent, gpu_memory_mb, input_data, output_data
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-            
+
             params = (
                 self.workflow_name,
                 self.workflow_id,
@@ -152,13 +156,13 @@ class PerformanceLogger:
                 json.dumps(self._summarize_data(input_data), ensure_ascii=False),
                 json.dumps(self._summarize_data(output_data), ensure_ascii=False)
             )
-            
+
             self.db_manager.config_db_manager.execute_query(query, params)
-            
+
         except Exception as e:
             # 데이터베이스 저장 실패는 조용히 처리 (성능 로깅 실패로 애플리케이션을 중단시키지 않음)
             pass
-        
+
     def _summarize_data(self, data: any):
         """데이터를 로깅에 적합하게 요약합니다."""
         if isinstance(data, (int, float, bool)) or data is None:

@@ -7,11 +7,16 @@ from typing import Optional
 import jwt
 import secrets
 import logging
+import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from service.database.models.user import User
 from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("auth-controller")
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -84,9 +89,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """JWT Access Token 생성"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(TIMEZONE) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(TIMEZONE) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     to_encode.update({"exp": expire, "type": "access"})
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
@@ -95,7 +100,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 def create_refresh_token(data: dict):
     """JWT Refresh Token 생성"""
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(TIMEZONE) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire, "type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
     return encoded_jwt
@@ -339,7 +344,7 @@ async def login(request: Request, login_data: LoginRequest):
 
         request.app.state.user_sessions[str(user.id)] = {
             'username': user.username,
-            'login_time': datetime.now(),
+            'login_time': datetime.now(TIMEZONE),
             'is_admin': user.is_admin,
             'access_token': access_token,
             'refresh_token': refresh_token
@@ -347,7 +352,7 @@ async def login(request: Request, login_data: LoginRequest):
         print(f"User session stored in app.state for user ID: {user.id}")
 
         # # 사용자의 마지막 로그인 시간 업데이트
-        user.last_login = datetime.now().isoformat()
+        user.last_login = datetime.now(TIMEZONE).isoformat()
         app_db.update(user)
 
         logger.info(f"User logged in: {login_data.email} (ID: {str(user.id)})")

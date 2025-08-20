@@ -9,7 +9,9 @@ import logging
 import uuid
 import json
 import asyncio
+import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
@@ -25,6 +27,9 @@ from service.vector_db.vector_manager import VectorManager
 from service.database.models.vectordb import VectorDBChunkEdge, VectorDBChunkMeta
 
 logger = logging.getLogger("rag-service")
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 class DocumentMetadata(BaseModel):
     """문서 메타데이터를 위한 Pydantic 모델"""
@@ -1110,7 +1115,7 @@ class RAGService:
                     "file_name": file_name,
                     "file_path": stored_file_path,
                     "file_type": file_extension,
-                    "processed_at": datetime.now().isoformat(),
+                    "processed_at": datetime.now(TIMEZONE).isoformat(),
                     "chunk_size": len(chunk),
                     "total_chunks": len(chunks),
                     "line_start": line_start,

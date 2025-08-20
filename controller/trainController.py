@@ -13,14 +13,19 @@ import json
 import urllib.request
 import urllib.parse
 import urllib.error
+import os
 from controller.controller_helper import extract_user_id_from_request
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from service.database.models.train import TrainMeta
 from controller.vastController import CreateInstanceRequest, get_vast_service, _broadcast_status_change
 from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("train-controller")
 router = APIRouter(prefix="/api/train", tags=["training"])
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 # ========== Request Models ==========
 class MLFlowParams(BaseModel):
@@ -257,7 +262,7 @@ async def start_training(request: Request, training_params: TrainingStartRequest
 
         # 요청 파라미터를 딕셔너리로 변환
         params_dict = training_params.dict()
-        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        current_time = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
         job_id = f"job_{current_time}"
         params_dict["mlflow_run_id"] = job_id
 

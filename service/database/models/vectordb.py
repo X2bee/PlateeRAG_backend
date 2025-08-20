@@ -12,8 +12,8 @@ class VectorDB(BaseModel):
         self.collection_make_name: str = kwargs.get('collection_make_name', '')
         self.collection_name: str = kwargs.get('collection_name', '')
         self.description: str = kwargs.get('description', '')
-        self.registered_at: datetime.datetime = kwargs.get('registered_at', datetime.datetime.now())
-        self.updated_at: datetime.datetime = kwargs.get('updated_at', datetime.datetime.now())
+        self.registered_at: datetime.datetime = kwargs.get('registered_at', self.now())
+        self.updated_at: datetime.datetime = kwargs.get('updated_at', self.now())
 
     def get_table_name(self) -> str:
         return "vector_db"
