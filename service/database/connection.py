@@ -128,11 +128,23 @@ class AppDatabaseManager:
             values = []
 
             for key, value in conditions.items():
-                if db_type == "postgresql":
-                    where_clauses.append(f"{key} = %s")
+                if key.endswith("__like__"):
+                    real_key = key.removesuffix("__like__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{real_key} ILIKE %s")
+                    else:
+                        where_clauses.append(f"{real_key} LIKE ?")
+                    values.append(f"%{value}%")
                 else:
-                    where_clauses.append(f"{key} = ?")
-                values.append(value)
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{key} = %s")
+                    else:
+                        where_clauses.append(f"{key} = ?")
+                    values.append(value)
+
+            if not conditions:
+                self.logger.warning("No conditions provided for delete_by_condition. Aborting to prevent full table deletion.")
+                return False
 
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
 
@@ -203,11 +215,20 @@ class AppDatabaseManager:
             values = []
 
             for key, value in conditions.items():
-                if db_type == "postgresql":
-                    where_clauses.append(f"{key} = %s")
+                # LIKE 검색을 위한 키 인식 (예: "name__like__")
+                if key.endswith("__like__"):
+                    real_key = key.removesuffix("__like__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{real_key} ILIKE %s")
+                    else:
+                        where_clauses.append(f"{real_key} LIKE ?")
+                    values.append(f"%{value}%")
                 else:
-                    where_clauses.append(f"{key} = ?")
-                values.append(value)
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{key} = %s")
+                    else:
+                        where_clauses.append(f"{key} = ?")
+                    values.append(value)
 
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
 

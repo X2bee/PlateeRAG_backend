@@ -1375,6 +1375,71 @@ async def get_workflow_io_logs_for_tester(request: Request, workflow_name: str):
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
 
+@router.delete("/tester/io_logs")
+async def delete_workflow_io_logs_for_tester(request: Request, workflow_name: str, interaction_batch_id: str):
+    """
+    특정 워크플로우의 ExecutionIO 로그를 삭제합니다.
+
+    Args:
+        workflow_name: 워크플로우 이름
+        workflow_id: 워크플로우 ID
+        interaction_id: 상호작용 ID (기본값: "default")
+
+    Returns:
+        삭제된 로그 개수와 성공 메시지
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+
+        existing_data = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id__like__": interaction_batch_id,
+                "test_mode": True
+            },
+            limit=1000000
+        )
+
+        delete_count = len(existing_data) if existing_data else 0
+
+        if delete_count == 0:
+            logger.info(f"No logs found to delete for workflow: {workflow_name}")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                # "workflow_id": workflow_id,
+                "deleted_count": 0,
+                "message": "No logs found to delete"
+            })
+
+        app_db.delete_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                # "workflow_id": workflow_id, # workflow_id 로직 삭제,
+                "interaction_id__like__": interaction_batch_id,
+                "test_mode": True,
+            }
+        )
+
+        logger.info(f"Successfully deleted {delete_count} logs for workflow: {workflow_name}")
+
+        return JSONResponse(content={
+            "workflow_name": workflow_name,
+            "deleted_count": delete_count,
+            "interaction_batch_id": interaction_batch_id,
+            "message": f"Successfully deleted {delete_count} execution logs"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting workflow logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")
+
 @router.post("/execute/tester/stream")
 async def execute_workflow_tester_stream(request: Request, tester_request: TesterExecuteRequest):
     """
