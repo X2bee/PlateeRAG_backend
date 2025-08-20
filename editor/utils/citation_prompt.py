@@ -13,6 +13,7 @@ citation_prompt = """
    투자가 증가했으며 [Cite. {{"file_name": "보고서.pdf", "file_path": "/reports/보고서.pdf", "page_number": 12, "line_start": 5, "line_end": 8}}], AI에 집중하고 있습니다. [Cite. {{"file_name": "보고서.pdf", "file_path": "/reports/보고서.pdf", "page_number": 15, "line_start": 22, "line_end": 25}}]
 
 ## 핵심 규칙
+- 문서를 가져오지 않았다면 출처표시 금지
 - 모든 사실에 출처 표시 필수
 - 각 문서마다 별도 출처 표시
 - 정확한 페이지/줄 번호 사용
