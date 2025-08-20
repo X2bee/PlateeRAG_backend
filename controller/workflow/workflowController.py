@@ -1034,23 +1034,23 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
 # 기존 모델들 뒤에 추가할 새로운 Pydantic 모델들
 # ==================================================
 
-class BatchTestCase(BaseModel):
-    """배치 테스트 케이스 모델"""
+class TesterTestCase(BaseModel):
+    """테스터 테스트 케이스 모델"""
     id: int
     input: str
     expected_output: Optional[str] = None
 
-class BatchExecuteRequest(BaseModel):
-    """배치 실행 요청 모델"""
+class TesterExecuteRequest(BaseModel):
+    """테스터 실행 요청 모델"""
     workflow_name: str
     workflow_id: str
-    test_cases: List[BatchTestCase]
+    test_cases: List[TesterTestCase]
     batch_size: int = 5
     interaction_id: str = "batch_test"
     selected_collections: Optional[List[str]] = None
 
-class BatchTestResult(BaseModel):
-    """배치 테스트 결과 모델"""
+class TesterTestResult(BaseModel):
+    """테스터 테스트 결과 모델"""
     id: int
     input: str
     expected_output: Optional[str]
@@ -1059,20 +1059,20 @@ class BatchTestResult(BaseModel):
     execution_time: Optional[int]  # milliseconds
     error: Optional[str]
 
-# 배치 작업 상태 저장용 (메모리 기반)
-batch_status_storage = {}
+# 테스터 작업 상태 저장용 (메모리 기반)
+tester_status_storage = {}
 
 async def process_batch_group(
     user_id: str,
     workflow_name: str,
     workflow_id: str,
-    test_cases: List[BatchTestCase],
+    test_cases: List[TesterTestCase],
     interaction_id: str,
     selected_collections: Optional[List[str]],
     batch_id: str,
     app_db,
     individual_result_callback=None
-) -> List[BatchTestResult]:
+) -> List[TesterTestResult]:
     """
     배치 그룹을 병렬로 처리하며 개별 완료 시마다 콜백 호출
     """
@@ -1082,7 +1082,7 @@ async def process_batch_group(
     tasks = []
     for test_case in test_cases:
         unique_interaction_id = f"{interaction_id}____{workflow_name}____{batch_id}____{test_case.id}"
-        task = execute_single_workflow_for_batch_with_callback(
+        task = execute_single_workflow_for_tester_with_callback(
             user_id=user_id,
             workflow_name=workflow_name,
             workflow_id=workflow_id,
@@ -1102,7 +1102,7 @@ async def process_batch_group(
     # 결과 처리 (콜백에서 이미 처리되었지만 최종 반환용)
     for test_case, exec_result in zip(test_cases, execution_results):
         if isinstance(exec_result, Exception):
-            result = BatchTestResult(
+            result = TesterTestResult(
                 id=test_case.id,
                 input=test_case.input,
                 expected_output=test_case.expected_output,
@@ -1119,7 +1119,7 @@ async def process_batch_group(
             else:
                 actual_output = str(outputs)
 
-            result = BatchTestResult(
+            result = TesterTestResult(
                 id=test_case.id,
                 input=test_case.input,
                 expected_output=test_case.expected_output,
@@ -1129,7 +1129,7 @@ async def process_batch_group(
                 error=None
             )
         else:
-            result = BatchTestResult(
+            result = TesterTestResult(
                 id=test_case.id,
                 input=test_case.input,
                 expected_output=test_case.expected_output,
@@ -1142,15 +1142,15 @@ async def process_batch_group(
         results.append(result)
 
     # 진행 상황 업데이트 (배치 그룹 처리 완료 후 한 번에 업데이트)
-    if batch_id in batch_status_storage:
-        batch_status_storage[batch_id]["completed_count"] += len(test_cases)
-        progress = (batch_status_storage[batch_id]["completed_count"] /
-                   batch_status_storage[batch_id]["total_count"]) * 100
-        batch_status_storage[batch_id]["progress"] = progress
+    if batch_id in tester_status_storage:
+        tester_status_storage[batch_id]["completed_count"] += len(test_cases)
+        progress = (tester_status_storage[batch_id]["completed_count"] /
+                   tester_status_storage[batch_id]["total_count"]) * 100
+        tester_status_storage[batch_id]["progress"] = progress
 
     return results
 
-async def execute_single_workflow_for_batch_with_callback(
+async def execute_single_workflow_for_tester_with_callback(
     user_id: str,
     workflow_name: str,
     workflow_id: str,
@@ -1158,7 +1158,7 @@ async def execute_single_workflow_for_batch_with_callback(
     interaction_id: str,
     selected_collections: Optional[List[str]],
     app_db,
-    test_case: BatchTestCase,
+    test_case: TesterTestCase,
     callback=None,
     expected_output=None
 ) -> Dict[str, Any]:
@@ -1233,7 +1233,7 @@ async def execute_single_workflow_for_batch_with_callback(
 
         # 콜백 호출 - 개별 테스트 케이스 완료 시
         if callback:
-            batch_result = BatchTestResult(
+            tester_result = TesterTestResult(
                 id=test_case.id,
                 input=test_case.input,
                 expected_output=test_case.expected_output,
@@ -1242,13 +1242,13 @@ async def execute_single_workflow_for_batch_with_callback(
                 execution_time=execution_time,
                 error=None
             )
-            await callback(batch_result)
+            await callback(tester_result)
 
         return result
 
     except Exception as e:
         execution_time = int((time.time() - start_time) * 1000)
-        logger.error(f"배치 워크플로우 실행 실패: {str(e)}")
+        logger.error(f"테스터 워크플로우 실행 실패: {str(e)}")
 
         result = {
             "success": False,
@@ -1258,7 +1258,7 @@ async def execute_single_workflow_for_batch_with_callback(
 
         # 콜백 호출 - 에러 발생 시
         if callback:
-            batch_result = BatchTestResult(
+            tester_result = TesterTestResult(
                 id=test_case.id,
                 input=test_case.input,
                 expected_output=test_case.expected_output,
@@ -1267,77 +1267,177 @@ async def execute_single_workflow_for_batch_with_callback(
                 execution_time=execution_time,
                 error=str(e)
             )
-            await callback(batch_result)
+            await callback(tester_result)
 
         return result
 
 # ==================================================
-# 배치 실행 API 엔드포인트 / batch로 만듦.
+# 테스터 실행 API 엔드포인트 / tester로 만듦.
 # ==================================================
-
-@router.post("/execute/batch/stream")
-async def execute_workflow_batch_stream(request: Request, batch_request: BatchExecuteRequest):
+@router.get("/tester/io_logs")
+async def get_workflow_io_logs_for_tester(request: Request, workflow_name: str):
     """
-    워크플로우 배치 실행 스트리밍 엔드포인트
+    특정 워크플로우의 ExecutionIO 로그를 interaction_batch_id별로 그룹화하여 반환합니다.
+
+    Args:
+        workflow_name: 워크플로우 이름
+
+    Returns:
+        interaction_batch_id별로 그룹화된 ExecutionIO 로그 리스트
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+        result = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "test_mode": True
+            },
+            limit=1000000,  # 필요에 따라 조정 가능
+            orderby="updated_at",
+            orderby_asc=True,
+            return_list=True
+        )
+
+        if not result:
+            logger.info(f"No performance data found for workflow: {workflow_name}")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "response_data_list": [],
+                "message": "No in_out_logs data found for this workflow"
+            })
+
+        # interaction_batch_id별로 그룹화
+        tester_groups = {}
+
+        for idx, row in enumerate(result):
+            interaction_id = row['interaction_id']
+
+            # interaction_id에서 마지막 숫자를 제외한 배치 ID 추출
+            # 예: batch_test____Workflow____a4e5af3a-c975-4356-8a72-6dcf74695c9f____4
+            # -> batch_test____Workflow____a4e5af3a-c975-4356-8a72-6dcf74695c9f
+            parts = interaction_id.split('____')
+            if len(parts) >= 4:
+                interaction_batch_id = '____'.join(parts[:-1])
+            else:
+                interaction_batch_id = interaction_id
+
+            if interaction_batch_id not in tester_groups:
+                tester_groups[interaction_batch_id] = []
+
+            # input_data 파싱
+            raw_input_data = json.loads(row['input_data']).get('result', None) if row['input_data'] else None
+            parsed_input_data = parse_input_data(raw_input_data) if raw_input_data else None
+
+            # interaction_id에서 마지막 번호를 추출하여 log_id로 사용
+            # 예: batch_test____Workflow____a4e5af3a-c975-4356-8a72-6dcf74695c9f____4 -> 4
+            parts = interaction_id.split('____')
+            if len(parts) >= 4 and parts[-1].isdigit():
+                log_id = int(parts[-1])
+            else:
+                log_id = len(tester_groups[interaction_batch_id]) + 1
+
+            log_entry = {
+                "log_id": log_id,
+                "interaction_id": row['interaction_id'],
+                "workflow_name": row['workflow_name'],
+                "workflow_id": row['workflow_id'],
+                "input_data": parsed_input_data,
+                "output_data": json.loads(row['output_data']).get('result', None) if row['output_data'] else None,
+                "expected_output": row['expected_output'],
+                "updated_at": row['updated_at'].isoformat() if isinstance(row['updated_at'], datetime) else row['updated_at']
+            }
+            tester_groups[interaction_batch_id].append(log_entry)
+
+        # 각 테스터 그룹을 response_data 형태로 변환
+        response_data_list = []
+        for interaction_batch_id, performance_stats in tester_groups.items():
+            response_data = {
+                "workflow_name": workflow_name,
+                "interaction_batch_id": interaction_batch_id,
+                "in_out_logs": performance_stats,
+                "message": "In/Out logs retrieved successfully"
+            }
+            response_data_list.append(response_data)
+
+        final_response = {
+            "workflow_name": workflow_name,
+            "response_data_list": response_data_list,
+            "message": f"In/Out logs retrieved successfully for {len(response_data_list)} tester groups"
+        }
+
+        logger.info(f"Performance stats retrieved for workflow: {workflow_name}, {len(response_data_list)} tester groups")
+        return JSONResponse(content=final_response)
+
+    except Exception as e:
+        logger.error(f"Error retrieving workflow performance: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
+
+@router.post("/execute/tester/stream")
+async def execute_workflow_tester_stream(request: Request, tester_request: TesterExecuteRequest):
+    """
+    워크플로우 테스터 실행 스트리밍 엔드포인트
     여러 테스트 케이스를 배치로 처리하며 개별 완료 시마다 실시간 진행 상황을 SSE로 스트리밍합니다.
 
     Args:
-        batch_request: 배치 실행 요청 데이터
+        tester_request: 테스터 실행 요청 데이터
 
     Returns:
-        StreamingResponse: SSE 형식의 실시간 배치 실행 결과
+        StreamingResponse: SSE 형식의 실시간 테스터 실행 결과
     """
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
 
-    async def batch_stream_generator():
+    async def tester_stream_generator():
         batch_id = str(uuid.uuid4())
         start_time = time.time()
         completed_count = 0
         result_queue = asyncio.Queue()
 
         try:
-            batch_status_storage[batch_id] = {
+            tester_status_storage[batch_id] = {
                 "status": "running",
-                "total_count": len(batch_request.test_cases),
+                "total_count": len(tester_request.test_cases),
                 "completed_count": 0,
                 "progress": 0.0,
                 "start_time": start_time
             }
 
             initial_message = {
-                "type": "batch_start",
+                "type": "tester_start",
                 "batch_id": batch_id,
-                "total_count": len(batch_request.test_cases),
-                "batch_size": batch_request.batch_size,
-                "workflow_name": batch_request.workflow_name
+                "total_count": len(tester_request.test_cases),
+                "batch_size": tester_request.batch_size,
+                "workflow_name": tester_request.workflow_name
             }
             yield f"data: {json.dumps(initial_message, ensure_ascii=False)}\n\n"
 
-            logger.info(f"배치 스트림 {batch_id} 시작: 워크플로우={batch_request.workflow_name}, "
-                       f"테스트 케이스={len(batch_request.test_cases)}개, 배치 크기={batch_request.batch_size}")
+            logger.info(f"테스터 스트림 {batch_id} 시작: 워크플로우={tester_request.workflow_name}, "
+                       f"테스트 케이스={len(tester_request.test_cases)}개, 배치 크기={tester_request.batch_size}")
 
             all_results = []
 
-            async def individual_completion_callback(result: BatchTestResult):
+            async def individual_completion_callback(result: TesterTestResult):
                 await result_queue.put(result)
 
             async def batch_processor():
                 nonlocal all_results
                 try:
-                    for i in range(0, len(batch_request.test_cases), batch_request.batch_size):
-                        batch_group = batch_request.test_cases[i:i + batch_request.batch_size]
-                        group_number = i // batch_request.batch_size + 1
+                    for i in range(0, len(tester_request.test_cases), tester_request.batch_size):
+                        batch_group = tester_request.test_cases[i:i + tester_request.batch_size]
+                        group_number = i // tester_request.batch_size + 1
 
                         logger.info(f"배치 그룹 {group_number} 처리 중: {len(batch_group)}개 병렬 실행")
 
                         group_results = await process_batch_group(
                             user_id=user_id,
-                            workflow_name=batch_request.workflow_name,
-                            workflow_id=batch_request.workflow_id,
+                            workflow_name=tester_request.workflow_name,
+                            workflow_id=tester_request.workflow_id,
                             test_cases=batch_group,
-                            interaction_id=batch_request.interaction_id,
-                            selected_collections=batch_request.selected_collections,
+                            interaction_id=tester_request.interaction_id,
+                            selected_collections=tester_request.selected_collections,
                             batch_id=batch_id,
                             app_db=app_db,
                             individual_result_callback=individual_completion_callback
@@ -1345,10 +1445,10 @@ async def execute_workflow_batch_stream(request: Request, batch_request: BatchEx
 
                         all_results.extend(group_results)
 
-                        if i + batch_request.batch_size < len(batch_request.test_cases):
+                        if i + tester_request.batch_size < len(tester_request.test_cases):
                             await asyncio.sleep(0.5)
 
-                    await result_queue.put("BATCH_COMPLETE")
+                    await result_queue.put("TESTER_COMPLETE")
                 except Exception as e:
                     await result_queue.put(f"ERROR:{str(e)}")
 
@@ -1358,18 +1458,18 @@ async def execute_workflow_batch_stream(request: Request, batch_request: BatchEx
                 try:
                     result = await asyncio.wait_for(result_queue.get(), timeout=1.0)
 
-                    if result == "BATCH_COMPLETE":
+                    if result == "TESTER_COMPLETE":
                         break
                     elif isinstance(result, str) and result.startswith("ERROR:"):
                         error_message = {
                             "type": "error",
                             "batch_id": batch_id,
                             "error": result[6:],  # "ERROR:" 제거
-                            "message": "배치 실행 중 오류가 발생했습니다"
+                            "message": "테스터 실행 중 오류가 발생했습니다"
                         }
                         yield f"data: {json.dumps(error_message, ensure_ascii=False)}\n\n"
                         break
-                    elif isinstance(result, BatchTestResult):
+                    elif isinstance(result, TesterTestResult):
                         completed_count += 1
                         result_message = {
                             "type": "test_result",
@@ -1378,21 +1478,21 @@ async def execute_workflow_batch_stream(request: Request, batch_request: BatchEx
                         }
                         yield f"data: {json.dumps(result_message, ensure_ascii=False)}\n\n"
 
-                        progress = (completed_count / len(batch_request.test_cases)) * 100
+                        progress = (completed_count / len(tester_request.test_cases)) * 100
 
                         progress_message = {
                             "type": "progress",
                             "batch_id": batch_id,
                             "completed_count": completed_count,
-                            "total_count": len(batch_request.test_cases),
+                            "total_count": len(tester_request.test_cases),
                             "progress": round(progress, 2),
                             "elapsed_time": int((time.time() - start_time) * 1000)
                         }
                         yield f"data: {json.dumps(progress_message, ensure_ascii=False)}\n\n"
 
-                        if batch_id in batch_status_storage:
-                            batch_status_storage[batch_id]["completed_count"] = completed_count
-                            batch_status_storage[batch_id]["progress"] = progress
+                        if batch_id in tester_status_storage:
+                            tester_status_storage[batch_id]["completed_count"] = completed_count
+                            tester_status_storage[batch_id]["progress"] = progress
 
                 except asyncio.TimeoutError:
                     continue
@@ -1405,41 +1505,41 @@ async def execute_workflow_batch_stream(request: Request, batch_request: BatchEx
             success_count = sum(1 for r in all_results if r.status == "success")
             error_count = len(all_results) - success_count
 
-            # 배치 상태 완료로 업데이트
-            batch_status_storage[batch_id]["status"] = "completed"
-            batch_status_storage[batch_id]["progress"] = 100.0
+            # 테스터 상태 완료로 업데이트
+            tester_status_storage[batch_id]["status"] = "completed"
+            tester_status_storage[batch_id]["progress"] = 100.0
 
             # 최종 완료 메시지
             final_message = {
-                "type": "batch_complete",
+                "type": "tester_complete",
                 "batch_id": batch_id,
                 "total_count": len(all_results),
                 "success_count": success_count,
                 "error_count": error_count,
                 "total_execution_time": total_execution_time,
-                "message": f"배치 처리 완료: 성공={success_count}개, 실패={error_count}개"
+                "message": f"테스터 처리 완료: 성공={success_count}개, 실패={error_count}개"
             }
             yield f"data: {json.dumps(final_message, ensure_ascii=False)}\n\n"
 
-            logger.info(f"배치 스트림 {batch_id} 완료: 성공={success_count}개, 실패={error_count}개, "
+            logger.info(f"테스터 스트림 {batch_id} 완료: 성공={success_count}개, 실패={error_count}개, "
                        f"총 소요시간={total_execution_time}ms")
 
         except Exception as e:
-            logger.error(f"배치 스트림 실행 중 오류: {str(e)}", exc_info=True)
+            logger.error(f"테스터 스트림 실행 중 오류: {str(e)}", exc_info=True)
 
-            if 'batch_id' in locals() and batch_id in batch_status_storage:
-                batch_status_storage[batch_id]["status"] = "error"
-                batch_status_storage[batch_id]["error"] = str(e)
+            if 'batch_id' in locals() and batch_id in tester_status_storage:
+                tester_status_storage[batch_id]["status"] = "error"
+                tester_status_storage[batch_id]["error"] = str(e)
 
             error_message = {
                 "type": "error",
                 "batch_id": batch_id if 'batch_id' in locals() else "unknown",
                 "error": str(e),
-                "message": "배치 실행 중 오류가 발생했습니다"
+                "message": "테스터 실행 중 오류가 발생했습니다"
             }
             yield f"data: {json.dumps(error_message, ensure_ascii=False)}\n\n"
 
-    return StreamingResponse(batch_stream_generator(), media_type="text/event-stream")
+    return StreamingResponse(tester_stream_generator(), media_type="text/event-stream")
 
 @router.get("/execution/status")
 async def get_all_execution_status():
