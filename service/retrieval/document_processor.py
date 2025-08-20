@@ -1332,6 +1332,7 @@ class DocumentProcessor:
                 return "[PDF 파일: pdf2image 라이브러리가 필요합니다]"
             
             current_config = self._get_current_image_text_config()
+            logger.info(f"🔄 Real-time PDF OCR processing with provider: {current_config}")
             if not self._is_image_text_enabled(current_config):
                 logger.warning("OCR is disabled, falling back to text extraction")
                 return await self._extract_text_from_pdf_fallback(file_path)
