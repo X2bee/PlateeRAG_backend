@@ -121,4 +121,5 @@ dependencies = [
     "openpyxl==3.1.5",
     "xlrd==2.0.2",
     "python-pptx>=1.0.2",
+    "beautifulsoup4>=4.13.4",
 ]

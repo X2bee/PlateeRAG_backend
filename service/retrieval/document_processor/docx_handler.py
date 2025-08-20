@@ -5,7 +5,7 @@ from pathlib import Path
 from docx import Document
 
 from .utils import clean_text
-from .ocr import convert_images_to_text_batch
+from .ocr import convert_images_to_text_batch, convert_pdf_to_markdown_with_html_reference
 from .config import is_image_text_enabled
 
 logger = logging.getLogger("document-processor")
@@ -108,6 +108,37 @@ def _is_similar_table_text(t1: str, t2: str, threshold: float = 0.8) -> bool:
     ratio = len(set(s.split()) & set(L.split())) / len(set(s.split()))
     return ratio >= threshold
 
+async def convert_docx_to_pdf_libreoffice(file_path: str) -> str:
+    """LibreOffice로 DOCX를 PDF로 변환"""
+    try:
+        import subprocess
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cmd = [
+                'libreoffice', '--headless', '--convert-to', 'pdf', 
+                '--outdir', temp_dir, file_path
+            ]
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            
+            docx_name = Path(file_path).stem
+            pdf_path = os.path.join(temp_dir, f"{docx_name}.pdf")
+            
+            if not os.path.exists(pdf_path):
+                raise FileNotFoundError(f"PDF conversion failed: {pdf_path}")
+            
+            # 임시 파일로 복사
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_pdf:
+                with open(pdf_path, 'rb') as f:
+                    temp_pdf.write(f.read())
+                logger.info(f"DOCX → PDF 변환 완료: {temp_pdf.name}")
+                return temp_pdf.name
+                
+    except subprocess.CalledProcessError as e:
+        logger.error(f"LibreOffice PDF conversion failed: {e.stderr}")
+        raise
+    except Exception as e:
+        logger.error(f"PDF conversion error: {e}")
+        raise
+    
 async def convert_docx_to_images(file_path: str) -> List[str]:
     temp_files: List[str] = []
     try:
@@ -203,9 +234,95 @@ async def extract_text_from_docx_fallback(file_path: str) -> str:
         text = f"=== 페이지 1 ===\n{text}"
     return clean_text(text)
 
+async def convert_docx_to_html_text(file_path: str) -> str:
+    """DOCX를 HTML로 변환 후 텍스트만 추출"""
+    try:
+        import subprocess
+        from bs4 import BeautifulSoup
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cmd = [
+                'libreoffice', '--headless', '--convert-to', 'html',
+                '--outdir', temp_dir, file_path
+            ]
+            subprocess.run(cmd, check=True, capture_output=True)
+            
+            docx_name = Path(file_path).stem
+            html_path = os.path.join(temp_dir, f"{docx_name}.html")
+            
+            if not os.path.exists(html_path):
+                raise FileNotFoundError("HTML conversion failed")
+            
+            # HTML에서 텍스트 추출 및 정리
+            with open(html_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # 불필요한 태그 제거
+            for tag in soup(['script', 'style', 'meta', 'link']):
+                tag.decompose()
+            
+            # 텍스트 추출
+            text = soup.get_text()
+            
+            # 텍스트 정리
+            lines = [line.strip() for line in text.splitlines()]
+            clean_lines = [line for line in lines if line]
+            return '\n'.join(clean_lines)
+            
+    except Exception as e:
+        logger.error(f"HTML text extraction failed: {e}")
+        raise
+
+async def extract_text_from_docx_via_html_pdf_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
+    """DOCX를 HTML(텍스트) + PDF(이미지)로 변환 후 OCR로 마크다운 생성"""
+    if not is_image_text_enabled(current_config, True):
+        return await extract_text_from_docx_fallback(file_path)
+    
+    pdf_path = None
+    try:
+        # 1. DOCX → HTML 텍스트 추출 (reference용)
+        html_reference_text = await convert_docx_to_html_text(file_path)
+        logger.info("DOCX → HTML 텍스트 추출 완료")
+        
+        # 2. DOCX → PDF 변환
+        pdf_path = await convert_docx_to_pdf_libreoffice(file_path)
+        logger.info("DOCX → PDF 변환 완료")
+        
+        # 3. PDF → 마크다운 (HTML 텍스트를 reference로 사용)
+        markdown_result = await convert_pdf_to_markdown_with_html_reference(
+            pdf_path, html_reference_text, current_config
+        )
+        
+        if markdown_result and not markdown_result.startswith("["):
+            return clean_text(markdown_result)
+        else:
+            logger.warning("HTML+PDF OCR failed, falling back")
+            return await extract_text_from_docx_fallback(file_path)
+            
+    except Exception as e:
+        logger.error(f"HTML+PDF OCR processing failed: {e}")
+        return await extract_text_from_docx_fallback(file_path)
+    finally:
+        if pdf_path and os.path.exists(pdf_path):
+            try:
+                os.unlink(pdf_path)
+            except:
+                pass
+
+# extract_text_from_docx 함수 수정
 async def extract_text_from_docx(file_path: str, current_config: Dict[str, Any]) -> str:
     provider = current_config.get('provider', 'no_model')
     logger.info(f"🔄 Real-time DOCX processing with provider: {provider}")
+    
     if provider == 'no_model':
         return await extract_text_from_docx_fallback(file_path)
-    return await extract_text_from_docx_via_ocr(file_path, current_config)
+    
+    # 1순위: HTML+PDF OCR 방식
+    try:
+        return await extract_text_from_docx_via_html_pdf_ocr(file_path, current_config)
+    except Exception as e:
+        logger.warning(f"HTML+PDF OCR failed, falling back to image OCR: {e}")
+        # 2순위로 폴백
+        return await extract_text_from_docx_via_ocr(file_path, current_config)
