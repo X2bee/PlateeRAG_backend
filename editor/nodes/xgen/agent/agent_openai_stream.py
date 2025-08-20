@@ -124,9 +124,9 @@ class AgentOpenAIStreamNode(Node):
                 default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
-                if strict_citation:
-                    default_prompt = default_prompt + citation_prompt
                 if additional_rag_context and additional_rag_context.strip():
+                    if strict_citation:
+                        default_prompt = default_prompt + citation_prompt
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
@@ -156,6 +156,8 @@ class AgentOpenAIStreamNode(Node):
                     yield f"\nStreaming Error: {str(e)}\n"
             else:
                 if additional_rag_context and additional_rag_context.strip():
+                    if strict_citation:
+                        default_prompt = default_prompt + citation_prompt
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),

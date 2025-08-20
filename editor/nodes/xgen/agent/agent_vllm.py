@@ -214,9 +214,9 @@ class AgentVLLMNode(Node):
             }
 
             if tools is not None:
-                if strict_citation:
-                    prompt = prompt + citation_prompt
                 if additional_rag_context and additional_rag_context.strip():
+                    if strict_citation:
+                        prompt = prompt + citation_prompt
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
@@ -246,6 +246,8 @@ class AgentVLLMNode(Node):
 
             else:
                 if additional_rag_context and additional_rag_context.strip():
+                    if strict_citation:
+                        prompt = prompt + citation_prompt
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
