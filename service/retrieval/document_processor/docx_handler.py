@@ -7,7 +7,7 @@ from docx import Document
 from .utils import clean_text
 from .ocr import convert_images_to_text_batch, convert_pdf_to_markdown_with_html_reference
 from .config import is_image_text_enabled
-
+from .html_reprocessor import clean_html_file
 logger = logging.getLogger("document-processor")
 
 try:
@@ -235,10 +235,9 @@ async def extract_text_from_docx_fallback(file_path: str) -> str:
     return clean_text(text)
 
 async def convert_docx_to_html_text(file_path: str) -> str:
-    """DOCX를 HTML로 변환 후 텍스트만 추출"""
+    """DOCX를 HTML로 변환 후 정리된 HTML 반환"""
     try:
         import subprocess
-        from bs4 import BeautifulSoup
         
         with tempfile.TemporaryDirectory() as temp_dir:
             cmd = [
@@ -253,26 +252,16 @@ async def convert_docx_to_html_text(file_path: str) -> str:
             if not os.path.exists(html_path):
                 raise FileNotFoundError("HTML conversion failed")
             
-            # HTML에서 텍스트 추출 및 정리
+            # HTML 파일 읽기
             with open(html_path, 'r', encoding='utf-8') as f:
                 html_content = f.read()
             
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            # 불필요한 태그 제거
-            for tag in soup(['script', 'style', 'meta', 'link']):
-                tag.decompose()
-            
-            # 텍스트 추출
-            text = soup.get_text()
-            
-            # 텍스트 정리
-            lines = [line.strip() for line in text.splitlines()]
-            clean_lines = [line for line in lines if line]
-            return '\n'.join(clean_lines)
+            # HTML 정리해서 반환
+            cleaned_html = clean_html_file(html_content)
+            return cleaned_html
             
     except Exception as e:
-        logger.error(f"HTML text extraction failed: {e}")
+        logger.error(f"HTML conversion failed: {e}")
         raise
 
 async def extract_text_from_docx_via_html_pdf_ocr(file_path: str, current_config: Dict[str, Any]) -> str:

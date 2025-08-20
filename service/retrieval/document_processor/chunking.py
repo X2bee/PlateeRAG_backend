@@ -98,7 +98,7 @@ def split_text_preserving_html_blocks(text: str, chunk_size: int, chunk_overlap:
         if re.fullmatch(r"===\s*(페이지|슬라이드)\s*\d+(\s*\(OCR[+참고]*\))?\s*===", c.strip()):
             continue
         cleaned_chunks.append(c)
-
+        
     logger.info(f"Final text split into {len(cleaned_chunks)} chunks (after cleaning)")
     return cleaned_chunks
 

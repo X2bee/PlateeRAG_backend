@@ -5,11 +5,10 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("document-processor")
 
 def clean_text(text: Optional[str]) -> str:
-    if not text:
-        return ""
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-    return text.strip()
+   if not text:
+       return ""
+   text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+   return text.strip()
 
 def clean_code_text(text: str) -> str:
     if not text:
