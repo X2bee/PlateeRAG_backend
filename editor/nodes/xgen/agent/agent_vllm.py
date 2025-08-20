@@ -40,6 +40,7 @@ class AgentVLLMNode(Node):
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": False, "optional": True},
+        {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
     ]
 
@@ -78,6 +79,7 @@ class AgentVLLMNode(Node):
         max_tokens: int = 8192,
         n_messages: int = 3,
         base_url: str = "",
+        strict_citation: bool = True,
         default_prompt: str = default_prompt,
     ) -> str:
         """
@@ -152,7 +154,7 @@ class AgentVLLMNode(Node):
             prompt = prefix_prompt+default_prompt
 
             # OpenAI API를 사용하여 응답 생성
-            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, additional_rag_context)
+            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context)
 
             logger.info(f"Chat Agent 응답 생성 완료: {len(response)}자")
             return response
@@ -162,7 +164,7 @@ class AgentVLLMNode(Node):
             return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
 
 
-    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, additional_rag_context: Optional[str]) -> str:
+    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, strict_citation:Optional[bool], additional_rag_context: Optional[str]) -> str:
         """OpenAI API를 사용하여 채팅 응답 생성"""
         try:
             config_composer = AppServiceManager.get_config_composer()
@@ -212,6 +214,8 @@ class AgentVLLMNode(Node):
             }
 
             if tools is not None:
+                if strict_citation:
+                    prompt = prompt + citation_prompt
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", prompt),
