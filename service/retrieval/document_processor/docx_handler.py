@@ -300,23 +300,13 @@ async def extract_text_from_docx_via_html_pdf_ocr(file_path: str, current_config
             except:
                 pass
 
-async def extract_text_from_docx_fallback_html(file_path: str) -> str:
-    """no_model용: DOCX를 HTML로 변환 후 clean_html_file로 가공"""
-    try:
-        html_content = await convert_docx_to_html_text(file_path)
-        logger.info("no_model: DOCX → HTML 변환 및 정리 완료")
-        return html_content
-    except Exception as e:
-        logger.warning(f"HTML 변환 실패, 기존 fallback 사용: {e}")
-        return await extract_text_from_docx_fallback(file_path)
-
 # extract_text_from_docx 함수 수정
 async def extract_text_from_docx(file_path: str, current_config: Dict[str, Any]) -> str:
     provider = current_config.get('provider', 'no_model')
     logger.info(f"🔄 Real-time DOCX processing with provider: {provider}")
     
     if provider == 'no_model':
-        return await extract_text_from_docx_fallback_html(file_path)  # HTML 방식 사용
+        return await extract_text_from_docx_fallback(file_path)
     
     # 1순위: HTML+PDF OCR 방식
     try:
