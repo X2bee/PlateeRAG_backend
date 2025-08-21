@@ -2,7 +2,7 @@ import logging
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 from editor.node_composer import Node
-from langchain.schema.output_parser import StrOutputParser
+from langchain.schema.output_parser import StrOutputParser, JsonOutputParser
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
@@ -110,14 +110,14 @@ class AgentOpenAINode(Node):
                             score = item.get("score", 0.0)
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
-                            
+
                     if context_parts:
                         context_parts.append(f"{citation_prompt}")
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 {context_text}"""
 
-            response = self._generate_chat_response(text, default_prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context)
+            response = self._generate_chat_response(text, default_prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context, args_schema)
             logger.info(f"[AGENT_EXECUTE] Chat Agent 응답 생성 완료: {len(response)}자")
             logger.debug(f"[AGENT_EXECUTE] 생성된 응답: {response[:200]}{'...' if len(response) > 200 else ''}")
             return response
@@ -129,7 +129,7 @@ class AgentOpenAINode(Node):
             return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
 
 
-    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, strict_citation: Optional[bool], additional_rag_context: Optional[str]) -> str:
+    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, strict_citation: Optional[bool], additional_rag_context: Optional[str], args_schema) -> str:
         """OpenAI API를 사용하여 채팅 응답 생성"""
         try:
             config_composer = AppServiceManager.get_config_composer()
@@ -187,6 +187,11 @@ class AgentOpenAINode(Node):
                 if additional_rag_context and additional_rag_context.strip():
                     if strict_citation:
                         prompt = prompt + citation_prompt
+                    if args_schema:
+                        parser = JsonOutputParser(pydantic_object=args_schema)
+                        format_instructions = parser.get_format_instructions()
+                        escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
+                        prompt = f"{prompt}\n\n{escaped_instructions}"
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
