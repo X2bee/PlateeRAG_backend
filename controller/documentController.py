@@ -28,6 +28,8 @@ DOCUMENTS_BASE_DIR = os.getenv("DOCUMENTS_BASE_DIR", "/app/documents")
 MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))  # 100MB
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))  # 1 hour
 
+logger.info(f'Document Settingd: DOCUMENTS_BASE_DIR={DOCUMENTS_BASE_DIR}, MAX_FILE_SIZE={MAX_FILE_SIZE}, CACHE_TTL={CACHE_TTL}')
+
 class DocumentRequest(BaseModel):
     """문서 요청 모델"""
     file_path: str
@@ -60,6 +62,7 @@ def validate_file_path(file_path: str, base_directory: str) -> str:
         
         # 기본 디렉터리를 벗어나지 않도록 보장
         full_path = os.path.join(base_directory, clean_path.lstrip('/'))
+        logger.info(f'Fetching document: {full_path}')
         real_path = os.path.realpath(full_path)
         real_base = os.path.realpath(base_directory)
         
