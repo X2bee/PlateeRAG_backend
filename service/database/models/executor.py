@@ -14,6 +14,7 @@ class ExecutionIO(BaseModel):
         self.input_data: Dict = kwargs.get('input_data', {})
         self.output_data: Dict = kwargs.get('output_data', {})
         self.expected_output: Optional[str] = kwargs.get('expected_output', None)
+        self.llm_eval_score: Optional[float] = kwargs.get('llm_eval_score', None)
         self.test_mode: Optional[bool] = kwargs.get('test_mode', False)
 
     def get_table_name(self) -> str:
@@ -28,6 +29,7 @@ class ExecutionIO(BaseModel):
             'input_data': 'TEXT',
             'output_data': 'TEXT',
             'expected_output': 'TEXT',
+            'llm_eval_score': 'FLOAT',
             'test_mode': 'BOOLEAN DEFAULT FALSE'
         }
 

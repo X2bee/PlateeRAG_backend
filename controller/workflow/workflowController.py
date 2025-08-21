@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Any, Optional
 import hashlib
 import os
@@ -15,7 +15,9 @@ from service.database.execution_meta_service import get_or_create_execution_meta
 from controller.controller_helper import extract_user_id_from_request
 from controller.workflow.helper import _workflow_parameter_helper, _default_workflow_parameter_helper
 from controller.workflow.model import WorkflowRequest, WorkflowData, SaveWorkflowRequest, ConversationRequest
-
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
 from service.database.models.user import User
 from service.database.models.executor import ExecutionMeta, ExecutionIO
 from service.database.models.workflow import WorkflowMeta
@@ -892,148 +894,6 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
         logger.error(f"An unexpected error occurred during workflow setup: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-
-# # Helper Functions
-
-# async def _workflow_parameter_helper(request_body: WorkflowRequest, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
-#     """
-#     Updates the workflow data by setting the interaction ID in the parameters of nodes
-#     with a function ID of 'memory', if applicable.
-
-#     Args:
-#         request_body: An object containing the interaction ID to be applied.
-#         workflow_data: A dictionary representing the workflow's nodes and their parameters.
-
-#     Returns:
-#         The updated workflow data with the interaction ID applied where necessary.
-#     """
-#     if (request_body.interaction_id) and (request_body.interaction_id != "default"):
-#         for node in workflow_data.get('nodes', []):
-#             if node.get('data', {}).get('functionId') == 'memory':
-#                 parameters = node.get('data', {}).get('parameters', [])
-#                 for parameter in parameters:
-#                     if parameter.get('id') == 'interaction_id':
-#                         parameter['value'] = request_body.interaction_id
-
-#     if request_body.additional_params:
-#         for node in workflow_data.get('nodes', []):
-#             node_id = node.get('id')
-#             if node_id and node_id in request_body.additional_params:
-#                 node_params = request_body.additional_params[node_id]
-#                 parameters = node.get('data', {}).get('parameters', [])
-
-#                 # additional_params를 parameters에 추가
-#                 additional_params = {
-#                     "id": "additional_params",
-#                     "name": "additional_params",
-#                     "type": "DICT",
-#                     "value": node_params
-#                 }
-#                 parameters.append(additional_params)
-
-#     return workflow_data
-
-# async def _default_workflow_parameter_helper(request, request_body: WorkflowRequest, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
-#     """
-#     Updates the workflow data with default parameters based on the request body.
-
-#     This function modifies the `workflow_data` dictionary by setting specific parameter values
-#     for nodes in the workflow. It updates the `collection_name` parameter for nodes with the
-#     `document_loaders` function ID and the `interaction_id` parameter for nodes with the
-#     `memory` function ID, based on the values provided in the `request_body`.
-
-#     Parameters:
-#         request_body: An object containing the request data. It should have attributes
-#             `selected_collection` (optional) and `interaction_id` (optional).
-#         workflow_data: A dictionary representing the workflow structure. It contains a list
-#             of nodes, each of which may have a `data` dictionary with `functionId` and `parameters`.
-
-#     Returns:
-#         A dictionary representing the updated workflow data with modified parameters.
-#     """
-#     config_composer = request.app.state.config_composer
-#     if not config_composer:
-#         raise HTTPException(status_code=500, detail="Config composer not available")
-
-#     llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
-
-#     if llm_provider == "openai":
-#         model = config_composer.get_config_by_name("OPENAI_MODEL_DEFAULT").value
-#         url = config_composer.get_config_by_name("OPENAI_API_BASE_URL").value
-#     elif llm_provider == "vllm":
-#         model = config_composer.get_config_by_name("VLLM_MODEL_NAME").value
-#         url = config_composer.get_config_by_name("VLLM_API_BASE_URL").value
-#     else:
-#         raise HTTPException(status_code=500, detail="Unsupported LLM provider")
-
-#     for node in workflow_data.get('nodes', []):
-#         if node.get('data', {}).get('functionId') == 'agents':
-#             parameters = node.get('data', {}).get('parameters', [])
-#             for parameter in parameters:
-#                 if parameter.get('id') == 'model':
-#                     parameter['value'] = model
-#                 if parameter.get('id') == 'base_url':
-#                     parameter['value'] = url
-
-#     if request_body.selected_collections:
-#         constant_folder = os.path.join(os.getcwd(), "constants")
-#         collection_file_path = os.path.join(constant_folder, "collection_node_template.json")
-#         edge_template_path = os.path.join(constant_folder, "base_edge_template.json")
-#         with open(collection_file_path, 'r', encoding='utf-8') as f:
-#             collection_node_template = json.load(f)
-#         with open(edge_template_path, 'r', encoding='utf-8') as f:
-#             edge_template = json.load(f)
-
-#         for collection in request_body.selected_collections:
-#             # UUID 부분을 제거하고 깨끗한 컬렉션 이름 추출
-#             collection_name = extract_collection_name(collection)
-#             coleection_code = hashlib.sha1(collection_name.encode('utf-8')).hexdigest()[:8]
-
-#             print(f"Adding collection node for: {collection} (clean name: {collection_name})")
-#             collection_node = copy.deepcopy(collection_node_template)
-#             edge = copy.deepcopy(edge_template)
-#             collection_node['id'] = f"document_loaders_{collection}"
-#             collection_node['data']['parameters'][0]['value'] = collection # collection에서 collection_name으로 수정함. uuid 제거 위해서 수정
-#             collection_node['data']['parameters'][1]['value'] = f"retrieval_search_tool_for_{coleection_code}"
-#             collection_node['data']['parameters'][2]['value'] = f"Use when a search is needed for the given question related to {collection_name}."
-#             workflow_data['nodes'].append(collection_node)
-
-#             edge_id = f"{collection_node['id']}:tools-default_agents:tools-{coleection_code}"
-#             edge['id'] = edge_id
-#             edge['source']['nodeId'] = collection_node['id']
-#             workflow_data['edges'].append(edge)
-
-#     if (request_body.interaction_id) and (request_body.interaction_id != "default"):
-#         for node in workflow_data.get('nodes', []):
-#             if node.get('data', {}).get('functionId') == 'memory':
-#                 parameters = node.get('data', {}).get('parameters', [])
-#                 for parameter in parameters:
-#                     if parameter.get('id') == 'interaction_id':
-#                         parameter['value'] = request_body.interaction_id
-
-#     if request_body.additional_params:
-#         for node in workflow_data.get('nodes', []):
-#             node_id = node.get('id')
-#             if node_id and node_id in request_body.additional_params:
-#                 node_params = request_body.additional_params[node_id]
-#                 parameters = node.get('data', {}).get('parameters', [])
-
-#                 # additional_params를 parameters에 추가
-#                 additional_param = {
-#                     "id": "additional_params",
-#                     "name": "additional_params",
-#                     "type": "DICT",
-#                     "value": node_params
-#                 }
-#                 parameters.append(additional_param)
-
-#     return workflow_data
-
-
-# ==================================================
-# 기존 모델들 뒤에 추가할 새로운 Pydantic 모델들
-# ==================================================
-
 class TesterTestCase(BaseModel):
     """테스터 테스트 케이스 모델"""
     id: int
@@ -1048,6 +908,9 @@ class TesterExecuteRequest(BaseModel):
     batch_size: int = 5
     interaction_id: str = "batch_test"
     selected_collections: Optional[List[str]] = None
+    llm_eval_enabled: Optional[bool] = False
+    llm_eval_type: Optional[str] = None
+    llm_eval_model: Optional[str] = None
 
 class TesterTestResult(BaseModel):
     """테스터 테스트 결과 모델"""
@@ -1058,9 +921,144 @@ class TesterTestResult(BaseModel):
     status: str  # 'success', 'error'
     execution_time: Optional[int]  # milliseconds
     error: Optional[str]
+    llm_eval_score: Optional[float] = None  # LLM 평가 점수 (0.0 ~ 1.0)
+
+class ScoreModelParser(BaseModel):
+    llm_eval_score: float = Field(description="주어진 데이터를 평가하여 0~1점의 점수로 반환합니다. 소수점 2째 자리까지 표현하십시오 (0.00 ~ 1.00)", ge=0.00, le=1.00)
 
 # 테스터 작업 상태 저장용 (메모리 기반)
 tester_status_storage = {}
+
+async def evaluate_with_llm(
+    unique_interaction_id: str,
+    input_data: str,
+    expected_output: Optional[str],
+    actual_output: str,
+    llm_eval_type: str,
+    llm_eval_model: str,
+    app_db,
+    config_composer
+) -> float:
+    """
+    LLM을 사용하여 실제 출력과 예상 출력을 비교하고 점수를 반환합니다.
+
+    Args:
+        unique_interaction_id: 고유 상호작용 ID
+        input_data: 입력 데이터
+        expected_output: 예상 출력 (레퍼런스)
+        actual_output: 실제 출력
+        llm_eval_type: LLM 평가 타입
+        llm_eval_model: 사용할 LLM 모델
+        app_db: 데이터베이스 매니저
+
+    Returns:
+        평가 점수 (0.0 ~ 1.0)
+    """
+    logger.info(f"LLM 평가 시작: unique_interaction_id={unique_interaction_id}")
+
+    try:
+        if llm_eval_type == "OpenAI":
+            api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
+            base_url = "https://api.openai.com/v1"
+            model_name = llm_eval_model
+            if not api_key:
+                logger.error(f"[LLM_EVAL] OpenAI API 키가 설정되지 않았습니다")
+                raise ValueError("OpenAI API 키가 설정되지 않았습니다.")
+
+        elif llm_eval_type == "vLLM":
+            api_key = None
+            base_url = config_composer.get_config_by_name("VLLM_API_BASE_URL").value
+            model_name = config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+
+        else:
+            raise ValueError(f"지원되지 않는 LLM 평가 타입입니다: {llm_eval_type}")
+
+        temperature = 0.1
+        if llm_eval_model == "gpt-5" or llm_eval_model == "gpt-5-nano" or llm_eval_model == "gpt-5-mini":
+            temperature = 1
+
+        llm_client = ChatOpenAI(
+            api_key=api_key,
+            model=model_name,
+            temperature=temperature,
+            max_tokens=1000,
+            base_url=base_url
+        )
+
+        parser = JsonOutputParser(pydantic_object=ScoreModelParser)
+
+        system_msg = SystemMessage(
+            content="""당신은 정확한 답변 평가 전문가입니다.
+주어진 입력에 대해 실제 생성된 답변이 레퍼런스 정답과 얼마나 일치하는지 평가해주세요.
+
+평가 기준:
+1. 레퍼런스 정답에서 요구하는 핵심 정보나 값이 정확히 포함되어 있는가?
+2. 답변이 적절해 보여도 레퍼런스가 지정하는 정확한 값과 다르면 낮은 점수를 주어야 합니다.
+3. 부분적으로 맞더라도 핵심 내용이 틀리면 낮은 점수를 주어야 합니다.
+4. 완전히 정확한 경우에만 높은 점수(0.9-1.0)를 주세요.
+
+점수 기준:
+- 1.0: 레퍼런스와 완전히 일치하거나 동등한 정확성
+- 0.7-0.9: 대부분 정확하지만 일부 세부사항이 다름
+- 0.4-0.6: 부분적으로 맞지만 중요한 부분이 틀림
+- 0.1-0.3: 대부분 틀렸지만 일부 관련성 있음
+- 0.0: 완전히 틀렸거나 관련성 없음
+
+응답은 반드시 JSON 형식으로 소수점 2자리까지 정확하게 제공해주세요."""
+        )
+
+        evaluation_prompt = f"""다음 내용을 평가해주세요:
+
+**입력 질문/요청:**
+{input_data}
+
+**레퍼런스 정답 (기준):**
+{expected_output or "제공되지 않음"}
+
+**실제 생성된 답변:**
+{actual_output}
+
+위 실제 답변이 레퍼런스 정답과 얼마나 정확히 일치하는지 0.00~1.00 사이의 점수로 평가해주세요.
+**답변 형식**
+{parser.get_format_instructions()}"""
+        human_msg = HumanMessage(content=evaluation_prompt)
+
+        # LLM 호출
+        response = await llm_client.ainvoke([system_msg, human_msg])
+        content = response.content.strip()
+
+        # JSON 파싱
+        parsed_result = parser.parse(content)
+        try:
+            score = parsed_result.llm_eval_score
+        except:
+            score = parsed_result.get('llm_eval_score', 0.0)
+
+        score = max(0.0, min(1.0, round(score, 2)))
+
+        # DB 업데이트
+        existing_data = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "interaction_id": unique_interaction_id,
+            },
+            limit=1
+        )
+
+        if existing_data:
+            updated_data = existing_data[0]
+            updated_data.llm_eval_score = score
+            app_db.update(updated_data)
+        else:
+            logger.warning(f"해당 interaction_id로 레코드를 찾을 수 없습니다: {unique_interaction_id}")
+
+        return score
+
+    except Exception as e:
+        logger.error(f"LLM 평가 중 오류 발생: {str(e)}", exc_info=True)
+        fallback_score = 0.0
+        return fallback_score
+
 
 async def process_batch_group(
     user_id: str,
@@ -1071,7 +1069,7 @@ async def process_batch_group(
     selected_collections: Optional[List[str]],
     batch_id: str,
     app_db,
-    individual_result_callback=None
+    individual_result_callback=None,
 ) -> List[TesterTestResult]:
     """
     배치 그룹을 병렬로 처리하며 개별 완료 시마다 콜백 호출
@@ -1092,7 +1090,7 @@ async def process_batch_group(
             app_db=app_db,
             test_case=test_case,
             callback=individual_result_callback,
-            expected_output=test_case.expected_output
+            expected_output=test_case.expected_output,
         )
         tasks.append(task)
 
@@ -1109,7 +1107,8 @@ async def process_batch_group(
                 actual_output=None,
                 status="error",
                 execution_time=0,
-                error=str(exec_result)
+                error=str(exec_result),
+                llm_eval_score=None
             )
         elif exec_result.get("success"):
             # outputs 처리 - 다양한 형태의 결과를 문자열로 변환
@@ -1126,7 +1125,8 @@ async def process_batch_group(
                 actual_output=actual_output,
                 status="success",
                 execution_time=exec_result.get("execution_time", 0),
-                error=None
+                error=None,
+                llm_eval_score=None
             )
         else:
             result = TesterTestResult(
@@ -1136,7 +1136,8 @@ async def process_batch_group(
                 actual_output=None,
                 status="error",
                 execution_time=exec_result.get("execution_time", 0),
-                error=exec_result.get("error", "알 수 없는 오류")
+                error=exec_result.get("error", "알 수 없는 오류"),
+                llm_eval_score=None
             )
 
         results.append(result)
@@ -1240,7 +1241,8 @@ async def execute_single_workflow_for_tester_with_callback(
                 actual_output=str(processed_output),
                 status="success",
                 execution_time=execution_time,
-                error=None
+                error=None,
+                llm_eval_score=None
             )
             await callback(tester_result)
 
@@ -1265,7 +1267,8 @@ async def execute_single_workflow_for_tester_with_callback(
                 actual_output=None,
                 status="error",
                 execution_time=execution_time,
-                error=str(e)
+                error=str(e),
+                llm_eval_score=None
             )
             await callback(tester_result)
 
@@ -1347,6 +1350,7 @@ async def get_workflow_io_logs_for_tester(request: Request, workflow_name: str):
                 "input_data": parsed_input_data,
                 "output_data": json.loads(row['output_data']).get('result', None) if row['output_data'] else None,
                 "expected_output": row['expected_output'],
+                "llm_eval_score": row['llm_eval_score'],
                 "updated_at": row['updated_at'].isoformat() if isinstance(row['updated_at'], datetime) else row['updated_at']
             }
             tester_groups[interaction_batch_id].append(log_entry)
@@ -1505,7 +1509,7 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
                             selected_collections=tester_request.selected_collections,
                             batch_id=batch_id,
                             app_db=app_db,
-                            individual_result_callback=individual_completion_callback
+                            individual_result_callback=individual_completion_callback,
                         )
 
                         all_results.extend(group_results)
@@ -1564,6 +1568,73 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
 
             # 배치 태스크 완료 대기
             await batch_task
+
+            # LLM 평가 처리 (만약 llm_eval_enabled가 true인 경우)
+            if tester_request.llm_eval_enabled and all_results:
+                config_composer = get_config_composer(request=request)
+                logger.info(f"LLM 평가 시작: {len(all_results)}개 결과 평가")
+
+                eval_progress_message = {
+                    "type": "eval_start",
+                    "batch_id": batch_id,
+                    "message": "LLM 평가를 시작합니다..."
+                }
+                yield f"data: {json.dumps(eval_progress_message, ensure_ascii=False)}\n\n"
+
+                # 각 결과에 대해 LLM 평가 수행
+                for idx, result in enumerate(all_results):
+                    if result.status == "success" and result.actual_output:
+                        try:
+                            # result.id를 사용하여 unique_interaction_id 생성
+                            unique_interaction_id = f"{tester_request.interaction_id}____{tester_request.workflow_name}____{batch_id}____{result.id}"
+
+                            llm_score = await evaluate_with_llm(
+                                unique_interaction_id=unique_interaction_id,
+                                input_data=result.input,
+                                expected_output=result.expected_output,
+                                actual_output=result.actual_output,
+                                llm_eval_type=tester_request.llm_eval_type,
+                                llm_eval_model=tester_request.llm_eval_model,
+                                app_db=app_db,
+                                config_composer=config_composer
+                            )
+
+                            # LLM 평가 결과를 result 객체에 추가
+                            result_dict = result.dict()
+                            result_dict["llm_eval_score"] = llm_score
+
+                            # LLM 평가 결과 SSE 전송
+                            eval_result_message = {
+                                "type": "eval_result",
+                                "batch_id": batch_id,
+                                "test_id": result.id,
+                                "llm_eval_score": llm_score,
+                                "progress": f"{idx + 1}/{len(all_results)}"
+                            }
+                            yield f"data: {json.dumps(eval_result_message, ensure_ascii=False)}\n\n"
+
+                            # TODO: DB에 LLM 평가 점수 저장 로직 추가
+                            # unique_interaction_id를 사용하여 해당 ExecutionIO 레코드를 찾아 llm_eval_score 업데이트
+                            logger.info(f"테스트 케이스 {result.id} LLM 평가 완료: 점수={llm_score}, interaction_id={unique_interaction_id}")
+
+                        except Exception as eval_error:
+                            logger.error(f"테스트 케이스 {result.id} LLM 평가 실패: {str(eval_error)}")
+
+                            eval_error_message = {
+                                "type": "eval_error",
+                                "batch_id": batch_id,
+                                "test_id": result.id,
+                                "error": str(eval_error)
+                            }
+                            yield f"data: {json.dumps(eval_error_message, ensure_ascii=False)}\n\n"
+
+                # LLM 평가 완료 메시지
+                eval_complete_message = {
+                    "type": "eval_complete",
+                    "batch_id": batch_id,
+                    "message": "LLM 평가가 완료되었습니다"
+                }
+                yield f"data: {json.dumps(eval_complete_message, ensure_ascii=False)}\n\n"
 
             # 최종 결과 계산
             total_execution_time = int((time.time() - start_time) * 1000)
