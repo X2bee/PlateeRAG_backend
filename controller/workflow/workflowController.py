@@ -1013,7 +1013,7 @@ async def evaluate_with_llm(
 {input_data}
 
 **레퍼런스 정답 (기준):**
-{expected_output or "제공되지 않음"}
+{expected_output or "없음"}
 
 **실제 생성된 답변:**
 {actual_output}
