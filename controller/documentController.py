@@ -28,8 +28,6 @@ DOCUMENTS_BASE_DIR = os.getenv("DOCUMENTS_BASE_DIR", "/app/documents")
 MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))  # 100MB
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))  # 1 hour
 
-logger.info(f'Document Settingd: DOCUMENTS_BASE_DIR={DOCUMENTS_BASE_DIR}, MAX_FILE_SIZE={MAX_FILE_SIZE}, CACHE_TTL={CACHE_TTL}')
-
 class DocumentRequest(BaseModel):
     """문서 요청 모델"""
     file_path: str
