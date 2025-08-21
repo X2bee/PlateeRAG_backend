@@ -17,11 +17,13 @@ citation_prompt = """
 - 종료줄: [문장종료줄]
 
 ## 예시
+###실제 예시
+[Cite. {{"filename": "test.pdf", "filepath": "test_48b3bc25581-9806-4bba-bd3a-461efd2088fb/test.pdf", "pagenumber": 36, "linestart": 1, "lineend": 1}}]
 ### 단일 참조
-회사는 2023년부터 제도를 운영합니다. [Cite. {{"file_name": "규정.pdf", "file_path": "/규정.pdf", "page_number": 3, "line_start": 15, "line_end": 18}}]
+회사는 2023년부터 제도를 운영합니다. [Cite. {{"file_name": "규정.pdf", "file_path": "policy/규정.pdf", "page_number": 3, "line_start": 15, "line_end": 18}}]
 
 ### 여러 참조
-투자가 증가했으며 [Cite. {{"file_name": "보고서.pdf", "file_path": "/보고서.pdf", "page_number": 12, "line_start": 5, "line_end": 8}}], AI에 집중하고 있습니다. [Cite. {{"file_name": "보고서.pdf", "file_path": "/보고서.pdf", "page_number": 15, "line_start": 22, "line_end": 25}}]
+투자가 증가했으며 [Cite. {{"file_name": "보고서.pdf", "file_path": "reports/보고서.pdf", "page_number": 12, "line_start": 5, "line_end": 8}}], AI에 집중하고 있습니다. [Cite. {{"file_name": "보고서.pdf", "file_path": "reports/보고서.pdf", "page_number": 15, "line_start": 22, "line_end": 25}}]
 
 ## 핵심 규칙
 1. **컨텍스트 기반 답변**: 제공된 컨텍스트에만 있는 내용으로 답변
