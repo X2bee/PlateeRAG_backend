@@ -9,7 +9,9 @@ import logging
 import uuid
 import json
 import asyncio
+import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
@@ -21,11 +23,13 @@ import weakref
 
 from service.embedding import EmbeddingFactory
 from service.retrieval.document_processor import DocumentProcessor
-from service.retrieval.document_processor.config_manager import ConfigManager
 from service.vector_db.vector_manager import VectorManager
 from service.database.models.vectordb import VectorDBChunkEdge, VectorDBChunkMeta
 
 logger = logging.getLogger("rag-service")
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 class DocumentMetadata(BaseModel):
     """문서 메타데이터를 위한 Pydantic 모델"""
@@ -40,33 +44,35 @@ class DocumentMetadata(BaseModel):
     main_concepts: List[str] = Field(description="핵심 개념들 (1-3개)", min_items=1, max_items=3)
 
 class LLMMetadataGenerator:
-    """LLM 기반 메타데이터 생성 클래스"""
+    """LLM 기반 메타데이터 생성 클래스 (설정 변경 자동 감지/재초기화 버전)"""
 
-    def __init__(self, collection_config = None):
+    def __init__(self, collection_config: Optional[Any] = None):
         self.collection_config = collection_config
         self.llm_client = None
 
-        # 초기화 시 디버깅 로그
-        logger.info(f"LLMMetadataGenerator initialized with collection_config: {type(collection_config)}")
+        # 최근 초기화에 사용된 설정 지문(핑거프린트)
+        self._fingerprint: Optional[tuple] = None
 
-        # 설정 구조 확인을 위한 로그
+        logger.info(f"LLMMetadataGenerator initialized with collection_config: {type(collection_config)}")
         if collection_config:
             logger.info(f"Available attributes: {dir(collection_config)}")
 
+    # -------- 외부에서 collection_config 교체 시 호출 --------
+    def set_collection_config(self, collection_config: Any):
+        """외부에서 collection_config를 바꿀 때 호출 (다음 ensure에서 재초기화 유도)"""
+        self.collection_config = collection_config
+        self._fingerprint = None  # invalidate to force reinit
+
+    # -------- 설정 접근 유틸 --------
     def _get_config_value(self, attr_name: str, default_value: Any = None) -> Any:
         """collection_config에서 안전하게 값을 가져오기"""
         try:
             if not self.collection_config:
                 return default_value
 
-            # 속성이 존재하는지 확인
             if hasattr(self.collection_config, attr_name):
                 attr = getattr(self.collection_config, attr_name)
-                # .value 속성이 있는지 확인 (ConfigItem 객체인 경우)
-                if hasattr(attr, 'value'):
-                    return attr.value
-                else:
-                    return attr
+                return getattr(attr, "value", attr)
             else:
                 logger.warning(f"Attribute '{attr_name}' not found in collection_config")
                 return default_value
@@ -75,75 +81,81 @@ class LLMMetadataGenerator:
             logger.error(f"Error getting config value for '{attr_name}': {e}")
             return default_value
 
-    def _initialize_llm_client(self):
-        """LLM 클라이언트 초기화"""
-        try:
-            # collection_config에서 IMAGE_TEXT 관련 설정들 가져오기
-            provider = str(self._get_config_value('IMAGE_TEXT_MODEL_PROVIDER', 'no_model')).lower()
+    def _compute_fingerprint(self) -> tuple:
+        """현재 설정값으로부터 재초기화 필요 여부 판단용 지문 생성"""
+        provider = str(self._get_config_value("IMAGE_TEXT_MODEL_PROVIDER", "no_model")).lower()
+        model = self._get_config_value("IMAGE_TEXT_MODEL_NAME", "gpt-4o-mini")
+        base_url = self._get_config_value("IMAGE_TEXT_BASE_URL", "https://api.openai.com/v1")
+        temperature = float(self._get_config_value("IMAGE_TEXT_TEMPERATURE", 0.1))
+        api_key_hint = bool(self._get_config_value("IMAGE_TEXT_API_KEY", ""))  # 키 유무만 반영
+        return (provider, model, base_url, temperature, api_key_hint)
 
-            if provider == 'no_model':
+    # -------- 클라이언트 초기화/활성화 --------
+    def _initialize_llm_client(self):
+        """LLM 클라이언트 초기화 (설정 변화가 있으면 항상 새로 초기화)"""
+        try:
+            provider, model, base_url, temperature, _ = self._compute_fingerprint()
+
+            if provider == "no_model":
                 logger.info("No LLM model configured - metadata generation disabled")
                 self.llm_client = None
+                self._fingerprint = (provider, model, base_url, temperature, _)
                 return
 
-            # 다른 설정값들 가져오기
-            model = self._get_config_value('IMAGE_TEXT_MODEL_NAME', 'gpt-4o-mini')
-            api_key = self._get_config_value('IMAGE_TEXT_API_KEY', '')
-            base_url = self._get_config_value('IMAGE_TEXT_BASE_URL', 'https://api.openai.com/v1')
-            temperature = float(self._get_config_value('IMAGE_TEXT_TEMPERATURE', 0.1))
+            api_key = self._get_config_value("IMAGE_TEXT_API_KEY", "")
 
-            logger.info(f"Initializing LLM client with provider: {provider}, model: {model}")
+            logger.info(f"Initializing LLM client with provider={provider}, model={model}, base_url={base_url}")
 
-            if provider == 'openai':
+            if provider in ("openai", "vllm"):
+                # langchain_openai는 OpenAI 호환 Chat Completions 엔드포인트(vLLM 포함)에 대응
                 from langchain_openai import ChatOpenAI
                 self.llm_client = ChatOpenAI(
                     model=model,
-                    openai_api_key=api_key,
+                    openai_api_key=api_key or ("dummy" if provider == "vllm" else ""),
                     base_url=base_url,
-                    temperature=temperature
-                )
-            elif provider == 'vllm':
-                from langchain_openai import ChatOpenAI
-                self.llm_client = ChatOpenAI(
-                    model=model,
-                    openai_api_key=api_key or 'dummy',
-                    base_url=base_url,
-                    temperature=temperature
+                    temperature=temperature,
                 )
             else:
                 logger.error(f"Unsupported LLM provider: {provider}")
                 self.llm_client = None
+                self._fingerprint = (provider, model, base_url, temperature, _)
                 return
 
-            logger.info(f"LLM client initialized successfully: {provider}")
+            self._fingerprint = (provider, model, base_url, temperature, _)
+            logger.info(f"LLM client initialized successfully: {provider} / {model} @ {base_url}")
 
         except Exception as e:
             logger.error(f"Failed to initialize LLM client: {e}")
             self.llm_client = None
+            # _fingerprint를 갱신하지 않음 → 다음 ensure에서 재시도
 
     async def is_enabled(self) -> bool:
         """메타데이터 생성이 활성화되어 있는지 확인"""
         try:
-            provider = str(self._get_config_value('IMAGE_TEXT_MODEL_PROVIDER', 'no_model')).lower()
-            return provider != 'no_model'
+            provider = str(self._get_config_value("IMAGE_TEXT_MODEL_PROVIDER", "no_model")).lower()
+            return provider != "no_model"
         except Exception:
             return False
 
     async def ensure_llm_client(self):
-        """LLM 클라이언트가 사용 가능한지 확인하고 필요시 재초기화"""
+        """
+        - 활성화 여부 체크
+        - 설정이 바뀌었으면 재초기화
+        - 아직 없으면 초기화
+        """
         if not await self.is_enabled():
             return
 
-        if not self.llm_client:
+        current_fp = self._compute_fingerprint()
+        if (self.llm_client is None) or (self._fingerprint != current_fp):
+            logger.info("LLM client missing or config changed → reinitializing")
             self._initialize_llm_client()
 
-    def _create_metadata_prompt(self, text: str, existing_metadata: Dict[str, Any] = None) -> str:
+    # -------- Prompt/파서 유틸 --------
+    def _create_metadata_prompt(self, text: str, existing_metadata: Optional[Dict[str, Any]] = None) -> str:
         """메타데이터 생성을 위한 프롬프트 생성 (JsonOutputParser 사용)"""
-
-        # 텍스트 길이 제한
         text_sample = text[:3000] if len(text) > 3000 else text
 
-        # JsonOutputParser를 사용하여 형식 지침 생성
         parser = JsonOutputParser(pydantic_object=DocumentMetadata)
         format_instructions = parser.get_format_instructions()
 
@@ -173,27 +185,23 @@ class LLMMetadataGenerator:
 
     def _validate_parsed_metadata_language(self, parsed_metadata: Dict[str, Any]) -> bool:
         """파싱된 메타데이터의 각 값이 허용된 언어인지 검증"""
-        import re
-
-        # 한국어 (한글), 영어 (알파벳), 숫자, 특수문자, 공백, 개행 허용
         allowed_pattern = r'^[\u0020-\u007F\u00A0-\u00FF\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F\s\n\r\t]*$'
 
         def check_value(value):
             if isinstance(value, str):
                 if not re.match(allowed_pattern, value):
-                    # 다른 언어 문자 확인
                     chinese_chars = re.findall(r'[\u4e00-\u9fff]', value)
                     japanese_chars = re.findall(r'[\u3040-\u309f\u30a0-\u30ff]', value)
                     arabic_chars = re.findall(r'[\u0600-\u06ff]', value)
                     if chinese_chars or japanese_chars or arabic_chars:
-                        logger.warning(f"Invalid language in value '{value}': Chinese({len(chinese_chars)}), Japanese({len(japanese_chars)}), Arabic({len(arabic_chars)})")
+                        logger.warning(
+                            f"Invalid language in value '{value}': "
+                            f"Chinese({len(chinese_chars)}), Japanese({len(japanese_chars)}), Arabic({len(arabic_chars)})"
+                        )
                         return False
                 return True
             elif isinstance(value, list):
-                for item in value:
-                    if not check_value(item):
-                        return False
-                return True
+                return all(check_value(item) for item in value)
             else:
                 return True  # 숫자나 다른 타입은 통과
 
@@ -204,9 +212,9 @@ class LLMMetadataGenerator:
 
         return True
 
-    async def generate_metadata(self, text: str, existing_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
+    # -------- 메타데이터 생성 --------
+    async def generate_metadata(self, text: str, existing_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """LLM을 사용해서 메타데이터 생성 (JsonOutputParser 사용)"""
-
         await self.ensure_llm_client()
 
         if not self.llm_client:
@@ -214,61 +222,53 @@ class LLMMetadataGenerator:
             return {}
 
         max_retries = 3
-
         for attempt in range(max_retries):
             try:
                 from langchain_core.messages import HumanMessage, SystemMessage
-
-                # JsonOutputParser 초기화
                 parser = JsonOutputParser(pydantic_object=DocumentMetadata)
 
-                system_msg = SystemMessage(content="당신은 문서 분석 전문가입니다. 주어진 텍스트를 분석해서 구조화된 메타데이터를 JSON 형식으로 정확하게 생성해주세요. 응답은 반드시 한국어 또는 영어만 사용해주세요.")
+                system_msg = SystemMessage(
+                    content="당신은 문서 분석 전문가입니다. 주어진 텍스트를 분석해서 구조화된 메타데이터를 JSON 형식으로 정확하게 생성해주세요. 응답은 반드시 한국어 또는 영어만 사용해주세요."
+                )
                 human_msg = HumanMessage(content=self._create_metadata_prompt(text, existing_metadata))
 
                 response = await self.llm_client.ainvoke([system_msg, human_msg])
                 content = response.content.strip()
 
-                # JsonOutputParser를 사용하여 파싱
+                # 1) 구조 파서 시도
                 try:
                     parsed_result = parser.parse(content)
-
-                    # 파싱된 결과의 언어 검증
                     if not self._validate_parsed_metadata_language(parsed_result):
                         logger.warning(f"Parsed metadata language validation failed on attempt {attempt + 1}/{max_retries}")
                         if attempt < max_retries - 1:
                             continue
-                        else:
-                            logger.error("All parsed metadata language validation attempts failed, returning empty metadata")
-                            return {}
-
+                        return {}
                     logger.info(f"Generated metadata using LLM: {list(parsed_result.keys())} (attempt {attempt + 1})")
                     return parsed_result
+
+                # 2) Fallback JSON 수동 파싱 시도
                 except Exception as parse_error:
                     logger.warning(f"JsonOutputParser failed: {parse_error}")
 
-                    # 파싱 실패 시 수동 JSON 파싱 시도
                     try:
                         # JSON 마크다운 블록 제거
-                        if content.startswith('```json'):
-                            content = content[7:]
-                        if content.endswith('```'):
-                            content = content[:-3]
+                        cleaned = content
+                        if cleaned.startswith("```json"):
+                            cleaned = cleaned[7:]
+                        if cleaned.endswith("```"):
+                            cleaned = cleaned[:-3]
+                        cleaned = cleaned.strip()
 
-                        # 수동 JSON 파싱
-                        parsed_result = json.loads(content.strip())
+                        parsed_result = json.loads(cleaned)
 
-                        # Pydantic 모델로 검증
                         validated_result = DocumentMetadata(**parsed_result)
                         validated_dict = validated_result.dict()
 
-                        # 파싱된 결과의 언어 검증
                         if not self._validate_parsed_metadata_language(validated_dict):
                             logger.warning(f"Fallback parsed metadata language validation failed on attempt {attempt + 1}/{max_retries}")
                             if attempt < max_retries - 1:
                                 continue
-                            else:
-                                logger.error("All fallback parsed metadata language validation attempts failed, returning empty metadata")
-                                return {}
+                            return {}
 
                         logger.info(f"Generated metadata using fallback JSON parsing: {list(validated_dict.keys())} (attempt {attempt + 1})")
                         return validated_dict
@@ -278,29 +278,42 @@ class LLMMetadataGenerator:
                         logger.debug(f"Raw content: {content}")
                         if attempt < max_retries - 1:
                             continue
-                        else:
-                            return {}
+                        return {}
 
             except Exception as e:
+                msg = str(e)
+                # 모델 미존재/404 → 설정 재확인 후 즉시 재초기화
+                if ("404" in msg and "does not exist" in msg) or ("NotFound" in msg):
+                    provider, model, base_url, temperature, _ = self._compute_fingerprint()
+                    logger.warning(
+                        f"Model not found (attempt {attempt + 1}) against base_url={base_url}, model={model}, provider={provider} → reinit"
+                    )
+                    self._initialize_llm_client()
+                    if attempt < max_retries - 1:
+                        continue
+                    return {}
                 logger.error(f"Error generating metadata with LLM (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
                     continue
-                else:
-                    return {}
+                return {}
 
         return {}
 
-    async def generate_batch_metadata(self, texts: List[str],
-                                    existing_metadatas: List[Dict[str, Any]] = None,
-                                    max_concurrent: int = 3) -> List[Dict[str, Any]]:
+    async def generate_batch_metadata(
+        self,
+        texts: List[str],
+        existing_metadatas: Optional[List[Dict[str, Any]]] = None,
+        max_concurrent: int = 3,
+    ) -> List[Dict[str, Any]]:
         """여러 텍스트에 대해 배치로 메타데이터 생성"""
-
         if not await self.is_enabled():
             logger.info("LLM metadata generation disabled")
-            return [existing_metadatas[i] if existing_metadatas and i < len(existing_metadatas) else {}
-                   for i in range(len(texts))]
+            return [
+                (existing_metadatas[i] if existing_metadatas and i < len(existing_metadatas) else {})
+                for i in range(len(texts))
+            ]
 
-        # 세마포어로 동시 요청 수 제한
+        # 동시 요청 수 제한
         semaphore = asyncio.Semaphore(max_concurrent)
 
         async def generate_single(i: int, text: str) -> Dict[str, Any]:
@@ -308,12 +321,10 @@ class LLMMetadataGenerator:
                 existing = existing_metadatas[i] if existing_metadatas and i < len(existing_metadatas) else None
                 return await self.generate_metadata(text, existing)
 
-        # 병렬 처리
         tasks = [generate_single(i, text) for i, text in enumerate(texts)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 예외 처리
-        processed_results = []
+        processed_results: List[Dict[str, Any]] = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"Error generating metadata for text {i}: {result}")
@@ -1104,7 +1115,7 @@ class RAGService:
                     "file_name": file_name,
                     "file_path": stored_file_path,
                     "file_type": file_extension,
-                    "processed_at": datetime.now().isoformat(),
+                    "processed_at": datetime.now(TIMEZONE).isoformat(),
                     "chunk_size": len(chunk),
                     "total_chunks": len(chunks),
                     "line_start": line_start,

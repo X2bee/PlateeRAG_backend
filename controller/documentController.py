@@ -202,14 +202,15 @@ async def fetch_document(
         user_id = await get_user_id_from_request(request, document_request, credentials)
         
         # 파일 경로 검증
-        safe_path = validate_file_path(document_request.file_path, DOCUMENTS_BASE_DIR)
+        decoded_path = urllib.parse.unquote(document_request.file_path)
+        safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
         
         # 접근 권한 확인
         app_db = request.app.state.app_db
         if not app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
         
-        access_check = await check_document_access(app_db, user_id, document_request.file_path)
+        access_check = await check_document_access(app_db, user_id, decoded_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
         
@@ -223,7 +224,7 @@ async def fetch_document(
             raise HTTPException(status_code=413, detail="File too large")
         
         # 접근 로깅
-        await log_document_access(user_id, document_request.file_path, "fetch")
+        await log_document_access(user_id, decoded_path, "fetch")
         
         # 파일 스트리밍으로 반환
         filename = os.path.basename(safe_path)
@@ -268,14 +269,15 @@ async def fetch_document_deploy(
         user_id = document_request.user_id
         
         # 파일 경로 검증
-        safe_path = validate_file_path(document_request.file_path, DOCUMENTS_BASE_DIR)
+        decoded_path = urllib.parse.unquote(document_request.file_path)
+        safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
         
         # 접근 권한 확인
         app_db = request.app.state.app_db
         if not app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
         
-        access_check = await check_document_access(app_db, user_id, document_request.file_path)
+        access_check = await check_document_access(app_db, user_id, decoded_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
         
@@ -289,7 +291,7 @@ async def fetch_document_deploy(
             raise HTTPException(status_code=413, detail="File too large")
         
         # 접근 로깅
-        await log_document_access(user_id, document_request.file_path, "fetch_deploy")
+        await log_document_access(user_id, decoded_path, "fetch_deploy")
         
         # 파일 스트리밍으로 반환
         filename = os.path.basename(safe_path)
@@ -332,14 +334,15 @@ async def get_document_metadata_endpoint(
         user_id = await get_user_id_from_request(request, document_request, credentials)
         
         # 파일 경로 검증
-        safe_path = validate_file_path(document_request.file_path, DOCUMENTS_BASE_DIR)
+        decoded_path = urllib.parse.unquote(document_request.file_path)
+        safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
         
         # 접근 권한 확인
         app_db = request.app.state.app_db
         if not app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
         
-        access_check = await check_document_access(app_db, user_id, document_request.file_path)
+        access_check = await check_document_access(app_db, user_id, decoded_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
         
@@ -348,7 +351,7 @@ async def get_document_metadata_endpoint(
             raise HTTPException(status_code=404, detail="Document not found")
         
         # 접근 로깅
-        await log_document_access(user_id, document_request.file_path, "metadata")
+        await log_document_access(user_id, decoded_path, "metadata")
         
         # 메타데이터 반환
         return await get_document_metadata(safe_path, access_check["permissions"])
@@ -374,15 +377,16 @@ async def get_document_metadata_deploy(
         
         user_id = document_request.user_id
         
-        # 파일 경로 검증
-        safe_path = validate_file_path(document_request.file_path, DOCUMENTS_BASE_DIR)
+        # 파일 경로 
+        decoded_path = urllib.parse.unquote(document_request.file_path)
+        safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
         
         # 접근 권한 확인
         app_db = request.app.state.app_db
         if not app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
         
-        access_check = await check_document_access(app_db, user_id, document_request.file_path)
+        access_check = await check_document_access(app_db, user_id, decoded_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
         
@@ -391,7 +395,7 @@ async def get_document_metadata_deploy(
             raise HTTPException(status_code=404, detail="Document not found")
         
         # 접근 로깅
-        await log_document_access(user_id, document_request.file_path, "metadata_deploy")
+        await log_document_access(user_id, decoded_path, "metadata_deploy")
         
         # 메타데이터 반환
         return await get_document_metadata(safe_path, access_check["permissions"])
@@ -420,10 +424,11 @@ async def check_document_access_endpoint(
         if not app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
         
-        access_check = await check_document_access(app_db, user_id, document_request.file_path)
+        decoded_path = urllib.parse.unquote(document_request.file_path)
+        access_check = await check_document_access(app_db, user_id, decoded_path)
         
         # 접근 로깅
-        await log_document_access(user_id, document_request.file_path, "access_check")
+        await log_document_access(user_id, decoded_path, "access_check")
         
         return DocumentAccessResponse(
             has_access=access_check["has_access"],
@@ -457,10 +462,12 @@ async def check_document_access_deploy(
         if not app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
         
-        access_check = await check_document_access(app_db, user_id, document_request.file_path)
+
+        decoded_path = urllib.parse.unquote(document_request.file_path)
+        access_check = await check_document_access(app_db, user_id, decoded_path)
         
         # 접근 로깅
-        await log_document_access(user_id, document_request.file_path, "access_check_deploy")
+        await log_document_access(user_id, decoded_path, "access_check_deploy")
         
         return DocumentAccessResponse(
             has_access=access_check["has_access"],

@@ -6,8 +6,13 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List
 import json
 import logging
+import os
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("base-model")
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 class BaseModel(ABC):
     """모든 데이터 모델의 기본 클래스"""
@@ -32,6 +37,11 @@ class BaseModel(ABC):
         """테이블 스키마 반환 (컬럼명: 타입)"""
         pass
 
+    @classmethod
+    def now(cls) -> datetime:
+        """현재 시간을 설정된 타임존으로 반환"""
+        return datetime.now(TIMEZONE)
+
     def to_dict(self) -> Dict[str, Any]:
         """객체를 딕셔너리로 변환"""
         result = {}
@@ -49,9 +59,11 @@ class BaseModel(ABC):
         """딕셔너리에서 객체 생성"""
         # datetime 필드 변환
         if 'created_at' in data and isinstance(data['created_at'], str):
-            data['created_at'] = datetime.fromisoformat(data['created_at'])
+            dt = datetime.fromisoformat(data['created_at'])
+            data['created_at'] = dt.replace(tzinfo=TIMEZONE) if dt.tzinfo is None else dt.astimezone(TIMEZONE)
         if 'updated_at' in data and isinstance(data['updated_at'], str):
-            data['updated_at'] = datetime.fromisoformat(data['updated_at'])
+            dt = datetime.fromisoformat(data['updated_at'])
+            data['updated_at'] = dt.replace(tzinfo=TIMEZONE) if dt.tzinfo is None else dt.astimezone(TIMEZONE)
 
         return cls(**data)
 
@@ -87,7 +99,7 @@ class BaseModel(ABC):
         # id와 created_at 제외
         data.pop('id', None)
         data.pop('created_at', None)
-        data['updated_at'] = datetime.now().isoformat()
+        data['updated_at'] = self.now().isoformat()
 
         columns = list(data.keys())
         values = list(data.values())
@@ -115,11 +127,18 @@ class BaseModel(ABC):
         schema = instance.get_schema()
 
         # 기본 컬럼들 추가
-        base_columns = {
-            'id': 'SERIAL PRIMARY KEY' if db_type == "postgresql" else 'INTEGER PRIMARY KEY AUTOINCREMENT',
-            'created_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
-            'updated_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
-        }
+        if db_type == "postgresql":
+            base_columns = {
+                'id': 'SERIAL PRIMARY KEY',
+                'created_at': f'TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE \'{TIMEZONE.key}\')',
+                'updated_at': f'TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE \'{TIMEZONE.key}\')'
+            }
+        else:  # sqlite
+            base_columns = {
+                'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+                'created_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+                'updated_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+            }
 
         # PostgreSQL의 경우 updated_at 자동 업데이트 트리거 필요
         all_columns = {**base_columns, **schema}

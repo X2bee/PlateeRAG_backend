@@ -51,6 +51,7 @@ class AgentOpenAIStreamNode(Node):
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "optional": True},
+        {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
     ]
 
@@ -66,6 +67,7 @@ class AgentOpenAIStreamNode(Node):
         max_tokens: int = 8192,
         n_messages: int = 3,
         base_url: str = "https://api.openai.com/v1",
+        strict_citation: bool = True,
         default_prompt: str = default_prompt,
     ) -> Generator[str, None, None]:
 
@@ -109,6 +111,7 @@ class AgentOpenAIStreamNode(Node):
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
                     if context_parts:
+                        context_parts.append(f"{citation_prompt}")
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 {context_text}"""
@@ -118,10 +121,12 @@ class AgentOpenAIStreamNode(Node):
                 parser = JsonOutputParser(pydantic_object=args_schema)
                 format_instructions = parser.get_format_instructions()
                 escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
-                default_prompt = f"{default_prompt}\n\n{escaped_instructions}\n{default_prompt}"
+                default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
                 if additional_rag_context and additional_rag_context.strip():
+                    if strict_citation:
+                        default_prompt = default_prompt + citation_prompt
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
@@ -151,6 +156,8 @@ class AgentOpenAIStreamNode(Node):
                     yield f"\nStreaming Error: {str(e)}\n"
             else:
                 if additional_rag_context and additional_rag_context.strip():
+                    if strict_citation:
+                        default_prompt = default_prompt + citation_prompt
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),

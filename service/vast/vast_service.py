@@ -11,11 +11,15 @@ import json
 import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from service.vast.vast_manager import VastAIManager
 from service.database.models.vast import VastInstance, VastExecutionLog
 
 logger = logging.getLogger("vast-service")
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 class InstanceTemplate:
     """인스턴스 생성 템플릿"""
@@ -613,7 +617,7 @@ class VastService:
             # 데이터베이스 업데이트
             self._update_instance(instance_id, {
                 "status": "deleted",
-                "destroyed_at": datetime.now()
+                "destroyed_at": datetime.now(TIMEZONE)
             })
 
         execution_time = time.time() - start_time

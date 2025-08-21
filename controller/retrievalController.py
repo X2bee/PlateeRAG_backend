@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import datetime
 import uuid
+from zoneinfo import ZoneInfo
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
 from controller.controller_helper import extract_user_id_from_request
 from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
@@ -24,6 +25,9 @@ from service.retrieval.rag_service import RAGService
 
 logger = logging.getLogger("retrieval-controller")
 router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 # Pydantic Models
 class VectorPoint(BaseModel):
@@ -141,8 +145,8 @@ async def create_collection(request: Request, collection_request: CollectionCrea
                 collection_make_name=collection_request.collection_make_name,
                 collection_name=collection_name,
                 description=collection_request.description,
-                registered_at=datetime.datetime.now(),
-                updated_at=datetime.datetime.now()
+                registered_at=datetime.datetime.now(TIMEZONE),
+                updated_at=datetime.datetime.now(TIMEZONE)
             )
             app_db.insert(vector_db)
 
