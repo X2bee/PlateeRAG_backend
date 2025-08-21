@@ -191,33 +191,20 @@ class AsyncWorkflowExecutor:
                 if function_id == 'endnode':
                     is_generator = inspect.isgenerator(result)
 
+                    end_node_result_for_db = "<streaming_output>" if is_generator else result
+                    end_node_data = {'node_id': node_id, 'node_name': node_info['data']['nodeName'], 'inputs': kwargs, 'result': end_node_result_for_db}
+                    input_data_for_db = start_node_data if start_node_data else {}
+                    self._save_execution_io(input_data_for_db, end_node_data)
+
                     if is_generator:
                         logger.info(f" -> endnode 스트리밍 출력 시작.")
                         streaming_output_started = True
-
-                        # 스트리밍 출력을 수집하면서 yield
-                        collected_output = []
-                        for chunk in result:
-                            collected_output.append(str(chunk))
-                            yield chunk
-
-                        # 스트리밍 완료 후 실제 출력 내용으로 데이터베이스에 저장
-                        final_streaming_result = ''.join(collected_output)
-                        end_node_data = {'node_id': node_id, 'node_name': node_info['data']['nodeName'], 'inputs': kwargs, 'result': final_streaming_result}
-                        input_data_for_db = start_node_data if start_node_data else {}
-                        self._save_execution_io(input_data_for_db, end_node_data)
-
+                        yield from result
                         logger.info("\n--- 워크플로우 스트리밍 실행 완료 ---")
                         self._execution_status = "completed"
                         self._end_time = time.time()
                         return
                     else:
-                        # 일반 출력의 경우 기존 방식 유지
-                        end_node_result_for_db = result
-                        end_node_data = {'node_id': node_id, 'node_name': node_info['data']['nodeName'], 'inputs': kwargs, 'result': end_node_result_for_db}
-                        input_data_for_db = start_node_data if start_node_data else {}
-                        self._save_execution_io(input_data_for_db, end_node_data)
-
                         logger.info(f" -> endnode 완료. 최종 출력: {result}")
                         node_outputs[node_id] = {'result': result}
 
