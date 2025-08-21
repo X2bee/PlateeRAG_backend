@@ -60,6 +60,7 @@ def validate_file_path(file_path: str, base_directory: str) -> str:
         
         # 기본 디렉터리를 벗어나지 않도록 보장
         full_path = os.path.join(base_directory, clean_path.lstrip('/'))
+        logger.info(f'Fetching document: {full_path}')
         real_path = os.path.realpath(full_path)
         real_base = os.path.realpath(base_directory)
         

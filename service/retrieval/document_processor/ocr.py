@@ -540,8 +540,11 @@ async def convert_pdf_to_markdown_with_html_reference(pdf_path: str, html_refere
                     
                     b64 = _b64_from_file(merged_path)
                     prompt = _prompt_merged_pages_md(html_reference, len(image_paths))
+
+                    logger.info(f"합쳐진 이미지 OCR 시작: {prompt}페이지")
                     result = await _ainvoke_images(llm, prompt, [b64])
                     
+                    logger.info(f"합쳐진 이미지 OCR 결과: {result}")
                     logger.info(f"합쳐진 이미지 OCR 완료: {len(image_paths)}페이지")
                     return result if result and not str(result).startswith("[이미지 파일:") else "[마크다운 변환 실패]"
                     
