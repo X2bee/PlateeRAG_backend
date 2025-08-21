@@ -1193,6 +1193,17 @@ class RAGService:
                             pass
                     return []
 
+                provider_info = self.embeddings_client.get_provider_info()
+                embedding_provider=provider_info.get("provider", "unknown")
+                if embedding_provider == 'openai':
+                    embedding_model_name = self.config.OPENAI_EMBEDDING_MODEL.value
+                elif embedding_provider == 'huggingface':
+                    embedding_model_name = self.config.HUGGINGFACE_MODEL_NAME.value
+                elif embedding_provider == 'custom_http':
+                    embedding_model_name = self.config.CUSTOM_EMBEDDING_MODEL.value
+                else:
+                    embedding_model_name = provider_info.get("model_name", "unknown")
+
                 vectordb_chunk_meta = VectorDBChunkMeta(
                     user_id=user_id,
                     collection_name=collection_name,
@@ -1211,7 +1222,9 @@ class RAGService:
                     language=payload.get("language"),
                     complexity_level=payload.get("complexity_level"),
                     main_concepts=safe_list_to_string(payload.get("main_concepts")),
-                    embedding_provider=self.config.EMBEDDING_PROVIDER.value
+                    embedding_provider=embedding_provider,
+                    embedding_model_name=embedding_model_name,
+                    embedding_dimension=provider_info.get("dimension", 0)
                 )
                 app_db.insert(vectordb_chunk_meta)
                 app_db.insert(VectorDBChunkEdge(

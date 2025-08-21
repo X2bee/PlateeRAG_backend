@@ -49,6 +49,8 @@ class VectorDBChunkMeta(BaseModel):
         self.complexity_level: str = kwargs.get('complexity_level', '')
         self.main_concepts: List[str] = kwargs.get('main_concepts', [])
         self.embedding_provider: Optional[str] = kwargs.get('embedding_provider', 'default')
+        self.embedding_model_name: Optional[str] = kwargs.get('embedding_model_name', 'default')
+        self.embedding_dimension: Optional[int] = kwargs.get('embedding_dimension', 0)
 
     def get_table_name(self) -> str:
         return "vector_db_chunk_meta"
@@ -72,7 +74,9 @@ class VectorDBChunkMeta(BaseModel):
             'language': 'VARCHAR(10)',
             'complexity_level': 'VARCHAR(50)',
             'main_concepts': 'TEXT[]',
-            'embedding_provider': 'VARCHAR(50)'
+            'embedding_provider': 'VARCHAR(50)',
+            'embedding_model_name': 'VARCHAR(50)',
+            'embedding_dimension': 'INTEGER'
         }
 
 class VectorDBChunkEdge(BaseModel):
