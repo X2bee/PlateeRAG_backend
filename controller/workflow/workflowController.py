@@ -826,6 +826,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 # 완료된 실행들 정리
                 execution_manager.cleanup_completed_executions()
 
+
     try:
         user_id = extract_user_id_from_request(request)
 
@@ -954,12 +955,6 @@ async def evaluate_with_llm(
         평가 점수 (0.0 ~ 1.0)
     """
     logger.info(f"LLM 평가 시작: unique_interaction_id={unique_interaction_id}")
-
-    if '<think>' in actual_output and '</think>' in actual_output:
-        actual_output = re.sub(r'<think>.*?</think>', '', actual_output, flags=re.DOTALL).strip()
-
-    if '[Cite.' in actual_output and '}}]' in actual_output:
-        actual_output = re.sub(r'\[Cite\.\s*\{\{.*?\}\}\]', '', actual_output, flags=re.DOTALL).strip()
 
     try:
         if llm_eval_type == "OpenAI":
