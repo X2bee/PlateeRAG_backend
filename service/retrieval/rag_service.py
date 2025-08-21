@@ -1198,7 +1198,7 @@ class RAGService:
                     collection_name=collection_name,
                     file_name=file_name,
                     chunk_id=point['id'],
-                    chunk_text=(payload.get("chunk_text")[:500] + "..." if len(payload.get("chunk_text")) > 500 else payload.get("chunk_text")),
+                    chunk_text=payload.get("chunk_text"),
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
                     chunk_size=payload.get("chunk_size"),
@@ -1211,6 +1211,7 @@ class RAGService:
                     language=payload.get("language"),
                     complexity_level=payload.get("complexity_level"),
                     main_concepts=safe_list_to_string(payload.get("main_concepts")),
+                    embedding_provider=self.config.EMBEDDING_PROVIDER.value
                 )
                 app_db.insert(vectordb_chunk_meta)
                 app_db.insert(VectorDBChunkEdge(
