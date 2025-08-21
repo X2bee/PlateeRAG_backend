@@ -221,9 +221,9 @@ class AgentKTNode(Node):
             }
 
             if tools is not None:
+                if strict_citation:
+                    prompt = prompt + citation_prompt+"<tool_reponse> 태그가 없다면 출처표기를 하지마세요"
                 if additional_rag_context and additional_rag_context.strip():
-                    if strict_citation:
-                        prompt = prompt + citation_prompt
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
