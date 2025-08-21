@@ -24,7 +24,7 @@ security = HTTPBearer(auto_error=False)
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
 # 설정 상수
-DOCUMENTS_BASE_DIR = os.getenv("DOCUMENTS_BASE_DIR", "/app/documents")
+DOCUMENTS_BASE_DIR = os.getenv("DOCUMENTS_BASE_DIR", "/polarag_backend/downloads")
 MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))  # 100MB
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))  # 1 hour
 

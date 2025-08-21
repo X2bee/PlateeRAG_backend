@@ -118,9 +118,8 @@ async def extract_text_from_pdf_fallback(file_path: str) -> str:
 async def extract_text_from_pdf_via_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
     if not PDF2IMAGE_AVAILABLE:
         return "[PDF 파일: pdf2image 라이브러리가 필요합니다]"
-    if not is_image_text_enabled(current_config, True):  # langchain check는 내부에서
-        return await extract_text_from_pdf_fallback(file_path)
-
+    return extract_text_from_pdf_fallback(file_path)
+    '''
     extracted_refs = await extract_text_pages_for_reference(file_path)
     images = convert_from_path(file_path, dpi=300)
 
@@ -142,8 +141,8 @@ async def extract_text_from_pdf_via_ocr(file_path: str, current_config: Dict[str
     finally:
         for p in temp_files:
             try: os.unlink(p)
-            except: pass
-
+            except: pass'''
+            
 async def extract_text_from_pdf(file_path: str, current_config: Dict[str, Any]) -> str:
     provider = current_config.get('provider', 'no_model')
     logger.info(f"🔄 Real-time PDF processing with provider: {provider}")
