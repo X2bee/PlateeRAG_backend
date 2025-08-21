@@ -40,7 +40,7 @@ def clean_html_file(html_content, output_file_path=None):
         # 4. 정리된 HTML을 문자열로 변환
         cleaned_html = soup.prettify()
         
-        cleaned_html = cleaned_html.replace('\n', '').replace('\t', '').replace('<font>', '').replace('</font>', '').replace('<u>', '').replace('</u>', '').replace('<b>', '').replace('</b>', '')  # 줄바꿈과 탭 제거
+        cleaned_html = cleaned_html.replace('\n', '').replace('\t', '').replace('<font>', '').replace('</font>', '').replace('<u>', '').replace('</u>', '').replace('<b>', '').replace('</b>', '').replace(' ', '')  # 줄바꿈과 탭 제거
         
         return cleaned_html
     
