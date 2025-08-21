@@ -320,7 +320,8 @@ async def extract_text_from_docx(file_path: str, current_config: Dict[str, Any])
     
     # 1순위: HTML+PDF OCR 방식
     try:
-        return await extract_text_from_docx_via_html_pdf_ocr(file_path, current_config)
+        #return await extract_text_from_docx_via_html_pdf_ocr(file_path, current_config)
+        return await extract_text_from_docx_fallback_html(file_path)  # HTML 방식 사용
     except Exception as e:
         logger.warning(f"HTML+PDF OCR failed, falling back to image OCR: {e}")
         # 2순위로 폴백
