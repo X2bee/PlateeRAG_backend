@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional
 from pydantic import BaseModel
 from editor.node_composer import Node
 from langchain.schema.output_parser import StrOutputParser
+from langchain_core.output_parsers import JsonOutputParser
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
 
-class AgentVLLMNode(Node):
+class AgentKTNode(Node):
     categoryId = "xgen"
     functionId = "agents"
     nodeId = "agents/kt_midm"
