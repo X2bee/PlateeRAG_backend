@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 from editor.node_composer import Node
-from langchain.schema.output_parser import StrOutputParser, JsonOutputParser
+from langchain.schema.output_parser import StrOutputParser
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
@@ -19,8 +19,8 @@ default_prompt = """You are a helpful AI assistant."""
 class AgentVLLMNode(Node):
     categoryId = "xgen"
     functionId = "agents"
-    nodeId = "agents/vllm"
-    nodeName = "Agent VLLM"
+    nodeId = "agents/kt_midm"
+    nodeName = "Agent KT Mi:dm"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드"
     tags = ["agent", "chat", "rag", "vllm"]
 
@@ -35,7 +35,13 @@ class AgentVLLMNode(Node):
         {"id": "result", "name": "Result", "type": "STR"},
     ]
     parameters = [
-        {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": False, "optional": True},
+        {
+            "id": "model", "name": "Model", "type": "STR", "value": "K-intelligence/Midm-2.0-Base-Instruct", "required": True,
+            "options": [
+                {"value": "K-intelligence/Midm-2.0-Mini-Instruct", "label": "Mi:dm 2.0 Mini"},
+                {"value": "K-intelligence/Midm-2.0-Base-Instruct", "label": "Mi:dm 2.0 Base"},
+            ]
+        },
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.0, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
@@ -154,7 +160,7 @@ class AgentVLLMNode(Node):
             prompt = prefix_prompt+default_prompt
 
             # OpenAI API를 사용하여 응답 생성
-            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context, args_schema)
+            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context)
 
             logger.info(f"Chat Agent 응답 생성 완료: {len(response)}자")
             return response
@@ -164,7 +170,7 @@ class AgentVLLMNode(Node):
             return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
 
 
-    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, strict_citation:Optional[bool], additional_rag_context: Optional[str], args_schema) -> str:
+    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, strict_citation:Optional[bool], additional_rag_context: Optional[str]) -> str:
         """OpenAI API를 사용하여 채팅 응답 생성"""
         try:
             config_composer = AppServiceManager.get_config_composer()
@@ -217,11 +223,6 @@ class AgentVLLMNode(Node):
                 if additional_rag_context and additional_rag_context.strip():
                     if strict_citation:
                         prompt = prompt + citation_prompt
-                    if args_schema:
-                        parser = JsonOutputParser(pydantic_object=args_schema)
-                        format_instructions = parser.get_format_instructions()
-                        escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
-                        prompt = f"{prompt}\n\n{escaped_instructions}"
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
@@ -265,11 +266,7 @@ class AgentVLLMNode(Node):
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}")
                     ])
-                if args_schema:
-                    parser = JsonOutputParser(pydantic_object=args_schema)
-                    chain = final_prompt | llm | parser
-                else:
-                    chain = final_prompt | llm | StrOutputParser()
+                chain = final_prompt | llm | StrOutputParser()
                 response = chain.invoke(inputs)
                 return response
 
