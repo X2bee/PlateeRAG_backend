@@ -64,6 +64,7 @@ def validate_file_path(file_path: str, base_directory: str) -> str:
         full_path = os.path.join(base_directory, clean_path.lstrip('/'))
         logger.info(f'Fetching document: {full_path}')
         real_path = os.path.realpath(full_path)
+        logger.info(f'RealPath document: {real_path}')
         real_base = os.path.realpath(base_directory)
         
         if not real_path.startswith(real_base):
