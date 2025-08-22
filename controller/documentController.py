@@ -208,8 +208,10 @@ async def fetch_document(
         
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
-        normalized_file = unicodedata.normalize('NFD', decoded_path)
-        safe_path = validate_file_path(normalized_file, DOCUMENTS_BASE_DIR)
+        dir_part, file_part = os.path.split(decoded_path)
+        normalized_file = unicodedata.normalize('NFD', file_part)
+        joined_path = os.path.join(dir_part,normalized_file)
+        safe_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
         
         # 접근 권한 확인
         app_db = request.app.state.app_db
