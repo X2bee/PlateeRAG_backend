@@ -68,7 +68,7 @@ class BaseModel(ABC):
     def from_dict(cls, data: Dict[str, Any]):
         """딕셔너리에서 객체 생성"""
 
-        tz = ZoneInfo(TIMEZONE)
+        tz = TIMEZONE
 
         for field in ("created_at", "updated_at"):
             if field in data and isinstance(data[field], str):
