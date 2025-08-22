@@ -195,22 +195,13 @@ async def signup(request: Request, signup_data: SignupRequest):
         SignupResponse: 회원가입 결과
     """
     try:
-        # 데이터베이스 매니저 가져오기
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
-
-        # 입력 데이터 검증
+        app_db = get_db_manager(request)
         if not signup_data.username or not signup_data.email or not signup_data.password:
             raise HTTPException(
                 status_code=400,
                 detail="Username, email, and password are required"
             )
 
-        # 사용자명 중복 검사
         existing_user_by_username = app_db.find_by_condition(
             User,
             {"username": signup_data.username},
@@ -223,7 +214,6 @@ async def signup(request: Request, signup_data: SignupRequest):
                 detail="Username already exists"
             )
 
-        # 이메일 중복 검사
         existing_user_by_email = app_db.find_by_condition(
             User,
             {"email": signup_data.email},
@@ -235,7 +225,6 @@ async def signup(request: Request, signup_data: SignupRequest):
                 detail="Email already exists"
             )
 
-        # 사용자 모델 인스턴스 생성
         new_user = User(
             username=signup_data.username,
             email=signup_data.email,
@@ -244,6 +233,8 @@ async def signup(request: Request, signup_data: SignupRequest):
             is_active=True,
             is_admin=False,
             last_login=None,
+            user_type="standard",
+            group_name="none",
             preferences={}
         )
 
@@ -522,6 +513,31 @@ async def refresh_token(request: Request, refresh_data: RefreshTokenRequest):
 
     except HTTPException:
         raise
+    except Exception as e:
+        logger.error(f"Token refresh error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.get("/superuser")
+async def check_superuser(request: Request):
+    try:
+        app_db = get_db_manager(request)
+        super_users = app_db.find_by_condition(
+            User,
+            {
+                "user_type": "superuser"
+            },
+            limit=1
+        )
+
+        if super_users:
+            return {"superuser": True}
+
+        else:
+            return {"superuser": False}
+
     except Exception as e:
         logger.error(f"Token refresh error: {str(e)}")
         raise HTTPException(
