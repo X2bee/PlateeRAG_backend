@@ -208,10 +208,22 @@ async def fetch_document(
         
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
+        print(f"1. decoded_path: {repr(decoded_path)}")
+
         dir_part, file_part = os.path.split(decoded_path)
+        print(f"2. dir_part: {repr(dir_part)}")
+        print(f"3. file_part: {repr(file_part)}")
+
         normalized_file = unicodedata.normalize('NFD', file_part)
-        joined_path = os.path.join(dir_part,normalized_file)
+        print(f"4. normalized_file: {repr(normalized_file)}")
+        print(f"5. normalized_file bytes: {normalized_file.encode('utf-8')}")
+
+        joined_path = os.path.join(dir_part, normalized_file)
+        print(f"6. joined_path: {repr(joined_path)}")
+
         safe_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
+        print(f"7. safe_path: {safe_path}")
+        print(f"8. file exists: {os.path.exists(safe_path)}")
         
         # 접근 권한 확인
         app_db = request.app.state.app_db
