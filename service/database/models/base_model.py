@@ -14,6 +14,16 @@ logger = logging.getLogger("base-model")
 # 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
 TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
+# 타임존 설정 로그 (INFO 레벨로 강제 출력)
+logger.warning("TIMEZONE ENV: %s", os.getenv('TIMEZONE', '---- USE_DEFAULT ---- Asia/Seoul'))
+logger.warning("SET TIMEZONE: %s", str(TIMEZONE))
+logger.warning("Time NOW (BaseModel): %s", datetime.now(TIMEZONE).isoformat())
+logger.warning("Time NOW (UTC): %s", datetime.now().isoformat())
+logger.warning("=== TIMEZONE DEBUG ===")
+
+# DEBUG 레벨 로그도 보이도록 레벨 조정
+logger.setLevel(logging.DEBUG)
+
 class BaseModel(ABC):
     """모든 데이터 모델의 기본 클래스"""
 
@@ -57,13 +67,19 @@ class BaseModel(ABC):
     @classmethod
     def from_dict(cls, data: Dict[str, Any]):
         """딕셔너리에서 객체 생성"""
-        # datetime 필드 변환
-        if 'created_at' in data and isinstance(data['created_at'], str):
-            dt = datetime.fromisoformat(data['created_at'])
-            data['created_at'] = dt.replace(tzinfo=TIMEZONE) if dt.tzinfo is None else dt.astimezone(TIMEZONE)
-        if 'updated_at' in data and isinstance(data['updated_at'], str):
-            dt = datetime.fromisoformat(data['updated_at'])
-            data['updated_at'] = dt.replace(tzinfo=TIMEZONE) if dt.tzinfo is None else dt.astimezone(TIMEZONE)
+
+        tz = ZoneInfo(TIMEZONE)
+
+        for field in ("created_at", "updated_at"):
+            if field in data and isinstance(data[field], str):
+                dt = datetime.fromisoformat(data[field])
+                if dt.tzinfo is None:
+                    # naive datetime → 지정된 TIMEZONE 기준으로 해석
+                    dt = dt.replace(tzinfo=tz)
+                else:
+                    # aware datetime → 지정된 TIMEZONE 으로 변환
+                    dt = dt.astimezone(tz)
+                data[field] = dt
 
         return cls(**data)
 

@@ -72,6 +72,7 @@ FUNCTION_LABEL_MAP = {
     'output_parsers': 'Output Parser',
     'tools': 'Tool',
     'api_loader': 'API Loader',
+    'mcp': 'MCP',
     'arithmetic':'Arithmetic',
     'endnode': 'End Node',
     'startnode': 'Start Node',

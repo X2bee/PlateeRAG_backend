@@ -6,13 +6,19 @@ import json
 import threading
 import time
 import queue
+import os
 from collections import deque
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, Any, Generator, List, Optional, AsyncGenerator
 from editor.node_composer import NODE_CLASS_REGISTRY
 from service.monitoring.performance_logger import PerformanceLogger
 from service.database.models.executor import ExecutionIO
 
 logger = logging.getLogger('Async-Workflow-Executor')
+
+# 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 class AsyncWorkflowExecutor:
     """
@@ -58,6 +64,10 @@ class AsyncWorkflowExecutor:
             self.expected_output = ""
         self.test_mode = test_mode
 
+    def _get_current_time(self) -> datetime:
+        """현재 시간을 타임존이 적용된 datetime으로 반환"""
+        return datetime.now(TIMEZONE)
+
     def _build_graph(self) -> None:
         """워크플로우 데이터로부터 그래프와 진입 차수를 계산합니다."""
         for edge in self.edges:
@@ -92,7 +102,7 @@ class AsyncWorkflowExecutor:
         이 메서드는 스레드 풀에서 실행됩니다.
         """
         self._execution_status = "running"
-        self._start_time = time.time()
+        self._start_time = self._get_current_time()
 
         try:
             self._build_graph()
@@ -179,7 +189,6 @@ class AsyncWorkflowExecutor:
                 function_id: str = node_info['data']['functionId']
 
                 if function_id == 'startnode':
-                    # startnode의 경우 입력 데이터 기록
                     start_node_data = {
                         'node_id': node_id,
                         'node_name': node_info['data']['nodeName'],
@@ -191,24 +200,31 @@ class AsyncWorkflowExecutor:
                 if function_id == 'endnode':
                     is_generator = inspect.isgenerator(result)
 
-                    end_node_result_for_db = "<streaming_output>" if is_generator else result
-                    end_node_data = {'node_id': node_id, 'node_name': node_info['data']['nodeName'], 'inputs': kwargs, 'result': end_node_result_for_db}
-                    input_data_for_db = start_node_data if start_node_data else {}
-                    self._save_execution_io(input_data_for_db, end_node_data)
-
                     if is_generator:
                         logger.info(f" -> endnode 스트리밍 출력 시작.")
                         streaming_output_started = True
-                        yield from result
+                        collected_output = []
+                        for chunk in result:
+                            collected_output.append(str(chunk))
+                            yield chunk
+
+                        final_streaming_result = ''.join(collected_output)
+                        end_node_data = {'node_id': node_id, 'node_name': node_info['data']['nodeName'], 'inputs': kwargs, 'result': final_streaming_result}
+                        input_data_for_db = start_node_data if start_node_data else {}
+                        self._save_execution_io(input_data_for_db, end_node_data)
+
                         logger.info("\n--- 워크플로우 스트리밍 실행 완료 ---")
                         self._execution_status = "completed"
-                        self._end_time = time.time()
+                        self._end_time = self._get_current_time()
                         return
                     else:
+                        end_node_result_for_db = result
+                        end_node_data = {'node_id': node_id, 'node_name': node_info['data']['nodeName'], 'inputs': kwargs, 'result': end_node_result_for_db}
+                        input_data_for_db = start_node_data if start_node_data else {}
+                        self._save_execution_io(input_data_for_db, end_node_data)
                         logger.info(f" -> endnode 완료. 최종 출력: {result}")
                         node_outputs[node_id] = {'result': result}
 
-                # 일반 노드 처리
                 if function_id != 'endnode':
                     if not node_info['data']['outputs']:
                         logger.info(f" -> 출력 없음. (결과: {result})")
@@ -238,12 +254,12 @@ class AsyncWorkflowExecutor:
                     yield node_outputs
 
             self._execution_status = "completed"
-            self._end_time = time.time()
+            self._end_time = self._get_current_time()
 
         except Exception as e:
             self._execution_status = "error"
             self._error_message = str(e)
-            self._end_time = time.time()
+            self._end_time = self._get_current_time()
             logger.error(f"워크플로우 실행 중 오류 발생: {e}", exc_info=True)
             raise
 
@@ -355,8 +371,8 @@ class AsyncWorkflowExecutor:
         """실행 상태 정보를 반환합니다."""
         execution_time = None
         if self._start_time:
-            end_time = self._end_time if self._end_time else time.time()
-            execution_time = end_time - self._start_time
+            end_time = self._end_time if self._end_time else self._get_current_time()
+            execution_time = (end_time - self._start_time).total_seconds()
 
         return {
             "workflow_id": self.workflow_id,
@@ -365,9 +381,10 @@ class AsyncWorkflowExecutor:
             "user_id": self.user_id,
             "status": self._execution_status,
             "error_message": self._error_message,
-            "start_time": self._start_time,
-            "end_time": self._end_time,
-            "execution_time": execution_time
+            "start_time": self._start_time.isoformat() if self._start_time else None,
+            "end_time": self._end_time.isoformat() if self._end_time else None,
+            "execution_time": execution_time,
+            "current_timezone": str(TIMEZONE)  # 디버깅을 위해 타임존 정보 추가
         }
 
     def _save_execution_io(self, input_data: Dict[str, Any], output_data: Dict[str, Any]) -> None:
@@ -409,7 +426,8 @@ class AsyncWorkflowExecutor:
             )
             self.db_manager.insert(insert_data)
 
-            logger.info("ExecutionIO 데이터가 성공적으로 저장되었습니다. workflow_id: %s", self.workflow_id)
+            logger.info("ExecutionIO 데이터가 성공적으로 저장되었습니다. workflow_id: %s, timezone: %s",
+                       self.workflow_id, str(TIMEZONE))
 
         except (ValueError, TypeError) as e:
             logger.error("ExecutionIO 데이터 JSON 변환 중 오류 발생: %s", str(e), exc_info=True)
