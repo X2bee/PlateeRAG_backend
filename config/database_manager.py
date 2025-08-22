@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from typing import Optional, Dict, Any, Union
 from pathlib import Path
-
+from zoneinfo import ZoneInfo
 logger = logging.getLogger("database-manager")
 
 try:
@@ -16,6 +16,8 @@ try:
 except ImportError:
     logger.warning("psycopg2 not available, PostgreSQL support disabled")
     POSTGRES_AVAILABLE = False
+
+TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 class DatabaseManager:
     """데이터베이스 연결 및 마이그레이션 관리"""
@@ -102,8 +104,14 @@ class DatabaseManager:
                 password=self.config.POSTGRES_PASSWORD.value,
                 cursor_factory=RealDictCursor
             )
-            # autocommit을 False로 설정하여 명시적 트랜잭션 관리
             self.connection.autocommit = False
+
+            cursor = self.connection.cursor()
+            timezone_str = str(TIMEZONE)
+            cursor.execute(f"SET timezone = '{timezone_str}'")
+            self.connection.commit()
+            self.logger.warning("PostgreSQL 세션 타임존을 %s로 설정했습니다 (BaseModel TIMEZONE 사용)", timezone_str)
+
             self.logger.info("Successfully connected to PostgreSQL")
             return True
         except psycopg2.Error as e:
