@@ -2,6 +2,7 @@
 PDF Document API Controller
 CLAUDE.md 지침에 따른 PDF 문서 뷰어 API 엔드포인트 구현
 """
+import unicodedata
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import Response, StreamingResponse
 from fastapi.security import HTTPBearer
@@ -207,7 +208,8 @@ async def fetch_document(
         
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
-        safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
+        normalized_file = unicodedata.normalize('NFD', decoded_path)
+        safe_path = validate_file_path(normalized_file, DOCUMENTS_BASE_DIR)
         
         # 접근 권한 확인
         app_db = request.app.state.app_db
