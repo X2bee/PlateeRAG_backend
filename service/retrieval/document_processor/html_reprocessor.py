@@ -11,7 +11,7 @@ def clean_html_file(html_content, output_file_path=None):
         
         # 1. 불필요한 태그들 완전 제거
         print("🧹 불필요한 태그 제거 중...")
-        unwanted_tags = ['script', 'style', 'link', 'meta', 'noscript', 'iframe', 'img' , 'span' , 'p']
+        unwanted_tags = ['script', 'style', 'link', 'meta', 'noscript', 'iframe', 'img']
         for tag_name in unwanted_tags:
             for tag in soup.find_all(tag_name):
                 tag.decompose()
@@ -47,6 +47,7 @@ def clean_html_file(html_content, output_file_path=None):
         import re
         cleaned_html = re.sub(r'\s+', ' ', cleaned_html)
         cleaned_html = re.sub(r'>\s+<', '><', cleaned_html)  # 태그 사이 공백만 제거
+        cleaned_html = cleaned_html.replace('<p>', '').replace('</p>', '').replace('</span>', '').replace('<span>', '')    # 빈 <p> 태그 제거
         
         return cleaned_html
     
