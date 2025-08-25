@@ -209,9 +209,18 @@ async def fetch_document(
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
         dir_part, file_part = os.path.split(decoded_path)
-        normalized_file = unicodedata.normalize('NFD', file_part)
-        joined_path = os.path.join(dir_part, normalized_file)
-        safe_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
+
+        # 먼저 원본 경로로 파일 존재 확인
+        joined_path = os.path.join(dir_part, file_part)
+        safe_original_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
+
+        # 파일이 존재하지 않으면 NFD 정규화 시도
+        if not os.path.exists(safe_original_path):
+            normalized_file = unicodedata.normalize('NFD', file_part)
+            joined_path = os.path.join(dir_part, normalized_file)
+            safe_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
+        else:
+            safe_path = safe_original_path
 
         # 접근 권한 확인
         app_db = request.app.state.app_db
@@ -278,14 +287,26 @@ async def fetch_document_deploy(
 
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
-        safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
+        dir_part, file_part = os.path.split(decoded_path)
+
+        # 먼저 원본 경로로 파일 존재 확인
+        joined_path = os.path.join(dir_part, file_part)
+        safe_original_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
+
+        # 파일이 존재하지 않으면 NFD 정규화 시도
+        if not os.path.exists(safe_original_path):
+            normalized_file = unicodedata.normalize('NFD', file_part)
+            joined_path = os.path.join(dir_part, normalized_file)
+            safe_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
+        else:
+            safe_path = safe_original_path
 
         # 접근 권한 확인
         app_db = request.app.state.app_db
         if not app_db:
             raise HTTPException(status_code=500, detail="Database connection not available")
 
-        access_check = await check_document_access(app_db, user_id, decoded_path)
+        access_check = await check_document_access(app_db, user_id, joined_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
 
