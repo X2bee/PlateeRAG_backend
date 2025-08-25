@@ -62,7 +62,7 @@ def clean_html_file(html_content, output_file_path=None):
 
 def _process_table_merged_cells(table, soup):
     """
-    테이블의 병합된 셀을 풀고 빈 셀을 '해당 없음'으로 채우는 함수
+    테이블의 병합된 셀을 풀고 빈 셀을 'None'으로 채우는 함수
     """
     # 모든 행을 리스트로 변환
     rows = table.find_all('tr')
@@ -87,7 +87,7 @@ def _process_table_merged_cells(table, soup):
             # 현재 셀의 내용
             cell_text = cell.get_text(strip=True)
             if not cell_text or cell_text == '-':
-                cell_text = '해당 없음'
+                cell_text = 'None'
             
             # colspan, rowspan 값 가져오기
             colspan = int(cell.get('colspan', 1))
@@ -118,12 +118,12 @@ def _process_table_merged_cells(table, soup):
     # 2단계: 모든 행의 길이를 맞추고 빈 셀 채우기
     for row in grid:
         while len(row) < max_cols:
-            row.append('해당 없음')
+            row.append('None')
         
-        # None인 셀들을 '해당 없음'으로 변경
+        # None인 셀들을 'None'으로 변경
         for i in range(len(row)):
             if row[i] is None:
-                row[i] = '해당 없음'
+                row[i] = 'None'
     
     # 3단계: 기존 테이블 내용을 새로운 그리드로 교체
     # 기존 행들 제거
