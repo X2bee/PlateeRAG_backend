@@ -7,6 +7,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
+from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput
 from editor.utils.prefix_prompt import prefix_prompt
 from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import create_tool_calling_agent
@@ -36,12 +37,13 @@ class AgentVLLMNode(Node):
         {"id": "result", "name": "Result", "type": "STR"},
     ]
     parameters = [
-        {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": False, "optional": True},
+        {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": True},
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.0, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
-        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": False, "optional": True},
+        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
+        {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Tool 사용시 해당 과정을 출력할지 여부를 결정합니다."},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
     ]
 
@@ -81,6 +83,7 @@ class AgentVLLMNode(Node):
         n_messages: int = 3,
         base_url: str = "",
         strict_citation: bool = True,
+        return_intermediate_steps: bool = False,
         default_prompt: str = default_prompt,
     ) -> str:
         """
@@ -155,7 +158,7 @@ class AgentVLLMNode(Node):
             prompt = prefix_prompt+default_prompt
 
             # OpenAI API를 사용하여 응답 생성
-            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context, args_schema)
+            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context, args_schema, return_intermediate_steps)
 
             logger.info(f"Chat Agent 응답 생성 완료: {len(response)}자")
             return response
@@ -165,7 +168,7 @@ class AgentVLLMNode(Node):
             return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
 
 
-    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, strict_citation:Optional[bool], additional_rag_context: Optional[str], args_schema) -> str:
+    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, strict_citation:Optional[bool], additional_rag_context: Optional[str], args_schema, return_intermediate_steps: bool = False) -> str:
         """OpenAI API를 사용하여 채팅 응답 생성"""
         try:
             config_composer = AppServiceManager.get_config_composer()
@@ -237,16 +240,24 @@ class AgentVLLMNode(Node):
                     ])
 
                 agent = create_tool_calling_agent(llm, tools, final_prompt)
+
+                # return_intermediate_steps에 따라 핸들러 선택
+                if return_intermediate_steps:
+                    handler = NonStreamingAgentHandlerWithToolOutput()
+                else:
+                    handler = NonStreamingAgentHandler()
+
                 agent_executor = AgentExecutor(
                     agent=agent,
                     tools=tools,
                     verbose=True,
                     handle_parsing_errors=True,
                 )
-                response = agent_executor.invoke(inputs)
+                response = agent_executor.invoke(inputs, {"callbacks": [handler]})
                 output = response["output"]
 
-                return output
+                # handler를 통해 가공된 출력 반환
+                return handler.get_formatted_output(output)
 
             else:
                 if additional_rag_context and additional_rag_context.strip():

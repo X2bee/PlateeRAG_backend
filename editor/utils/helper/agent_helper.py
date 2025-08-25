@@ -1,0 +1,97 @@
+import logging
+import re
+import json
+from langchain.callbacks.base import BaseCallbackHandler
+
+logger = logging.getLogger(__name__)
+
+def _parse_document_citations(text: str) -> str:
+    """문서 인용 정보를 파싱하여 JSON 형태로 변환"""
+    document_pattern = r'\[문서 (\d+)\]\(관련도: ([\d.]+)\)\n\[파일명\] ([^\n]+)\n\[파일경로\] ([^\n]+)\n\[페이지번호\] ([^\n]+)\n\[문장시작줄\] ([^\n]+)\n\[문장종료줄\] ([^\n]+)'
+
+    matches = re.findall(document_pattern, text)
+
+    if matches:
+        citations = []
+        for match in matches:
+            doc_num, score, file_name, file_path, page_num, line_start, line_end = match
+
+            citation = {
+                "document_number": int(doc_num.strip()) if doc_num.strip().isdigit() else doc_num.strip(),
+                "relevance_score": float(score.strip()) if score.strip().replace('.', '', 1).isdigit() else score.strip(),
+                "file_name": file_name.strip(),
+                "file_path": file_path.strip(),
+                "page_number": int(page_num.strip()) if page_num.strip().isdigit() else page_num.strip(),
+                "line_start": int(line_start.strip()) if line_start.strip().isdigit() else line_start.strip(),
+                "line_end": int(line_end.strip()) if line_end.strip().isdigit() else line_end.strip()
+            }
+
+            cite_json = json.dumps(citation, ensure_ascii=False)
+            escaped_cite_json = cite_json.replace('\"', '"')
+            escaped_cite_json = escaped_cite_json.replace('\\"', '"')
+            citations.append(f"[Tool_Cite. {escaped_cite_json}]")
+
+        return "\n".join(citations)
+
+    return ""
+
+class NonStreamingAgentHandler(BaseCallbackHandler):
+    """스트리밍이 아닌 Agent용 기본 callback handler"""
+
+    def __init__(self):
+        self.tool_logs = []
+        self.tool_outputs = []
+
+    def on_agent_action(self, action, **kwargs) -> None:
+        """Agent가 도구를 호출할 때 호출"""
+        # 기본 핸들러에서는 아무 작업도 하지 않음
+        return
+
+    def on_tool_end(self, output, **kwargs) -> None:
+        """도구 실행이 완료될 때 호출"""
+        # 기본 핸들러에서는 아무 작업도 하지 않음
+        return
+
+    def on_tool_error(self, error, **kwargs) -> None:
+        """도구 실행 오류 시 호출"""
+        # 기본 핸들러에서는 아무 작업도 하지 않음
+        return
+
+    def get_formatted_output(self, original_output: str) -> str:
+        """원본 출력을 그대로 반환"""
+        return original_output
+
+class NonStreamingAgentHandlerWithToolOutput(BaseCallbackHandler):
+    """스트리밍이 아닌 Agent용 도구 출력 포함 callback handler"""
+
+    def __init__(self):
+        self.tool_logs = []
+        self.tool_outputs = []
+
+    def on_agent_action(self, action, **kwargs) -> None:
+        """Agent가 도구를 호출할 때 호출"""
+        tool_name = action.tool
+        tool_input = str(action.tool_input)
+        self.tool_logs.append(f"<TOOLUSELOG>{tool_name}\n{tool_input}</TOOLUSELOG>")
+
+    def on_tool_end(self, output, **kwargs) -> None:
+        """도구 실행이 완료될 때 호출"""
+        tool_output = str(output)
+        self.tool_outputs.append(output)
+
+        # 문서 인용 정보 파싱
+        parsed_output = _parse_document_citations(tool_output)
+        if parsed_output:
+            self.tool_logs.append(f"<TOOLOUTPUTLOG>{parsed_output}</TOOLOUTPUTLOG>")
+
+    def on_tool_error(self, error, **kwargs) -> None:
+        """도구 실행 오류 시 호출"""
+        self.tool_logs.append(f"❌ 도구 실행 오류: {str(error)}")
+
+    def get_formatted_output(self, original_output: str) -> str:
+        """원본 출력에 도구 사용 정보를 추가하여 반환"""
+        if not self.tool_logs:
+            return original_output
+
+        # 도구 로그를 출력 앞에 추가
+        return "\n".join(self.tool_logs) + "\n\n" + original_output
