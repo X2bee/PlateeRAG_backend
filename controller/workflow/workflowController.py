@@ -962,6 +962,12 @@ async def evaluate_with_llm(
     if '[Cite.' in actual_output and '}}]' in actual_output:
         actual_output = re.sub(r'\[Cite\.\s*\{\{.*?\}\}\]', '', actual_output, flags=re.DOTALL).strip()
 
+    if '<TOOLUSELOG>' in actual_output and '</TOOLUSELOG>' in actual_output:
+        actual_output = re.sub(r'<TOOLUSELOG>.*?</TOOLUSELOG>', '', actual_output, flags=re.DOTALL).strip()
+
+    if '<TOOLOUTPUTLOG>' in actual_output and '</TOOLOUTPUTLOG>' in actual_output:
+        actual_output = re.sub(r'<TOOLOUTPUTLOG>.*?</TOOLOUTPUTLOG>', '', actual_output, flags=re.DOTALL).strip()
+
     try:
         if llm_eval_type == "OpenAI":
             api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value

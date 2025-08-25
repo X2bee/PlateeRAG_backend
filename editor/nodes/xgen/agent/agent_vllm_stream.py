@@ -2,7 +2,7 @@ import logging
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, Generator
 from editor.node_composer import Node
-from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, execute_agent_streaming
+from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
@@ -164,11 +164,12 @@ class AgentVLLMStreamNode(Node):
                     max_iterations=10,
                     max_execution_time=300,
                     early_stopping_method="generate",
-                    return_intermediate_steps=return_intermediate_steps
                 )
-                handler = EnhancedAgentStreamingHandler()
+                if return_intermediate_steps:
+                    handler = EnhancedAgentStreamingHandlerWithToolOutput()
+                else:
+                    handler = EnhancedAgentStreamingHandler()
 
-                # Helper 함수를 사용하여 Agent 실행을 스트리밍으로 처리
                 async_executor = lambda: agent_executor.ainvoke(inputs, {"callbacks": [handler]})
 
                 try:

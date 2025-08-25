@@ -30,7 +30,9 @@ def _parse_document_citations(text: str) -> str:
             }
 
             cite_json = json.dumps(citation, ensure_ascii=False)
-            citations.append(f"[Tool_Cite. {cite_json}]")
+            escaped_cite_json = cite_json.replace('\"', '"')
+            escaped_cite_json = escaped_cite_json.replace('\\"', '"')
+            citations.append(f"[Tool_Cite. {escaped_cite_json}]")
 
         # 인용 정보만 반환 (줄바꿈으로 구분)
         return "\n".join(citations)
@@ -77,9 +79,64 @@ class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
 
     async def on_agent_action(self, action, **kwargs) -> None:
         """Agent가 도구를 호출할 때 호출"""
+        pass
+
+    async def on_tool_start(self, serialized, input_str, **kwargs) -> None:
+        """도구 실행 시작 시"""
+        pass
+
+    async def on_tool_end(self, output, **kwargs) -> None:
+        """도구 실행이 완료될 때 호출"""
+        pass
+
+    async def on_tool_error(self, error, **kwargs) -> None:
+        self.put_status(f"❌ 도구 실행 오류: {str(error)}\n")
+
+    async def on_agent_finish(self, finish, **kwargs) -> None:
+        pass
+
+class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
+    def __init__(self):
+        self.token_queue = queue.Queue()
+        self.is_done = False
+        self.current_step = 0
+        self.tool_outputs = []
+        self.streamed_tokens = []
+
+    def put_token(self, token):
+        if not self.is_done and token:
+            self.token_queue.put(('token', str(token)))
+
+    def put_status(self, status):
+        if not self.is_done:
+            self.token_queue.put(('status', status))
+
+    def finish(self):
+        self.is_done = True
+        self.token_queue.put(('done', None))
+
+    def put_error(self, error):
+        self.is_done = True
+        self.token_queue.put(('error', error))
+
+    async def on_llm_start(self, serialized, prompts, **kwargs) -> None:
+        """LLM 호출 시작 시"""
+        self.current_step += 1
+        if self.current_step > 1:
+            pass
+            # self.put_status(f"\n💭 단계 {self.current_step}: 답변 생성 중...\n")
+
+    async def on_llm_new_token(self, token: str, **kwargs) -> None:
+        """LLM이 새 토큰을 생성할 때 호출"""
+        if token:
+            self.streamed_tokens.append(token)
+            self.put_token(token)
+
+    async def on_agent_action(self, action, **kwargs) -> None:
+        """Agent가 도구를 호출할 때 호출"""
         # pass
         tool_name = action.tool
-        tool_input = str(action.tool_input)[:100] + "..." if len(str(action.tool_input)) > 100 else str(action.tool_input)
+        tool_input = str(action.tool_input)
         self.put_status(f"<TOOLUSELOG>{tool_name}\n{tool_input}</TOOLUSELOG>\n")
 
     async def on_tool_start(self, serialized, input_str, **kwargs) -> None:
@@ -101,7 +158,6 @@ class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
 
     async def on_agent_finish(self, finish, **kwargs) -> None:
         pass
-
 
 def execute_agent_streaming(
     async_executor_func: Callable[[], Awaitable[Any]],
@@ -164,7 +220,10 @@ def execute_agent_streaming(
                 elif msg_type == 'error':
                     if exception_container[0]:
                         raise exception_container[0]
-                    raise value
+                    elif value:
+                        raise value
+                    else:
+                        raise RuntimeError("Unknown error occurred")
 
             except queue.Empty:
                 # 큐가 비어있을 때 스레드 상태 확인
