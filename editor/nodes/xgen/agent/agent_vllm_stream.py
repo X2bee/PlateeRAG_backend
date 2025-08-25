@@ -136,8 +136,6 @@ class AgentVLLMStreamNode(Node):
                 default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
-                if strict_citation:
-                    default_prompt = default_prompt + citation_prompt
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),

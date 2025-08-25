@@ -185,8 +185,6 @@ class AgentOpenAINode(Node):
             }
 
             if tools is not None:
-                if strict_citation:
-                    prompt = prompt + citation_prompt
                 if additional_rag_context and additional_rag_context.strip():
                     if args_schema:
                         parser = JsonOutputParser(pydantic_object=args_schema)
