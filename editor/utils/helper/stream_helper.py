@@ -4,8 +4,39 @@ import queue
 import threading
 from typing import Any, Generator, Callable, Awaitable
 from langchain.callbacks.base import AsyncCallbackHandler
+import re
+import json
 
 logger = logging.getLogger(__name__)
+
+def _parse_document_citations(text: str) -> str:
+    document_pattern = r'\[문서 (\d+)\]\(관련도: ([\d.]+)\)\n\[파일명\] ([^\n]+)\n\[파일경로\] ([^\n]+)\n\[페이지번호\] ([^\n]+)\n\[문장시작줄\] ([^\n]+)\n\[문장종료줄\] ([^\n]+)'
+
+    matches = re.findall(document_pattern, text)
+
+    if matches:
+        citations = []
+        for match in matches:
+            doc_num, score, file_name, file_path, page_num, line_start, line_end = match
+
+            citation = {
+                "document_number": int(doc_num.strip()) if doc_num.strip().isdigit() else doc_num.strip(),
+                "relevance_score": float(score.strip()) if score.strip().replace('.', '', 1).isdigit() else score.strip(),
+                "file_name": file_name.strip(),
+                "file_path": file_path.strip(),
+                "page_number": int(page_num.strip()) if page_num.strip().isdigit() else page_num.strip(),
+                "line_start": int(line_start.strip()) if line_start.strip().isdigit() else line_start.strip(),
+                "line_end": int(line_end.strip()) if line_end.strip().isdigit() else line_end.strip()
+            }
+
+            cite_json = json.dumps(citation, ensure_ascii=False)
+            citations.append(f"[Tool_Cite. {cite_json}]")
+
+        # 인용 정보만 반환 (줄바꿈으로 구분)
+        return "\n".join(citations)
+
+    # 문서 인용 패턴이 없으면 빈 문자열 반환
+    return ""
 
 class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
     def __init__(self):
@@ -46,10 +77,10 @@ class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
 
     async def on_agent_action(self, action, **kwargs) -> None:
         """Agent가 도구를 호출할 때 호출"""
-        pass
-        # tool_name = action.tool
-        # tool_input = str(action.tool_input)[:100] + "..." if len(str(action.tool_input)) > 100 else str(action.tool_input)
-        # self.put_status(f"\n🔧 도구 '{tool_name}' 실행 중...\n입력: {tool_input}\n")
+        # pass
+        tool_name = action.tool
+        tool_input = str(action.tool_input)[:100] + "..." if len(str(action.tool_input)) > 100 else str(action.tool_input)
+        self.put_status(f"<TOOLUSELOG>{tool_name}\n{tool_input}</TOOLUSELOG>\n")
 
     async def on_tool_start(self, serialized, input_str, **kwargs) -> None:
         """도구 실행 시작 시"""
@@ -57,10 +88,13 @@ class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
 
     async def on_tool_end(self, output, **kwargs) -> None:
         """도구 실행이 완료될 때 호출"""
-        pass
-        # tool_output = str(output)[:200] + "..." if len(str(output)) > 200 else str(output)
-        # self.tool_outputs.append(output)
-        # self.put_status(f"✅ 도구 실행 완료\n결과: {tool_output}\n")
+
+        tool_output = str(output)
+        self.tool_outputs.append(output)
+
+        parsed_output = _parse_document_citations(tool_output)
+
+        self.put_status(f"<TOOLOUTPUTLOG>{parsed_output}</TOOLOUTPUTLOG>")
 
     async def on_tool_error(self, error, **kwargs) -> None:
         self.put_status(f"❌ 도구 실행 오류: {str(error)}\n")
