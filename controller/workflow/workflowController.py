@@ -28,7 +28,7 @@ import uuid
 import time
 
 logger = logging.getLogger("workflow-controller")
-router = APIRouter(prefix="/api/workflow", tags=["workflow"])
+router = APIRouter(prefix="", tags=["workflow"])
 
 def extract_collection_name(collection_full_name: str) -> str:
     """
