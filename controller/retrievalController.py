@@ -205,12 +205,37 @@ async def upload_document(
     chunk_size: int = Form(1000),
     chunk_overlap: int = Form(200),
     user_id: int = Form(...),
-    metadata: Optional[str] = Form(None)
+    metadata: Optional[str] = Form(None),
+    process_type: Optional[str] = Form("default")
 ):
     """문서 업로드 및 처리"""
     try:
         rag_service = get_rag_service(request)
         app_db = get_db_manager(request)
+
+        # 파일 확장자 확인
+        file_extension = Path(file.filename).suffix[1:].lower() if file.filename else ""
+        
+        # 파일 유형에 따른 process_type 검증
+        if file_extension == 'pdf':
+            valid_process_types = ["default", "text", "ocr"]
+            if process_type not in valid_process_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid process_type for PDF files. Must be one of: {valid_process_types}"
+                )
+        elif file_extension in ['docx', 'doc']:
+            valid_process_types = ["default", "text", "html", "ocr", "html_pdf_ocr"]
+            if process_type not in valid_process_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid process_type for DOCX files. Must be one of: {valid_process_types}"
+                )
+        else:
+            # PDF, DOCX가 아닌 파일들은 process_type이 default가 아니면 경고
+            if process_type != "default":
+                logger.warning(f"process_type '{process_type}' is only supported for PDF and DOCX files. Using 'default' for {file_extension} files.")
+                process_type = "default"
 
         # 파일 저장 (collection명 하위에 저장)
         upload_dir = Path("downloads") / collection_name
@@ -243,13 +268,9 @@ async def upload_document(
             chunk_size,
             chunk_overlap,
             doc_metadata,
+            use_llm_metadata=True,
+            process_type=process_type
         )
-
-        # # 임시 파일 삭제
-        # try:
-        #     await aiofiles.os.remove(file_path)
-        # except Exception:
-        #     pass
 
         return result
 
