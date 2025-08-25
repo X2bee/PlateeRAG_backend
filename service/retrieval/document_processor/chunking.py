@@ -94,14 +94,26 @@ def split_text_preserving_html_blocks(text: str, chunk_size: int, chunk_overlap:
     for c in final_chunks:
         if not c.strip():
             continue
-        # "=== 페이지 N ===" 혹은 "=== 페이지 N (OCR+참고) ===" 만 있는 경우 제거
-        if re.fullmatch(r"===\s*(페이지|슬라이드)\s*\d+(\s*\(OCR[+참고]*\))?\s*===", c.strip()):
-            continue
-        cleaned_chunks.append(c)
+        
+        # 기존 === 형태와 새로운 XML 태그 형태 모두 처리
+        page_marker_patterns = [
+            r"===\s*(페이지|슬라이드)\s*\d+(\s*\(OCR[+참고]*\))?\s*===",  # 기존 === 형태
+            r"<(페이지\s*번호|슬라이드\s*번호)>\s*\d+\s*(?:\(OCR\))?\s*</(페이지\s*번호|슬라이드\s*번호)>"  # XML 태그 형태
+        ]
+        
+        # 페이지/슬라이드 마커만 있는 청크인지 확인
+        is_page_marker_only = False
+        for pattern in page_marker_patterns:
+            if re.fullmatch(pattern, c.strip()):
+                is_page_marker_only = True
+                break
+        
+        if not is_page_marker_only:
+            cleaned_chunks.append(c)
         
     logger.info(f"Final text split into {len(cleaned_chunks)} chunks (after cleaning)")
     return cleaned_chunks
-
+    
 def reconstruct_text_from_chunks(chunks: List[str], chunk_overlap: int) -> str:
     if not chunks: return ""
     if len(chunks) == 1: return chunks[0]

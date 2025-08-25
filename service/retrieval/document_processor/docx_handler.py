@@ -138,7 +138,7 @@ async def convert_docx_to_pdf_libreoffice(file_path: str) -> str:
     except Exception as e:
         logger.error(f"PDF conversion error: {e}")
         raise
-    
+
 async def convert_docx_to_images(file_path: str) -> List[str]:
     temp_files: List[str] = []
     try:
@@ -176,64 +176,6 @@ async def convert_docx_to_images(file_path: str) -> List[str]:
             except: pass
         return []
 
-async def extract_text_from_docx_via_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
-    if not is_image_text_enabled(current_config, True):
-        return await extract_text_from_docx_fallback(file_path)
-    images = await convert_docx_to_images(file_path)
-    if not images:
-        return await extract_text_from_docx_fallback(file_path)
-    try:
-        batch_size = current_config.get('batch_size', 1)
-        page_texts = await convert_images_to_text_batch(images, current_config, batch_size)
-        all_text = ""
-        for i, t in enumerate(page_texts):
-            if not str(t).startswith("[이미지 파일:"):
-                all_text += f"\n=== 페이지 {i+1} (OCR) ===\n{t}\n"
-        return clean_text(all_text) if all_text.strip() else await extract_text_from_docx_fallback(file_path)
-    finally:
-        for p in images:
-            try: os.unlink(p)
-            except: pass
-
-async def extract_text_from_docx_fallback(file_path: str) -> str:
-    doc = Document(file_path)
-    text = ""
-    processed: Set[str] = set()
-    current_page = 1
-    try:
-        for element in doc.element.body:
-            if element.tag.endswith('p'):
-                if _has_page_break_element(element):
-                    current_page += 1
-                    text += f"\n=== 페이지 {current_page} ===\n"
-                para_text = _extract_paragraph_text(element, doc)
-                if para_text.strip():
-                    text += para_text + "\n"
-            elif element.tag.endswith('tbl'):
-                t = _extract_table_text_xml(element)
-                if t.strip():
-                    text += "\n=== 표 ===\n" + t + "\n=== 표 끝 ===\n\n"
-                    processed.add(t)
-    except Exception:
-        text = ""
-        current_page = 1
-        for p in doc.paragraphs:
-            if _paragraph_has_page_break(p):
-                current_page += 1
-                text += f"\n=== 페이지 {current_page} ===\n"
-            if p.text.strip():
-                text += p.text + "\n"
-
-    for i, table in enumerate(doc.tables):
-        t = _extract_simple_table_text(table)
-        if t.strip() and not any(_is_similar_table_text(t, x) for x in processed):
-            text += f"\n=== 표 {i+1} ===\n{t}\n=== 표 끝 ===\n\n"
-            processed.add(t)
-
-    if current_page > 1 and not text.startswith("=== 페이지 1 ==="):
-        text = f"=== 페이지 1 ===\n{text}"
-    return clean_text(text)
-
 async def convert_docx_to_html_text(file_path: str) -> str:
     """DOCX를 HTML로 변환 후 정리된 HTML 반환"""
     try:
@@ -264,10 +206,95 @@ async def convert_docx_to_html_text(file_path: str) -> str:
         logger.error(f"HTML conversion failed: {e}")
         raise
 
+# 1. 기본 텍스트 추출 (python-docx 직접 사용)
+async def extract_text_from_docx_fallback(file_path: str) -> str:
+    """python-docx로 직접 텍스트 추출"""
+    doc = Document(file_path)
+    text = ""
+    processed: Set[str] = set()
+    current_page = 1
+    try:
+        for element in doc.element.body:
+            if element.tag.endswith('p'):
+                if _has_page_break_element(element):
+                    current_page += 1
+                    text += f"\n<페이지 번호> {current_page} </페이지 번호>\n"
+                para_text = _extract_paragraph_text(element, doc)
+                if para_text.strip():
+                    text += para_text + "\n"
+            elif element.tag.endswith('tbl'):
+                t = _extract_table_text_xml(element)
+                if t.strip():
+                    text += "\n=== 표 ===\n" + t + "\n=== 표 끝 ===\n\n"
+                    processed.add(t)
+    except Exception:
+        text = ""
+        current_page = 1
+        for p in doc.paragraphs:
+            if _paragraph_has_page_break(p):
+                current_page += 1
+                text += f"\n<페이지 번호> {current_page} </페이지 번호>n"
+            if p.text.strip():
+                text += p.text + "\n"
+
+    for i, table in enumerate(doc.tables):
+        t = _extract_simple_table_text(table)
+        if t.strip() and not any(_is_similar_table_text(t, x) for x in processed):
+            text += f"\n=== 표 {i+1} ===\n{t}\n=== 표 끝 ===\n\n"
+            processed.add(t)
+
+    if current_page > 1 and not text.startswith("<페이지 번호>  1 </페이지 번호>"):
+        text = f"<페이지 번호>  1 </페이지 번호>n{text}"
+    return clean_text(text)
+
+# 2. HTML 변환 방식
+async def extract_text_from_docx_fallback_html(file_path: str) -> str:
+    """DOCX를 HTML로 변환 후 clean_html_file로 가공"""
+    try:
+        html_content = await convert_docx_to_html_text(file_path)
+        logger.info("DOCX → HTML 변환 및 정리 완료")
+        return html_content
+    except Exception as e:
+        logger.warning(f"HTML 변환 실패, 기존 fallback 사용: {e}")
+        return await extract_text_from_docx_fallback(file_path)
+
+# 3. 이미지 OCR 방식
+async def extract_text_from_docx_via_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
+    """DOCX → 이미지 → OCR 처리"""
+    if not is_image_text_enabled(current_config, True):
+        logger.warning("DOCX: OCR requested but not enabled, falling back to text extraction")
+        return await extract_text_from_docx_fallback(file_path)
+    
+    images = await convert_docx_to_images(file_path)
+    if not images:
+        logger.warning("DOCX: Image conversion failed, falling back to text extraction")
+        return await extract_text_from_docx_fallback(file_path)
+    
+    try:
+        batch_size = current_config.get('batch_size', 1)
+        page_texts = await convert_images_to_text_batch(images, current_config, batch_size)
+        all_text = ""
+        for i, t in enumerate(page_texts):
+            if not str(t).startswith("[이미지 파일:"):
+                all_text += f"\n<페이지 번호> {i+1} (OCR) </페이지 번호>n{t}\n"
+        
+        if all_text.strip():
+            logger.info(f"DOCX: OCR processing completed for {len(page_texts)} pages")
+            return clean_text(all_text)
+        else:
+            logger.warning("DOCX: OCR failed, falling back to text extraction")
+            return await extract_text_from_docx_fallback(file_path)
+    finally:
+        for p in images:
+            try: os.unlink(p)
+            except: pass
+
+# 4. HTML+PDF OCR 복합 방식
 async def extract_text_from_docx_via_html_pdf_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
     """DOCX를 HTML(텍스트) + PDF(이미지)로 변환 후 OCR로 마크다운 생성"""
     if not is_image_text_enabled(current_config, True):
-        return await extract_text_from_docx_fallback(file_path)
+        logger.warning("DOCX: HTML+PDF OCR requested but not enabled, falling back to HTML extraction")
+        return await extract_text_from_docx_fallback_html(file_path)
     
     pdf_path = None
     try:
@@ -285,14 +312,15 @@ async def extract_text_from_docx_via_html_pdf_ocr(file_path: str, current_config
         )
         
         if markdown_result and not markdown_result.startswith("["):
+            logger.info("DOCX: HTML+PDF OCR processing completed")
             return clean_text(markdown_result)
         else:
-            logger.warning("HTML+PDF OCR failed, falling back")
-            return await extract_text_from_docx_fallback(file_path)
+            logger.warning("DOCX: HTML+PDF OCR failed, falling back to HTML extraction")
+            return await extract_text_from_docx_fallback_html(file_path)
             
     except Exception as e:
-        logger.error(f"HTML+PDF OCR processing failed: {e}")
-        return await extract_text_from_docx_fallback(file_path)
+        logger.error(f"DOCX: HTML+PDF OCR processing failed: {e}, falling back to HTML extraction")
+        return await extract_text_from_docx_fallback_html(file_path)
     finally:
         if pdf_path and os.path.exists(pdf_path):
             try:
@@ -300,29 +328,46 @@ async def extract_text_from_docx_via_html_pdf_ocr(file_path: str, current_config
             except:
                 pass
 
-async def extract_text_from_docx_fallback_html(file_path: str) -> str:
-    """no_model용: DOCX를 HTML로 변환 후 clean_html_file로 가공"""
-    try:
-        html_content = await convert_docx_to_html_text(file_path)
-        logger.info("no_model: DOCX → HTML 변환 및 정리 완료")
-        return html_content
-    except Exception as e:
-        logger.warning(f"HTML 변환 실패, 기존 fallback 사용: {e}")
-        return await extract_text_from_docx_fallback(file_path)
-
-# extract_text_from_docx 함수 수정
-async def extract_text_from_docx(file_path: str, current_config: Dict[str, Any]) -> str:
+async def _extract_docx_default(file_path: str, current_config: Dict[str, Any]) -> str:
+    """기존 DOCX 처리 로직 (자동 선택)"""
     provider = current_config.get('provider', 'no_model')
-    logger.info(f"🔄 Real-time DOCX processing with provider: {provider}")
     
     if provider == 'no_model':
         return await extract_text_from_docx_fallback_html(file_path)  # HTML 방식 사용
     
     # 1순위: HTML+PDF OCR 방식
     try:
-        #return await extract_text_from_docx_via_html_pdf_ocr(file_path, current_config)
         return await extract_text_from_docx_fallback_html(file_path)  # HTML 방식 사용
     except Exception as e:
         logger.warning(f"HTML+PDF OCR failed, falling back to image OCR: {e}")
         # 2순위로 폴백
         return await extract_text_from_docx_via_ocr(file_path, current_config)
+
+async def extract_text_from_docx(file_path: str, current_config: Dict[str, Any], process_type: str = "default") -> str:
+    """DOCX 텍스트 추출 메인 함수"""
+    provider = current_config.get('provider', 'no_model')
+    logger.info(f"Real-time DOCX processing with provider: {provider}, process_type: {process_type}")
+    
+    if process_type == "text":
+        # 1. 기본 텍스트 추출 (python-docx 직접 사용)
+        logger.info("DOCX basic text extraction processing requested")
+        return await extract_text_from_docx_fallback(file_path)
+    
+    elif process_type == "html":
+        # 2. HTML 변환 방식
+        logger.info("DOCX HTML processing requested")
+        return await extract_text_from_docx_fallback_html(file_path)
+    
+    elif process_type == "ocr":
+        # 3. 이미지 OCR 방식
+        logger.info("DOCX OCR processing requested")
+        return await extract_text_from_docx_via_ocr(file_path, current_config)
+    
+    elif process_type == "html_pdf_ocr":
+        # 4. HTML+PDF OCR 복합 방식
+        logger.info("DOCX HTML+PDF OCR processing requested")
+        return await extract_text_from_docx_via_html_pdf_ocr(file_path, current_config)
+    
+    else:  # process_type == "default"
+        # 기존 자동 선택 로직 유지
+        return await _extract_docx_default(file_path, current_config)
