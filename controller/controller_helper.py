@@ -138,7 +138,7 @@ def require_admin_access(request: Request) -> Dict[str, Any]:
     existing_data = app_db.find_by_condition(
         User,
         {
-            "user_id": user_session['user_id'],
+            "id": user_session['user_id'],
         },
         limit=1
     )
@@ -190,4 +190,3 @@ def check_token_validity(token: str, app_state) -> bool:
     except Exception:
         logger.warning("Token validity check failed")
         return False
-

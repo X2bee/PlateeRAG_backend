@@ -6,7 +6,7 @@ from controller.controller_helper import require_admin_access
 from service.database.models.user import User
 from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 logger = logging.getLogger("admin-controller")
-router = APIRouter(prefix="/api/admin/base", tags=["Admin"])
+router = APIRouter(prefix="/base", tags=["Admin"])
 
 class SignupRequest(BaseModel):
     """회원가입 요청 모델"""
@@ -55,7 +55,7 @@ async def validate_superuser(request: Request):
         super_users = app_db.find_by_condition(
             User,
             {
-                "user_id": user_id,
+                "id": user_id,
                 "user_type": "superuser"
             },
             limit=1

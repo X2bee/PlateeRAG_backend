@@ -8,6 +8,7 @@ import jwt
 import secrets
 import logging
 import os
+import hashlib
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from service.database.models.user import User
@@ -78,6 +79,22 @@ class RefreshTokenResponse(BaseModel):
 def generate_token() -> str:
     """세션 토큰 생성"""
     return secrets.token_hex(32)
+
+def generate_sha256_hash(data: str) -> str:
+    """SHA256 해시 생성"""
+    # 문자열을 bytes로 인코딩
+    data_bytes = data.encode('utf-8')
+
+    # SHA256 해시 객체 생성
+    hash_obj = hashlib.sha256()
+
+    # 데이터 업데이트
+    hash_obj.update(data_bytes)
+
+    # 16진수 해시 값 반환
+    hex_hash = hash_obj.hexdigest()
+
+    return hex_hash
 
 # JWT 관련 설정
 JWT_SECRET_KEY = "your-secret-key-change-this-in-production"  # 실제 환경에서는 환경변수로 관리
@@ -305,11 +322,18 @@ async def login(request: Request, login_data: LoginRequest):
                 detail="Invalid email or password"
             )
 
-        if login_data.password != user.password_hash:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid username or password"
-            )
+        if user.user_type == "superuser":
+            if login_data.password != generate_sha256_hash(user.password_hash):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid username or password"
+                )
+        else:
+            if login_data.password != user.password_hash:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid username or password"
+                )
 
         # 사용자가 활성 상태인지 확인
         if not user.is_active:
