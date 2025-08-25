@@ -102,8 +102,8 @@ class QdrantRetrievalTool(Node):
                             
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        enhanced_prompt = f"""{citation_prompt if strict_citation else ""}{enhance_prompt}
-{context_text}"""
+                        enhanced_prompt = f"""{enhance_prompt}
+{context_text}\n{citation_prompt if strict_citation else ""}"""
                         return enhanced_prompt
                 except Exception as e:
                     logger.error(f"RAG 검색 수행 중 오류: {e}")
