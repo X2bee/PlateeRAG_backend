@@ -53,6 +53,7 @@ class AgentOpenAIStreamNode(Node):
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "optional": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
+        {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "중간 단계를 반환할지 여부입니다."},
     ]
 
     def execute(
@@ -69,6 +70,7 @@ class AgentOpenAIStreamNode(Node):
         base_url: str = "https://api.openai.com/v1",
         strict_citation: bool = True,
         default_prompt: str = default_prompt,
+        return_intermediate_steps: bool = False,
     ) -> Generator[str, None, None]:
 
         try:
@@ -124,8 +126,6 @@ class AgentOpenAIStreamNode(Node):
                 default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
-                if strict_citation:
-                    default_prompt = default_prompt + citation_prompt+"<tool_reponse> 태그가 없다면 출처표기를 하지마세요"
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
@@ -143,7 +143,16 @@ class AgentOpenAIStreamNode(Node):
                     ])
 
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
-                agent_executor = AgentExecutor(agent=agent, tools=tools_list, verbose=True, handle_parsing_errors=True)
+                agent_executor = AgentExecutor(
+                    agent=agent,
+                    tools=tools_list,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    max_iterations=10,
+                    max_execution_time=300,
+                    early_stopping_method="generate",
+                    return_intermediate_steps=return_intermediate_steps
+                )
                 handler = EnhancedAgentStreamingHandler()
 
                 # Helper 함수를 사용하여 Agent 실행을 스트리밍으로 처리

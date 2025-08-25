@@ -18,7 +18,7 @@ from controller.workflow.utils import get_db_manager
 from controller.workflow.model import WorkflowRequest
 
 logger = logging.getLogger("workflow-controller")
-router = APIRouter(prefix="/api/workflow/deploy", tags=["workflow"])
+router = APIRouter(prefix="/deploy", tags=["workflow"])
 
 @router.get("/load/{user_id}/{workflow_id}")
 async def load_workflow(request: Request, user_id: str, workflow_id: str):

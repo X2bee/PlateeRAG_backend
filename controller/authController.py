@@ -8,6 +8,7 @@ import jwt
 import secrets
 import logging
 import os
+import hashlib
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from service.database.models.user import User
@@ -78,6 +79,22 @@ class RefreshTokenResponse(BaseModel):
 def generate_token() -> str:
     """세션 토큰 생성"""
     return secrets.token_hex(32)
+
+def generate_sha256_hash(data: str) -> str:
+    """SHA256 해시 생성"""
+    # 문자열을 bytes로 인코딩
+    data_bytes = data.encode('utf-8')
+
+    # SHA256 해시 객체 생성
+    hash_obj = hashlib.sha256()
+
+    # 데이터 업데이트
+    hash_obj.update(data_bytes)
+
+    # 16진수 해시 값 반환
+    hex_hash = hash_obj.hexdigest()
+
+    return hex_hash
 
 # JWT 관련 설정
 JWT_SECRET_KEY = "your-secret-key-change-this-in-production"  # 실제 환경에서는 환경변수로 관리
@@ -195,22 +212,13 @@ async def signup(request: Request, signup_data: SignupRequest):
         SignupResponse: 회원가입 결과
     """
     try:
-        # 데이터베이스 매니저 가져오기
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
-
-        # 입력 데이터 검증
+        app_db = get_db_manager(request)
         if not signup_data.username or not signup_data.email or not signup_data.password:
             raise HTTPException(
                 status_code=400,
                 detail="Username, email, and password are required"
             )
 
-        # 사용자명 중복 검사
         existing_user_by_username = app_db.find_by_condition(
             User,
             {"username": signup_data.username},
@@ -223,7 +231,6 @@ async def signup(request: Request, signup_data: SignupRequest):
                 detail="Username already exists"
             )
 
-        # 이메일 중복 검사
         existing_user_by_email = app_db.find_by_condition(
             User,
             {"email": signup_data.email},
@@ -235,7 +242,6 @@ async def signup(request: Request, signup_data: SignupRequest):
                 detail="Email already exists"
             )
 
-        # 사용자 모델 인스턴스 생성
         new_user = User(
             username=signup_data.username,
             email=signup_data.email,
@@ -244,6 +250,8 @@ async def signup(request: Request, signup_data: SignupRequest):
             is_active=True,
             is_admin=False,
             last_login=None,
+            user_type="standard",
+            group_name="none",
             preferences={}
         )
 
@@ -314,11 +322,18 @@ async def login(request: Request, login_data: LoginRequest):
                 detail="Invalid email or password"
             )
 
-        if login_data.password != user.password_hash:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid username or password"
-            )
+        if user.user_type == "superuser":
+            if login_data.password != generate_sha256_hash(user.password_hash):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid username or password"
+                )
+        else:
+            if login_data.password != user.password_hash:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid username or password"
+                )
 
         # 사용자가 활성 상태인지 확인
         if not user.is_active:
@@ -522,6 +537,31 @@ async def refresh_token(request: Request, refresh_data: RefreshTokenRequest):
 
     except HTTPException:
         raise
+    except Exception as e:
+        logger.error(f"Token refresh error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.get("/superuser")
+async def check_superuser(request: Request):
+    try:
+        app_db = get_db_manager(request)
+        super_users = app_db.find_by_condition(
+            User,
+            {
+                "user_type": "superuser"
+            },
+            limit=1
+        )
+
+        if super_users:
+            return {"superuser": True}
+
+        else:
+            return {"superuser": False}
+
     except Exception as e:
         logger.error(f"Token refresh error: {str(e)}")
         raise HTTPException(

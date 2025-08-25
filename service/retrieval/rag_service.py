@@ -879,6 +879,7 @@ class RAGService:
                                 chunk_size: int = 1000, chunk_overlap: int = 200,
                                 metadata: Dict[str, Any] = None,
                                 use_llm_metadata: bool = True,
+                                process_type: str = "default"
                                 ) -> Dict[str, Any]:
         """문서를 처리하여 컬렉션에 저장
 
@@ -909,7 +910,7 @@ class RAGService:
 
             # 텍스트 추출
             logger.info(f"Extracting text from {file_path}")
-            text = await self.document_processor.extract_text_from_file(file_path, file_extension)
+            text = await self.document_processor.extract_text_from_file(file_path, file_extension, process_type)
 
             if not text.strip():
                 raise ValueError("No text content found in the document")
@@ -1949,6 +1950,9 @@ class RAGService:
                     r'=== 페이지 (\d+) \(OCR\) ===',  # PDF OCR
                     r'=== 슬라이드 (\d+) ===',  # PPT 기본
                     r'=== 슬라이드 (\d+) \(OCR\) ===',  # PPT OCR
+                    r'<페이지\s*번호>\s*(\d+)\s*(?:\(OCR\))?\s*</페이지\s*번호>',  # OCR 선택적
+                    r'<슬라이드\s*번호>\s*(\d+)\s*(?:\(OCR\))?\s*</슬라이드\s*번호>'  # OCR 선택적
+
                 ]
 
                 found_pages = False
@@ -1981,7 +1985,7 @@ class RAGService:
                 if not found_pages:
                     # DOCX에서 OCR을 통해 페이지가 구분되었는지 확인
                     if file_extension in ['docx', 'doc']:
-                        ocr_page_pattern = r'\n=== 페이지 (\d+) \(OCR\) ===\n'
+                        ocr_page_pattern = r'<페이지\s*번호>\s*(\d+)\s*(?:\(OCR\))?\s*</페이지\s*번호>'
                         ocr_matches = list(re.finditer(ocr_page_pattern, text))
                         if ocr_matches:
                             logger.info(f"Found {len(ocr_matches)} DOCX OCR page markers")

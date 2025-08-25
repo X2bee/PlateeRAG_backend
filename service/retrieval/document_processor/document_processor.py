@@ -139,15 +139,15 @@ class DocumentProcessor:
     def clean_code_text(self, text: str, file_type: str) -> str:
         return clean_code_text(text)
 
-    async def extract_text_from_file(self, file_path: str, file_extension: str) -> str:
+    async def extract_text_from_file(self, file_path: str, file_extension: str, process_type: str) -> str:
         category = self.get_file_category(file_extension)
         logger.info(f"Extracting text from {file_extension} file ({category} category): {file_path}")
         cfg = self._get_current_image_text_config()
 
         if file_extension == 'pdf':
-            return await extract_text_from_pdf(file_path, cfg)
+            return await extract_text_from_pdf(file_path, cfg, process_type)
         elif file_extension in ['docx', 'doc']:
-            return await extract_text_from_docx(file_path, cfg)
+            return await extract_text_from_docx(file_path, cfg, process_type)
         elif file_extension in ['pptx', 'ppt']:
             return await extract_text_from_ppt(file_path, cfg)
         elif file_extension in ['xlsx', 'xls']:
@@ -193,6 +193,11 @@ class DocumentProcessor:
                     r'=== 페이지 (\d+) \(OCR\+참고\) ===',
                     r'=== 슬라이드 (\d+) ===',
                     r'=== 슬라이드 (\d+) \(OCR\) ===',
+                    r'<페이지\s*번호>\s*(\d+)\s*</페이지\s*번호>',
+                    r'<페이지\s*번호>\s*(\d+)\s*\(OCR\)\s*</페이지\s*번호>',
+                    r'<페이지\s*번호>\s*(\d+)\s*\(OCR\+참고\)\s*</페이지\s*번호>',
+                    r'<슬라이드\s*번호>\s*(\d+)\s*</슬라이드\s*번호>',
+                    r'<슬라이드\s*번호>\s*(\d+)\s*\(OCR\)\s*</슬라이드\s*번호>',
                 ]
                 for pat in patterns:
                     matches = list(re.finditer(pat, text))

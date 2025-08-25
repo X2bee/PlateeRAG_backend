@@ -43,6 +43,7 @@ class AgentVLLMStreamNode(Node):
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
+        {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "중간 단계를 반환할지 여부입니다."},
     ]
 
     def __init__(self, user_id: str = None, **kwargs):
@@ -82,6 +83,7 @@ class AgentVLLMStreamNode(Node):
         base_url: str = "",
         strict_citation: bool = True,
         default_prompt: str = default_prompt,
+        return_intermediate_steps: bool = False,
     ) -> Generator[str, None, None]:
 
         try:
@@ -136,8 +138,6 @@ class AgentVLLMStreamNode(Node):
                 default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
-                if strict_citation:
-                    default_prompt = default_prompt + citation_prompt+"<tool_reponse> 태그가 없다면 출처표기를 하지마세요"
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
@@ -161,9 +161,10 @@ class AgentVLLMStreamNode(Node):
                     tools=tools_list,
                     verbose=True,
                     handle_parsing_errors=True,
-                    max_iterations=10,  # 최대 10번까지 tool 호출 가능
-                    max_execution_time=300,  # 최대 5분까지 실행
-                    early_stopping_method="generate"  # 충분한 정보를 얻으면 조기 종료
+                    max_iterations=10,
+                    max_execution_time=300,
+                    early_stopping_method="generate",
+                    return_intermediate_steps=return_intermediate_steps
                 )
                 handler = EnhancedAgentStreamingHandler()
 

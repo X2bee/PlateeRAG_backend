@@ -6,7 +6,7 @@ from service.database.models.base_model import BaseModel
 
 class User(BaseModel):
     """사용자 모델"""
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.username: str = kwargs.get('username', '')
@@ -15,12 +15,14 @@ class User(BaseModel):
         self.full_name: Optional[str] = kwargs.get('full_name')
         self.is_active: bool = kwargs.get('is_active', True)
         self.is_admin: bool = kwargs.get('is_admin', False)
+        self.user_type: str = kwargs.get('user_type', "standard")
+        self.group_name: str = kwargs.get('group_name', "none")
         self.last_login: Optional[str] = kwargs.get('last_login')
         self.preferences: Optional[Dict] = kwargs.get('preferences', {})
-    
+
     def get_table_name(self) -> str:
         return "users"
-    
+
     def get_schema(self) -> Dict[str, str]:
         return {
             'username': 'VARCHAR(50) UNIQUE NOT NULL',
@@ -29,13 +31,15 @@ class User(BaseModel):
             'full_name': 'VARCHAR(100)',
             'is_active': 'BOOLEAN DEFAULT TRUE',
             'is_admin': 'BOOLEAN DEFAULT FALSE',
+            'user_type': "VARCHAR(50) DEFAULT 'standard'",
+            'group_name': "VARCHAR(50) DEFAULT 'none'",
             'last_login': 'TIMESTAMP',
             'preferences': 'TEXT'
         }
 
 class UserSession(BaseModel):
     """사용자 세션 모델"""
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.user_id: int = kwargs.get('user_id', 0)
@@ -44,10 +48,10 @@ class UserSession(BaseModel):
         self.ip_address: Optional[str] = kwargs.get('ip_address')
         self.user_agent: Optional[str] = kwargs.get('user_agent')
         self.is_active: bool = kwargs.get('is_active', True)
-    
+
     def get_table_name(self) -> str:
         return "user_sessions"
-    
+
     def get_schema(self) -> Dict[str, str]:
         return {
             'user_id': 'INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE',
