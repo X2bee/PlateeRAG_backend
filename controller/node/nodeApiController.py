@@ -85,9 +85,7 @@ async def call_node_api(node_id: str, api_name: str, request_data: Dict[str, Any
 
 def register_node_api_routes():
     """등록된 모든 노드의 API 함수들을 FastAPI 라우터에 등록"""
-
     api_registry = get_node_api_registry()
-
     for node_id, api_functions in api_registry.items():
         for api_name, api_function in api_functions.items():
             # nodeID 변환: / -> _, 대문자 -> 소문자
@@ -102,6 +100,7 @@ def register_node_api_routes():
             }
 
             print(f"  -> Registered API route: {route_path}")# 노드 API 목록 조회 엔드포인트들 (먼저 등록)
+
 @router.get("/nodes/apis")
 async def list_all_node_apis():
     """등록된 모든 노드 API 함수들의 목록을 반환"""

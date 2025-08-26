@@ -4,6 +4,8 @@ import uvicorn
 import logging
 import os
 from contextlib import asynccontextmanager
+from controller.node.nodeApiController import register_node_api_routes
+
 from controller.node.router import node_router
 from controller.admin.router import admin_router
 from controller.workflow.router import workflow_router

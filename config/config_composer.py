@@ -298,14 +298,6 @@ class ConfigComposer:
             "errors": []
         }
 
-        # OpenAI API 키 검증 (openai 카테고리가 있는 경우)
-        if "openai" in self.config_categories:
-            openai_config = self.config_categories["openai"]
-            if hasattr(openai_config, "API_KEY"):
-                api_key = openai_config.API_KEY.value
-                if not api_key or not api_key.strip():
-                    validation_results["warnings"].append("OpenAI API key is not configured")
-
         # 포트 범위 검증 (app 카테고리가 있는 경우)
         if "app" in self.config_categories:
             app_config = self.config_categories["app"]
@@ -313,15 +305,6 @@ class ConfigComposer:
                 port = app_config.PORT.value
                 if not (1 <= port <= 65535):
                     validation_results["errors"].append(f"Invalid port number: {port}")
-                    validation_results["valid"] = False
-
-        # 타임아웃 값 검증 (workflow 카테고리가 있는 경우)
-        if "workflow" in self.config_categories:
-            workflow_config = self.config_categories["workflow"]
-            if hasattr(workflow_config, "EXECUTION_TIMEOUT"):
-                workflow_timeout = workflow_config.EXECUTION_TIMEOUT.value
-                if workflow_timeout <= 0:
-                    validation_results["errors"].append(f"Invalid workflow timeout: {workflow_timeout}")
                     validation_results["valid"] = False
 
         return validation_results
