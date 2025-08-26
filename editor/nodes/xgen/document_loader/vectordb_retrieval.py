@@ -8,7 +8,7 @@ from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from service.database.models.vectordb import VectorDB
 from fastapi import Request
-from controller.controller_helper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request
 
 logger = logging.getLogger(__name__)
 enhance_prompt = """You are an AI assistant that must strictly follow these guidelines when using the provided document context:

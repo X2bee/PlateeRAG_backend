@@ -21,7 +21,7 @@ import requests
 from requests.exceptions import RequestException
 import asyncio
 from service.llm.llm_service import LLMService
-from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 router = APIRouter(
     prefix="/api/config",
@@ -548,7 +548,7 @@ async def test_collection_connection(category: str):
                     "completion_test": True ,
                 }
         elif const_provider == "vllm":
-            
+
             config_data = {
                 'base_url':  config_dict.get("IMAGE_TEXT_BASE_URL"),  # ← 여기를 IMAGE_TEXT_BASE_URL로
                 'api_key':   config_dict.get("IMAGE_TEXT_API_KEY"),

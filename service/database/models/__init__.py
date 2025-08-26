@@ -5,7 +5,7 @@ from service.database.models.base_model import BaseModel
 from service.database.models.user import User, UserSession
 # from service.database.models.chat import ChatSession, ChatMessage
 from service.database.models.performance import WorkflowExecution, NodeExecution, SystemMetrics, NodePerformance
-from service.database.models.persistent_config_model import PersistentConfigModel
+from service.database.models.persistent_config import PersistentConfigModel
 from service.database.models.executor import ExecutionIO, ExecutionMeta
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge

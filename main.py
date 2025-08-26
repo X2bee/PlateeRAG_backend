@@ -6,6 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from controller.node.router import node_router
 from controller.admin.router import admin_router
+from controller.workflow.router import workflow_router
 
 from controller.trainController import router as trainRouter
 from controller.configController import router as configRouter
@@ -18,7 +19,6 @@ from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
 from controller.documentController import router as documentRouter
-from controller.workflow.router import workflow_router
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
@@ -168,9 +168,10 @@ app.add_middleware(
 
 app.include_router(node_router)
 app.include_router(admin_router)
+app.include_router(workflow_router)
+
 app.include_router(authRouter)
 app.include_router(configRouter)
-app.include_router(workflow_router)
 app.include_router(performanceRouter)
 app.include_router(trainRouter)
 app.include_router(embeddingRouter)

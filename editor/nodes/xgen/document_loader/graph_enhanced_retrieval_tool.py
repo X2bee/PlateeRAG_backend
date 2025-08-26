@@ -6,7 +6,7 @@ from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from service.database.models.vectordb import VectorDB, VectorDBChunkEdge
 from fastapi import Request
-from controller.controller_helper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request
 
 logger = logging.getLogger(__name__)
 

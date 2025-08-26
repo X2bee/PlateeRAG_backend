@@ -12,7 +12,7 @@ import logging
 
 from service.database.models.user import User
 from service.retrieval import RAGService
-from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("app-controller")
 router = APIRouter(prefix="/app", tags=["app"])

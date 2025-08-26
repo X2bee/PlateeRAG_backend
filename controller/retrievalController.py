@@ -18,8 +18,8 @@ import datetime
 import uuid
 from zoneinfo import ZoneInfo
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
-from controller.controller_helper import extract_user_id_from_request
-from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.controllerHelper import extract_user_id_from_request
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from service.embedding import get_fastembed_service
 from service.retrieval.rag_service import RAGService
 
@@ -215,7 +215,7 @@ async def upload_document(
 
         # 파일 확장자 확인
         file_extension = Path(file.filename).suffix[1:].lower() if file.filename else ""
-        
+
         # 파일 유형에 따른 process_type 검증
         if file_extension == 'pdf':
             valid_process_types = ["default", "text", "ocr"]

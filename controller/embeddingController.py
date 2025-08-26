@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from service.embedding import EmbeddingFactory
 import logging
-from controller.singletonHelper import get_embedding_client, get_rag_service
+from controller.helper.singletonHelper import get_embedding_client, get_rag_service
 
 logger = logging.getLogger("embedding-controller")
 router = APIRouter(prefix="/api/embedding", tags=["embedding"])

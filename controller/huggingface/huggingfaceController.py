@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request
-from controller.controller_helper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request
 from huggingface_hub import HfApi
 
 router = APIRouter(

@@ -7,12 +7,9 @@ from fastapi import HTTPException, Request
 from typing import Optional, Dict, Any
 from service.database.models.user import User
 import logging
-
-# authController에서 사용하는 함수들을 import
 from controller.authController import get_user_by_token
 
 logger = logging.getLogger("controller-helper")
-
 
 def validate_user_authentication(request: Request) -> Dict[str, Any]:
     """
