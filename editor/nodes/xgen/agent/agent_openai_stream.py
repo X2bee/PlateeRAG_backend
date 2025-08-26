@@ -132,14 +132,14 @@ class AgentOpenAIStreamNode(Node):
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
                         ("user", "{additional_rag_context}"),
-                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                        MessagesPlaceholder(variable_name="agent_scratchpad")
                     ])
                 else:
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", default_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
-                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
+                        MessagesPlaceholder(variable_name="agent_scratchpad")
                     ])
 
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
@@ -148,7 +148,7 @@ class AgentOpenAIStreamNode(Node):
                     tools=tools_list,
                     verbose=True,
                     handle_parsing_errors=True,
-                    max_iterations=10,
+                    max_iterations=15,
                     max_execution_time=300,
                     early_stopping_method="generate",
                 )
