@@ -179,7 +179,7 @@ class AppDatabaseManager:
                             model_class.__name__, record_id, e)
             return None
 
-    def find_all(self, model_class: Type[BaseModel], limit: int = 100, offset: int = 0) -> List[BaseModel]:
+    def find_all(self, model_class: Type[BaseModel], limit: int = 10000, offset: int = 0) -> List[BaseModel]:
         """모든 레코드 조회 (페이징 지원)"""
         try:
             table_name = model_class().get_table_name()

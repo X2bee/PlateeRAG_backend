@@ -252,6 +252,7 @@ class AgentVLLMNode(Node):
                     tools=tools,
                     verbose=True,
                     handle_parsing_errors=True,
+                    max_iterations=3,
                 )
                 response = agent_executor.invoke(inputs, {"callbacks": [handler]})
                 output = response["output"]

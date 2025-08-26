@@ -161,7 +161,7 @@ class AgentVLLMStreamNode(Node):
                     tools=tools_list,
                     verbose=True,
                     handle_parsing_errors=True,
-                    max_iterations=15,
+                    max_iterations=3,
                     max_execution_time=300,
                     early_stopping_method="generate",
                 )
