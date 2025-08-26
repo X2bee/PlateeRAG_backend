@@ -12,7 +12,7 @@ import inspect
 from editor.node_composer import get_node_api_registry, get_node_class_registry
 from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
-router = APIRouter(prefix="/api/editor", tags=["Node API"])
+router = APIRouter(prefix="/editor", tags=["Node API"])
 
 # Pydantic 모델 정의
 class ApiCallRequest(BaseModel):

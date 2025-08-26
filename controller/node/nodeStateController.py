@@ -5,7 +5,7 @@ import logging
 from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("node-controller-state")
-router = APIRouter(prefix="/api/node-state", tags=["node-state"])
+router = APIRouter(prefix="/node-state", tags=["node-state"])
 
 @router.get("/registry", response_model=Dict[str, Any])
 async def get_node_registry_from_state(request: Request):

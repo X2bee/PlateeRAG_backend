@@ -22,7 +22,7 @@ from editor.node_composer import (
 )
 
 router = APIRouter(
-    prefix="/api/node",
+    prefix="/node",
     tags=["node"],
     responses={404: {"description": "Not found"}},
 )

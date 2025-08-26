@@ -4,10 +4,11 @@ import uvicorn
 import logging
 import os
 from contextlib import asynccontextmanager
-from controller.nodeController import router as nodeRouter
+from controller.node.router import node_router
+from controller.admin.router import admin_router
+
 from controller.trainController import router as trainRouter
 from controller.configController import router as configRouter
-from controller.nodeStateController import router as nodeStateRouter
 from controller.performanceController import router as performanceRouter
 from controller.embeddingController import router as embeddingRouter
 from controller.retrievalController import router as retrievalRouter
@@ -16,10 +17,8 @@ from controller.huggingface.huggingfaceController import router as huggingfaceRo
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
-from controller.nodeApiController import router as nodeApiRouter, register_node_api_routes
 from controller.documentController import router as documentRouter
 from controller.workflow.router import workflow_router
-from controller.admin.router import admin_router
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
@@ -167,22 +166,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(nodeRouter)
+app.include_router(node_router)
+app.include_router(admin_router)
 app.include_router(authRouter)
 app.include_router(configRouter)
 app.include_router(workflow_router)
-app.include_router(nodeStateRouter)
 app.include_router(performanceRouter)
 app.include_router(trainRouter)
 app.include_router(embeddingRouter)
 app.include_router(retrievalRouter)
 app.include_router(interactionRouter)
 app.include_router(appRouter)
-app.include_router(nodeApiRouter)
 app.include_router(vastRouter)
 app.include_router(huggingfaceRouter)
 app.include_router(documentRouter)
-app.include_router(admin_router)
 
 if __name__ == "__main__":
     try:

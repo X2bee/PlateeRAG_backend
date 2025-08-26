@@ -82,7 +82,6 @@ class PerformanceLogger:
             cpu_usage_percent = round((cpu_time_diff / elapsed_time) * 100 / psutil.cpu_count(logical=True), 2)
 
 
-
         # GPU (NVIDIA)
         gpu_stats = {'gpu_usage_percent': 'N/A', 'gpu_memory_mb': 'N/A'}
         if self._gpu_handles:
