@@ -194,7 +194,7 @@ if __name__ == "__main__":
         if debug:
             uvicorn.run("main:app", host=host, port=port, reload=True)
         else:
-            uvicorn.run("main:app", host=host, port=port, reload=False, workers=4)
+            uvicorn.run("main:app", host=host, port=port, reload=False)
     except Exception as e:
         logger.warning(f"Failed to load config for uvicorn: {e}")
         logger.info("Using default values for uvicorn")
