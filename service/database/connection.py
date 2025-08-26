@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional, Type
-from config.database_manager import DatabaseManager
+from service.database.database_manager import DatabaseManager
 from service.database.models.base_model import BaseModel
 
 logger = logging.getLogger("app-database")

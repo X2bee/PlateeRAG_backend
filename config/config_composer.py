@@ -8,7 +8,7 @@ from typing import Dict, Any
 from pathlib import Path
 from config.base_config import BaseConfig
 from config.persistent_config import PersistentConfig, export_config_summary, refresh_all_configs, save_all_configs
-from config.database_manager import initialize_database
+from service.database.database_manager import initialize_database
 logger = logging.getLogger("config-composer")
 
 class ConfigComposer:

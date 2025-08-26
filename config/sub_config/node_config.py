@@ -10,22 +10,6 @@ class NodeConfig(BaseConfig):
     def initialize(self) -> Dict[str, PersistentConfig]:
         """노드 관련 설정들을 초기화"""
 
-        # 노드 캐싱 활성화 여부
-        self.CACHE_ENABLED = self.create_persistent_config(
-            env_name="NODE_CACHE_ENABLED",
-            config_path="node.cache_enabled",
-            default_value=True,
-            type_converter=convert_to_bool
-        )
-
-        # 노드 discovery 자동 실행 여부
-        self.AUTO_DISCOVERY = self.create_persistent_config(
-            env_name="NODE_AUTO_DISCOVERY",
-            config_path="node.auto_discovery",
-            default_value=True,
-            type_converter=convert_to_bool
-        )
-
         # 노드 레지스트리 파일 경로
         self.REGISTRY_FILE_PATH = self.create_persistent_config(
             env_name="NODE_REGISTRY_FILE_PATH",

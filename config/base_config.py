@@ -53,13 +53,13 @@ class BaseConfig(ABC):
             try:
                 if type_converter:
                     converted_value = type_converter(env_value)
-                    self.logger.info(f"'{env_name}' loaded from environment: {converted_value}")
+                    self.logger.info("'%s' loaded from environment: %s", env_name, converted_value)
                     return converted_value
                 else:
-                    self.logger.info(f"'{env_name}' loaded from environment: {env_value}")
+                    self.logger.info("'%s' loaded from environment: %s", env_name, env_value)
                     return env_value
             except (ValueError, TypeError) as e:
-                self.logger.warning(f"Failed to convert environment value for '{env_name}': {e}")
+                self.logger.warning("Failed to convert environment value for '%s': %s", env_name, e)
 
         # 2. 파일에서 확인 (제공된 경우)
         if file_path and os.path.exists(file_path):
@@ -69,17 +69,17 @@ class BaseConfig(ABC):
                     if file_value:
                         if type_converter:
                             converted_value = type_converter(file_value)
-                            self.logger.info(f"'{env_name}' loaded from file {file_path}: {converted_value}")
+                            self.logger.info("'%s' loaded from file %s: %s", env_name, file_path, converted_value)
                             return converted_value
                         else:
                             os.environ[env_name] = file_value  # 환경변수에도 설정
-                            self.logger.info(f"'{env_name}' loaded from file {file_path}: {file_value}")
+                            self.logger.info("'%s' loaded from file %s: %s", env_name, file_path, file_value)
                             return file_value
-            except Exception as e:
-                self.logger.warning(f"Failed to read {file_path} for '{env_name}': {e}")
+            except (IOError, OSError) as e:
+                self.logger.warning("Failed to read %s for '%s': %s", file_path, env_name, e)
 
-        # 3. 기본값 사용
-        self.logger.info(f"'{env_name}' using default value: {default_value}")
+        # 3. 기본값 사용 (데이터베이스에서 값이 로드될 예정이면 로그 레벨을 낮춤)
+        self.logger.debug("'%s' using default value: %s", env_name, default_value)
         return default_value
 
     def create_persistent_config(self, env_name: str, config_path: str,

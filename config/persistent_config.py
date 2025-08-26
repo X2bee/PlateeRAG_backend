@@ -57,7 +57,7 @@ def save_config_data(config_data: Dict[str, Any]):
 def get_config_value_from_db(config_path: str) -> Optional[Any]:
     """데이터베이스에서 설정 값을 가져옴"""
     try:
-        from config.database_manager import get_database_manager
+        from service.database.database_manager import get_database_manager
 
         db_manager = get_database_manager()
         if not db_manager.connection:
@@ -110,7 +110,7 @@ def get_config_value_from_db(config_path: str) -> Optional[Any]:
 def set_config_value_to_db(config_path: str, value: Any):
     """데이터베이스에 설정 값을 저장"""
     try:
-        from config.database_manager import get_database_manager
+        from service.database.database_manager import get_database_manager
 
         db_manager = get_database_manager()
         if not db_manager.connection:
@@ -218,7 +218,8 @@ class PersistentConfig(Generic[T]):
         self.config_value = get_config_value(config_path)
 
         if self.config_value is not None:
-            logger.info("'%s' loaded from database: %s", env_name, self.config_value)
+            logger.info("'%s' loaded from database: %s (overrides default: %s)",
+                       env_name, self.config_value, env_value)
             # type_converter가 있고 config_value가 문자열인 경우 변환 적용
             if self.type_converter and isinstance(self.config_value, str):
                 try:
@@ -231,7 +232,7 @@ class PersistentConfig(Generic[T]):
             else:
                 self.value = self.config_value
         else:
-            logger.info("'%s' using default value: %s", env_name, env_value)
+            logger.info("'%s' using default value: %s (no database value found)", env_name, env_value)
             self.value = env_value
 
         # 전역 레지스트리에 중복 확인 후 등록
