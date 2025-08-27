@@ -19,12 +19,16 @@ import uuid
 from zoneinfo import ZoneInfo
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
 from controller.helper.controllerHelper import extract_user_id_from_request
-from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_document_info_generator
 from service.embedding import get_fastembed_service
-from service.retrieval.rag_service import RAGService
+
+from service.embedding.embedding_factory import EmbeddingFactory
+from service.vector_db.vector_manager import VectorManager
+from service.retrieval.document_processor.document_processor import DocumentProcessor
+from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 
 logger = logging.getLogger("retrieval-controller")
-router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
+router = APIRouter(prefix="/retrieval", tags=["retrieval"])
 
 # 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
 TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
@@ -78,7 +82,7 @@ class DocumentSearchRequest(BaseModel):
     rerank: Optional[bool] = False
     rerank_top_k: Optional[int] = 20
 
-# Collection Management Endpoints
+# Collection Management Endpoints 문제없음
 @router.get("/collections")
 async def list_collections(request: Request,):
     """모든 컬렉션 목록 조회"""
@@ -114,11 +118,10 @@ async def create_collection(request: Request, collection_request: CollectionCrea
             status_code=500,
             detail="Database connection not available"
         )
+    config_composer = get_config_composer(request)
+    vector_size = config_composer.get_config_by_name("QDRANT_VECTOR_DIMENSION").value
+    vector_manager = get_vector_manager(request)
 
-    rag_service = get_rag_service(request)
-    vector_size = rag_service.config.VECTOR_DIMENSION.value
-    vector_manager = rag_service.vector_manager
-    # UUID 기반으로 컬렉션 이름 생성
     collection_name = str(uuid.uuid4())
     collection_name = collection_request.collection_make_name+'_'+collection_name
 
@@ -164,9 +167,7 @@ async def create_collection(request: Request, collection_request: CollectionCrea
 async def delete_collection(request: Request, collection_request: CollectionDeleteRequest):
     """컬렉션 삭제"""
     try:
-        rag_service = get_rag_service(request)
-        vector_manager = rag_service.vector_manager
-
+        vector_manager = get_vector_manager(request)
         result = vector_manager.delete_collection(collection_request.collection_name)
 
         if result.get("status") == "success":
@@ -302,8 +303,7 @@ async def search_documents(request: Request, search_request: DocumentSearchReque
 async def hybrid_index_collection(request: Request, source_collection: str = Form(...), target_collection: str = Form(...)):
     """기존 컬렉션의 청크들을 가져와 FastEmbed 기반 하이브리드 컬렉션으로 색인합니다."""
     try:
-        rag_service = get_rag_service(request)
-        vector_manager = rag_service.vector_manager
+        vector_manager = get_vector_manager(request)
         client = vector_manager.client
 
         # scroll all points from source collection
@@ -344,8 +344,8 @@ async def hybrid_index_collection(request: Request, source_collection: str = For
 async def hybrid_search(request: Request, collection_name: str = Form(...), query_text: str = Form(...), limit: int = Form(10)):
     """Hybrd search endpoint using FastEmbedService (prefetch + late rerank)"""
     try:
-        rag_service = get_rag_service(request)
-        client = rag_service.vector_manager.client
+        vector_manager = get_vector_manager(request)
+        client = vector_manager.client
         fes = get_fastembed_service()
         fes.init_models()
 
@@ -467,7 +467,7 @@ async def delete_document_from_collection(request: Request, collection_name: str
 async def insert_points(request: Request, insert_request: InsertPointsRequest):
     """벡터 포인트 삽입 (기존 호환성)"""
     try:
-        rag_service = get_rag_service(request)
+        vector_manager = get_vector_manager(request)
         # VectorPoint 모델을 딕셔너리로 변환
         points_data = []
         for point in insert_request.points:
@@ -479,152 +479,29 @@ async def insert_points(request: Request, insert_request: InsertPointsRequest):
                 point_dict["id"] = point.id
             points_data.append(point_dict)
 
-        return rag_service.vector_manager.insert_points(
+        return vector_manager.insert_points(
             insert_request.collection_name,
             points_data
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to insert points: {str(e)}")
 
-@router.delete("/points")
-async def delete_points(request: Request, delete_request: DeletePointsRequest):
-    """포인트 삭제 (기존 호환성)"""
-    try:
-        rag_service = get_rag_service(request)
-        return rag_service.vector_manager.delete_points(
-            delete_request.collection_name,
-            delete_request.point_ids
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete points: {str(e)}")
-
-@router.post("/search")
-async def search_points(request: Request, search_request: SearchRequest):
-    """벡터 유사도 검색 (기존 호환성)"""
-    try:
-        rag_service = get_rag_service(request)
-        return rag_service.vector_manager.search_points(
-            search_request.collection_name,
-            search_request.query.vector,
-            search_request.query.limit,
-            search_request.query.score_threshold,
-            search_request.query.filter
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to search points: {str(e)}")
-
-@router.get("/health")
-async def retrieval_health_check(request: Request):
-    """retrieval 시스템 상태 확인"""
-    try:
-        rag_service = get_rag_service(request)
-
-        health_status = {
-            "qdrant_client": rag_service.vector_manager.is_connected(),
-            "document_processor": bool(rag_service.document_processor),
-        }
-
-        if rag_service.vector_manager.is_connected():
-            collections = rag_service.vector_manager.list_collections()
-            health_status.update({
-                "collections_count": len(collections["collections"]),
-                "qdrant_status": "connected"
-            })
-        else:
-            health_status["qdrant_status"] = "disconnected"
-
-        overall_status = "healthy" if all([
-            rag_service.vector_manager.is_connected(),
-            rag_service.document_processor
-        ]) else "unhealthy"
-
-        return {
-            "status": overall_status,
-            "message": "Retrieval system status check",
-            "components": health_status
-        }
-    except Exception as e:
-        logger.error("Retrieval health check failed: %s", e)
-        return {
-            "status": "unhealthy",
-            "message": f"Retrieval health check failed: {e}"
-        }
-
-@router.get("/debug/info")
-async def get_retrieval_debug_info(request: Request):
-    """디버깅을 위한 retrieval 상세 정보 조회"""
-    try:
-        rag_service = get_rag_service(request)
-        vectordb_config = rag_service.config
-
-        debug_info = {
-            "vector_manager": {
-                "connected": rag_service.vector_manager.is_connected(),
-                "host": vectordb_config.QDRANT_HOST.value,
-                "port": vectordb_config.QDRANT_PORT.value,
-                "use_grpc": vectordb_config.QDRANT_USE_GRPC.value,
-                "grpc_port": vectordb_config.QDRANT_GRPC_PORT.value,
-            },
-            "document_processor": {
-                "initialized": bool(rag_service.document_processor),
-                "supported_types": rag_service.document_processor.get_supported_types() if rag_service.document_processor else []
-            },
-            "collection_info": {}
-        }
-
-        # 컬렉션 정보 추가
-        if rag_service.vector_manager.is_connected():
-            try:
-                collections = rag_service.vector_manager.list_collections()
-                debug_info["collection_info"] = collections
-            except Exception as e:
-                debug_info["collection_info"] = {"error": str(e)}
-
-        return debug_info
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get retrieval debug info: {str(e)}")
-
-@router.get("/config")
-async def get_retrieval_config(request: Request):
-    """현재 retrieval 시스템 설정 조회"""
-    try:
-        if hasattr(request.app.state, 'config') and request.app.state.config:
-            vectordb_config = request.app.state.config["vectordb"]
-
-            return {
-                "vectordb": {
-                    "host": vectordb_config.QDRANT_HOST.value,
-                    "port": vectordb_config.QDRANT_PORT.value,
-                    "use_grpc": vectordb_config.QDRANT_USE_GRPC.value,
-                    "grpc_port": vectordb_config.QDRANT_GRPC_PORT.value,
-                    "collection_name": vectordb_config.COLLECTION_NAME.value,
-                    "vector_dimension": vectordb_config.VECTOR_DIMENSION.value,
-                    "replicas": vectordb_config.REPLICAS.value,
-                    "shards": vectordb_config.SHARDS.value
-                }
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Configuration not available")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get retrieval config: {str(e)}")
-
-@router.post("/refresh-db")
+@router.post("/refresh/rag-system")
 async def refresh_retrieval_config(request: Request):
     """현재 retrieval 시스템 설정 조회"""
     try:
         config_composer = get_config_composer(request)
-        vectordb_category = config_composer.get_config_by_category_name('vectordb')
-        collection_category = config_composer.get_config_by_category_name('collection')
-        openai_category = config_composer.get_config_by_category_name('openai')
+        embedding_client = EmbeddingFactory.create_embedding_client(config_composer)
+        request.app.state.embedding_client = embedding_client
 
-        logger.info("Initializing RAG services...")
-        rag_service = RAGService(vectordb_category, collection_category, openai_category)
+        vector_manager = VectorManager(config_composer)
+        request.app.state.vector_manager = vector_manager
 
-        request.app.state.rag_service = rag_service
-        request.app.state.vector_manager = rag_service.vector_manager
-        request.app.state.embedding_client = rag_service.embeddings_client
-        request.app.state.document_processor = rag_service.document_processor
+        document_processor = DocumentProcessor(config_composer)
+        request.app.state.document_processor = document_processor
+
+        document_info_generator = DocumentInfoGenerator(config_composer)
+        request.app.state.document_info_generator = document_info_generator
 
         return {
             "message": "Retrieval configuration refreshed successfully"

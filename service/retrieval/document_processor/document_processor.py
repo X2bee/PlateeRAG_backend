@@ -3,7 +3,6 @@ import logging, os, re, bisect, asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .config import AppStateConfigProvider, ConfigProvider, is_image_text_enabled
 from .utils import (clean_text, clean_code_text, find_chunk_position, build_line_starts,
                     pos_to_line)
 from .chunking import (split_text_preserving_html_blocks, reconstruct_text_from_chunks,
@@ -21,9 +20,8 @@ class DocumentProcessor:
     원본 클래스의 공개 메서드/시그니처/동작을 그대로 유지.
     내부 구현은 모듈로 분리(위임).
     """
-    def __init__(self, collection_config=None, config_provider: Optional[ConfigProvider] = None):
-        self.collection_config = collection_config
-        self._config_provider = config_provider or AppStateConfigProvider()
+    def __init__(self, config_composer = None):
+        self.config_composer = config_composer
 
         # 타입 세트(원본과 동일)
         self.document_types = ['pdf', 'docx', 'doc', 'pptx', 'ppt']
@@ -101,18 +99,57 @@ class DocumentProcessor:
 
     # === 기존 private 메서드 대체 ===
     def _get_current_image_text_config(self) -> Dict[str, Any]:
-        # 기존과 완전히 동일한 효과: app.state.config_composer 있으면 거기서 읽고, 아니면 fallback
-        return self._config_provider.get_current_image_text_config()
+        if self.config_composer:
+            document_processor_config = self.config_composer.get_config_by_category_name("document-processor")
+            provider = document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_MODEL_PROVIDER.value
 
-    def _is_image_text_enabled(self, config: Dict[str, Any]) -> bool:
-        try:
-            from langchain_openai import ChatOpenAI  # noqa
-            langchain_ok = True
-        except Exception:
-            langchain_ok = False
-        return is_image_text_enabled(config, langchain_ok)
+            if provider == "openai":
+                config = {
+                    'provider': str(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_MODEL_PROVIDER.value).lower(),
+                    'base_url': str(document_processor_config.DOCUMENT_PROCESSOR_OPENAI_IMAGE_TEXT_BASE_URL.value),
+                    'api_key': str(self.config_composer.get_config_by_name("OPENAI_API_KEY").value),
+                    'model': str(document_processor_config.DOCUMENT_PROCESSOR_OPENAI_IMAGE_TEXT_MODEL_NAME.value),
+                    'temperature': float(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_TEMPERATURE.value),
+                    'batch_size': int(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_BATCH_SIZE.value),
+                }
+
+            elif provider == "vllm":
+                config = {
+                    'provider': str(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_MODEL_PROVIDER.value).lower(),
+                    'base_url': str(document_processor_config.DOCUMENT_PROCESSOR_VLLM_IMAGE_TEXT_BASE_URL.value),
+                    'api_key': str(document_processor_config.DOCUMENT_PROCESSOR_VLLM_IMAGE_TEXT_API_KEY.value),
+                    'model': str(document_processor_config.DOCUMENT_PROCESSOR_VLLM_IMAGE_TEXT_MODEL_NAME.value),
+                    'temperature': float(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_TEMPERATURE.value),
+                    'batch_size': int(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_BATCH_SIZE.value),
+                }
+
+            elif provider == "no_model":
+                config = {
+                    'provider': str(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_MODEL_PROVIDER.value).lower(),
+                    'base_url': "",
+                    'api_key': "",
+                    'model': "",
+                    'temperature': 0,
+                    'batch_size': 0
+                }
+
+            else:
+                raise ValueError(f"Unsupported IMAGE_TEXT_MODEL_PROVIDER: {provider}")
+        else:
+            raise ValueError("Config composer not provided")
+
+        return config
+
+    # def _is_image_text_enabled(self, config: Dict[str, Any]) -> bool:
+    #     try:
+    #         from langchain_openai import ChatOpenAI  # noqa
+    #         langchain_ok = True
+    #     except Exception:
+    #         langchain_ok = False
+    #     return is_image_text_enabled(config, langchain_ok)
 
     # === 공개 API들: 원본과 동일 시그니처/동작 ===
+
     def get_supported_types(self) -> List[str]:
         return self.supported_types.copy()
 
@@ -328,47 +365,47 @@ class DocumentProcessor:
         except Exception:
             return {'extension':'unknown','category':'unknown','supported':'false'}
 
-    def get_current_config_status(self) -> Dict[str, Any]:
-        try:
-            cfg = self._get_current_image_text_config()
-            try:
-                from langchain_openai import ChatOpenAI  # noqa
-                langchain_ok = True
-            except Exception:
-                langchain_ok = False
-            status = {
-                "provider": cfg.get('provider','unknown'),
-                "ocr_enabled": is_image_text_enabled(cfg, langchain_ok),
-                "base_url": cfg.get('base_url','unknown'),
-                "model": cfg.get('model','unknown'),
-                "temperature": cfg.get('temperature','unknown'),
-                "batch_size": cfg.get('batch_size',1),
-                "langchain_available": langchain_ok,
-            }
-            # 라이브러리 가용성 요약(간단)
-            try:
-                from pdf2image import convert_from_path  # noqa
-                status["pdf2image_available"] = True
-            except Exception:
-                status["pdf2image_available"] = False
-            try:
-                from docx2pdf import convert as docx_to_pdf_convert  # noqa
-                status["docx2pdf_available"] = True
-            except Exception:
-                status["docx2pdf_available"] = False
-            try:
-                from pptx import Presentation  # noqa
-                status["python_pptx_available"] = True
-            except Exception:
-                status["python_pptx_available"] = False
-            try:
-                from PIL import Image  # noqa
-                status["pil_available"] = True
-            except Exception:
-                status["pil_available"] = False
-            return status
-        except Exception as e:
-            return {"error": str(e)}
+    # def get_current_config_status(self) -> Dict[str, Any]:
+    #     try:
+    #         cfg = self._get_current_image_text_config()
+    #         try:
+    #             from langchain_openai import ChatOpenAI  # noqa
+    #             langchain_ok = True
+    #         except Exception:
+    #             langchain_ok = False
+    #         status = {
+    #             "provider": cfg.get('provider','unknown'),
+    #             "ocr_enabled": is_image_text_enabled(cfg, langchain_ok),
+    #             "base_url": cfg.get('base_url','unknown'),
+    #             "model": cfg.get('model','unknown'),
+    #             "temperature": cfg.get('temperature','unknown'),
+    #             "batch_size": cfg.get('batch_size',1),
+    #             "langchain_available": langchain_ok,
+    #         }
+    #         # 라이브러리 가용성 요약(간단)
+    #         try:
+    #             from pdf2image import convert_from_path  # noqa
+    #             status["pdf2image_available"] = True
+    #         except Exception:
+    #             status["pdf2image_available"] = False
+    #         try:
+    #             from docx2pdf import convert as docx_to_pdf_convert  # noqa
+    #             status["docx2pdf_available"] = True
+    #         except Exception:
+    #             status["docx2pdf_available"] = False
+    #         try:
+    #             from pptx import Presentation  # noqa
+    #             status["python_pptx_available"] = True
+    #         except Exception:
+    #             status["python_pptx_available"] = False
+    #         try:
+    #             from PIL import Image  # noqa
+    #             status["pil_available"] = True
+    #         except Exception:
+    #             status["pil_available"] = False
+    #         return status
+    #     except Exception as e:
+    #         return {"error": str(e)}
 
     def test(self):
         try:
@@ -380,7 +417,6 @@ class DocumentProcessor:
                 langchain_ok = True
             except Exception:
                 langchain_ok = False
-            logger.info(f"🔍 Test - OCR enabled: {is_image_text_enabled(cfg, langchain_ok)}")
         except Exception as e:
             logger.error(f"Error in test method: {e}")
             raise

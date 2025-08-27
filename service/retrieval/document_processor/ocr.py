@@ -16,15 +16,10 @@ try:
 except ImportError:
     LANGCHAIN_OPENAI_AVAILABLE = False
 
-from .config import is_image_text_enabled
-
 
 # ========================
 # Common helpers (DRY)
 # ========================
-
-def _ocr_enabled(cfg: Dict[str, Any]) -> bool:
-    return is_image_text_enabled(cfg, LANGCHAIN_OPENAI_AVAILABLE)
 
 def _build_llm(cfg: Dict[str, Any], *, temperature_override: Optional[float] = None) -> Tuple[Optional[Any], Optional[str]]:
     provider = cfg.get("provider", "openai")
@@ -81,10 +76,10 @@ def merge_images_vertically(image_paths: List[str], max_width: int = 2000) -> st
         from PIL import Image
     except ImportError:
         raise ImportError("PIL(Pillow)이 필요합니다: pip install Pillow")
-    
+
     if not image_paths:
         raise ValueError("이미지 경로가 비어있습니다")
-    
+
     images = []
     for path in image_paths:
         img = Image.open(path)
@@ -94,14 +89,14 @@ def merge_images_vertically(image_paths: List[str], max_width: int = 2000) -> st
             new_height = int(img.height * ratio)
             img = img.resize((max_width, new_height), Image.LANCZOS)
         images.append(img)
-    
+
     # 최대 너비 계산
     max_img_width = max(img.width for img in images)
     total_height = sum(img.height for img in images)
-    
+
     # 합성 이미지 생성 (흰색 배경)
     merged = Image.new('RGB', (max_img_width, total_height), 'white')
-    
+
     # 이미지들을 세로로 붙이기
     y_offset = 0
     for img in images:
@@ -109,7 +104,7 @@ def merge_images_vertically(image_paths: List[str], max_width: int = 2000) -> st
         x_offset = (max_img_width - img.width) // 2
         merged.paste(img, (x_offset, y_offset))
         y_offset += img.height
-    
+
     # 임시 파일로 저장
     with tempfile.NamedTemporaryFile(suffix='_merged.png', delete=False) as temp_file:
         merged.save(temp_file.name, 'PNG', quality=95)
@@ -244,11 +239,11 @@ def _prompt_multi_text_with_ref(num: int, references: List[str]) -> str:
         "각 이미지 결과는 `=== 이미지 N ===` 구획으로 나눠서 출력.\n\n"
         "변환 규칙은 단일 멀티 프롬프트와 동일하며, 표 병합 내용은 표 아래에 텍스트로도 완전 기재.\n\n"
         "반드시 한국어/영어만 출력, 추가 설명 금지."
-        
+
     )
 
 def _prompt_pdf_single_md(html_reference: str) -> str:
-    
+
     return (
         "이 PDF 페이지 이미지를 정확한 마크다운으로 변환해주세요.\n\n"
         "**HTML 참고 텍스트:**\n"
@@ -370,9 +365,6 @@ def parse_batch_ocr_response(response_text: str, expected_count: int) -> List[st
 # ========================
 
 async def convert_image_to_text(image_path: str, current_config: Dict[str, Any]) -> str:
-    if not _ocr_enabled(current_config):
-        return "[이미지 파일: 이미지-텍스트 변환이 설정되지 않았습니다]"
-
     prov_err = _provider_or_error(current_config)
     if prov_err:
         return prov_err
@@ -393,9 +385,6 @@ async def convert_image_to_text(image_path: str, current_config: Dict[str, Any])
 
 
 async def convert_image_to_text_with_reference(image_path: str, reference_text: str, current_config: Dict[str, Any]) -> str:
-    if not _ocr_enabled(current_config):
-        return "[이미지 파일: 이미지-텍스트 변환이 설정되지 않았습니다]"
-
     prov_err = _provider_or_error(current_config)
     if prov_err:
         return prov_err
@@ -416,9 +405,6 @@ async def convert_image_to_text_with_reference(image_path: str, reference_text: 
 
 
 async def convert_multiple_images_to_text(image_paths: List[str], config: Dict[str, Any]) -> List[str]:
-    if not _ocr_enabled(config):
-        return ["[이미지 파일: 이미지-텍스트 변환이 설정되지 않았습니다]" for _ in image_paths]
-
     prov_err = _provider_or_error(config)
     if prov_err:
         return [prov_err for _ in image_paths]
@@ -442,9 +428,6 @@ async def convert_multiple_images_to_text(image_paths: List[str], config: Dict[s
 
 
 async def convert_multiple_images_to_text_with_reference(image_paths: List[str], references: List[str], config: Dict[str, Any]) -> List[str]:
-    if not _ocr_enabled(config):
-        return ["[이미지 파일: 이미지-텍스트 변환이 설정되지 않았습니다]" for _ in image_paths]
-
     prov_err = _provider_or_error(config)
     if prov_err:
         return [prov_err for _ in image_paths]
@@ -504,9 +487,6 @@ async def convert_images_to_text_batch_with_reference(
 # ========================
 
 async def convert_pdf_to_markdown_with_html_reference(pdf_path: str, html_reference: str, current_config: Dict[str, Any]) -> str:
-    if not _ocr_enabled(current_config):
-        return "[PDF 변환 실패: OCR 설정 없음]"
-
     try:
         from pdf2image import convert_from_path
         from PIL import Image
@@ -532,22 +512,22 @@ async def convert_pdf_to_markdown_with_html_reference(pdf_path: str, html_refere
                 merged_path = None
                 try:
                     merged_path = merge_images_vertically(image_paths)
-                    
+
                     # 합쳐진 이미지로 OCR 처리
                     llm, err = _build_llm(current_config, temperature_override=0.1)
                     if err:
                         return err
-                    
+
                     b64 = _b64_from_file(merged_path)
                     prompt = _prompt_merged_pages_md(html_reference, len(image_paths))
 
                     logger.info(f"합쳐진 이미지 OCR 시작: {prompt}페이지")
                     result = await _ainvoke_images(llm, prompt, [b64])
-                    
+
                     logger.info(f"합쳐진 이미지 OCR 결과: {result}")
                     logger.info(f"합쳐진 이미지 OCR 완료: {len(image_paths)}페이지")
                     return result if result and not str(result).startswith("[이미지 파일:") else "[마크다운 변환 실패]"
-                    
+
                 except Exception as e:
                     logger.error(f"이미지 합치기 실패, 개별 처리로 폴백: {e}")
                     # 실패시 기존 방식으로 폴백
@@ -563,7 +543,7 @@ async def convert_pdf_to_markdown_with_html_reference(pdf_path: str, html_refere
                         for path in image_paths:
                             text = await convert_single_pdf_image_to_markdown_with_html(path, html_reference, current_config)
                             page_texts.append(text)
-                    
+
                     all_md = []
                     for i, text in enumerate(page_texts):
                         if text and not str(text).startswith("[이미지 파일:"):
@@ -580,7 +560,7 @@ async def convert_pdf_to_markdown_with_html_reference(pdf_path: str, html_refere
                 # 4페이지 이상이면서 batch_size가 1일 때만 배치 처리
                 batch_size = current_config.get('batch_size', 2)
                 logger.info(f"페이지 수({len(image_paths)})가 3 초과입니다. batch_size: {batch_size}")
-                
+
                 if batch_size == 1:
                     # batch_size가 1일 때만 배치 처리
                     logger.info("batch_size가 1이므로 배치 처리합니다.")
@@ -594,13 +574,13 @@ async def convert_pdf_to_markdown_with_html_reference(pdf_path: str, html_refere
                     for path in image_paths:
                         text = await convert_single_pdf_image_to_markdown_with_html(path, html_reference, current_config)
                         page_texts.append(text)
-                
+
                 all_md = []
                 for i, text in enumerate(page_texts):
                     if text and not str(text).startswith("[이미지 파일:"):
                         all_md.append(f"\n## 페이지 {i+1}\n\n{text}\n")
                 return "".join(all_md) if "".join(all_md).strip() else "[마크다운 변환 실패]"
-                
+
         finally:
             # 원본 페이지 이미지들 삭제
             for p in image_paths:
@@ -626,9 +606,6 @@ async def convert_pdf_images_to_markdown_batch(image_paths: List[str], html_refe
 
 
 async def convert_single_pdf_image_to_markdown_with_html(image_path: str, html_reference: str, config: Dict[str, Any]) -> str:
-    if not _ocr_enabled(config):
-        return "[이미지 변환 실패: OCR 설정 없음]"
-
     prov_err = _provider_or_error(config)
     if prov_err:
         return prov_err
@@ -647,9 +624,6 @@ async def convert_single_pdf_image_to_markdown_with_html(image_path: str, html_r
 
 
 async def convert_multiple_pdf_images_to_markdown_with_html(image_paths: List[str], html_reference: str, config: Dict[str, Any]) -> List[str]:
-    if not _ocr_enabled(config):
-        return ["[배치 변환 실패: OCR 설정 없음]" for _ in image_paths]
-
     prov_err = _provider_or_error(config)
     if prov_err:
         return [prov_err for _ in image_paths]

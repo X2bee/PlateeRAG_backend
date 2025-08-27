@@ -6,7 +6,6 @@ from pathlib import Path
 import PyPDF2
 from .utils import clean_text, is_text_quality_sufficient
 from .ocr import convert_images_to_text_batch_with_reference
-from .config import is_image_text_enabled
 
 logger = logging.getLogger("document-processor")
 
@@ -64,14 +63,14 @@ def extract_text_from_pdf_fitz(file_path: str) -> str:
     for i in range(len(doc)):
         p = doc.load_page(i)
         t = p.get_text("text")
-        
+
         # 텍스트 앞부분에서 페이지 번호 제거
         page_num = str(i + 1)
         if t.strip().startswith(page_num):
             # 페이지 번호 다음에 공백이나 개행이 있는지 확인하고 제거
             remaining_text = t.strip()[len(page_num):].lstrip()
             t = remaining_text
-        
+
         all_text += f"\n<페이지 번호> {i+1} </페이지 번호>\n{t}"
         if not str(t).endswith("\n"):
             all_text += "\n"
@@ -131,7 +130,7 @@ async def extract_text_from_pdf_fallback(file_path: str) -> str:
 async def _extract_pdf_text_only(file_path: str) -> str:
     """기계적 텍스트 추출만 사용 (OCR 없이)"""
     logger.info("PDF: Using text-only extraction methods")
-    
+
     # PyMuPDF 우선 시도
     if PYMUPDF_AVAILABLE:
         try:
@@ -186,24 +185,19 @@ async def _extract_pdf_text_only(file_path: str) -> str:
     return await extract_text_from_pdf_fallback(file_path)
 
 async def extract_text_from_pdf_via_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
-    """OCR 기반 텍스트 추출"""
-    if not is_image_text_enabled(current_config, True):
-        logger.warning("PDF: OCR requested but not enabled, falling back to text extraction")
-        return await _extract_pdf_text_only(file_path)
-    
     if not PDF2IMAGE_AVAILABLE:
         logger.error("PDF: OCR requested but pdf2image not available")
         return await _extract_pdf_text_only(file_path)
-    
+
     logger.info("PDF: Starting OCR processing")
-    
+
     try:
         # 참조용 텍스트 추출
         extracted_refs = await extract_text_pages_for_reference(file_path)
-        
+
         # PDF를 이미지로 변환
         images = convert_from_path(file_path, dpi=300)
-        
+
         temp_files: List[str] = []
         try:
             # 임시 이미지 파일 생성
@@ -211,34 +205,34 @@ async def extract_text_from_pdf_via_ocr(file_path: str, current_config: Dict[str
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
                     img.save(tf.name, 'PNG')
                     temp_files.append(tf.name)
-            
+
             # OCR 처리
             batch_size = current_config.get('batch_size', 1)
             page_texts = await convert_images_to_text_batch_with_reference(
                 temp_files, extracted_refs, current_config, batch_size
             )
-            
+
             # 결과 조합
             all_text = ""
             for i, t in enumerate(page_texts):
                 if not str(t).startswith("[이미지 파일:"):
                     all_text += f"\n<페이지 번호> {i+1} (OCR) </페이지 번호>\n{t}\n"
-            
+
             if all_text.strip():
                 logger.info(f"PDF: OCR processing completed for {len(page_texts)} pages")
                 return clean_text(all_text)
             else:
                 logger.warning("PDF: OCR failed, falling back to text extraction")
                 return await _extract_pdf_text_only(file_path)
-                
+
         finally:
             # 임시 파일 정리
             for p in temp_files:
-                try: 
+                try:
                     os.unlink(p)
-                except: 
+                except:
                     pass
-                    
+
     except Exception as e:
         logger.error(f"PDF: OCR processing failed: {e}, falling back to text extraction")
         return await _extract_pdf_text_only(file_path)
@@ -246,7 +240,7 @@ async def extract_text_from_pdf_via_ocr(file_path: str, current_config: Dict[str
 async def _extract_pdf_default(file_path: str, current_config: Dict[str, Any]) -> str:
     """기존 PDF 처리 로직 (자동 선택)"""
     provider = current_config.get('provider', 'no_model')
-    
+
     if provider == 'no_model':
         # PyMuPDF 우선 시도
         if PYMUPDF_AVAILABLE:
@@ -265,7 +259,7 @@ async def _extract_pdf_default(file_path: str, current_config: Dict[str, Any]) -
                                     return clean_text(pb_text)
                             except Exception:
                                 pass
-                        
+
                         # pdfminer layout으로 재시도
                         if PDFMINER_AVAILABLE:
                             try:
@@ -274,7 +268,7 @@ async def _extract_pdf_default(file_path: str, current_config: Dict[str, Any]) -
                                     return clean_text(layout_text)
                             except Exception:
                                 pass
-                    
+
                     # fitz 결과가 충분한 품질이면 사용
                     if is_text_quality_sufficient(fitz_text):
                         return fitz_text
@@ -324,7 +318,7 @@ async def _extract_pdf_default(file_path: str, current_config: Dict[str, Any]) -
                     return fitz_text
             except Exception:
                 pass
-        
+
         # 최후 수단: PyPDF2 fallback
         return await extract_text_from_pdf_fallback(file_path)
 
@@ -341,12 +335,12 @@ async def extract_text_from_pdf(file_path: str, current_config: Dict[str, Any], 
         # 기계적 텍스트 추출 (OCR 없이)
         logger.info("PDF text extraction processing requested")
         return await _extract_pdf_text_only(file_path)
-    
+
     elif process_type == "ocr":
         # OCR 강제 사용
         logger.info("PDF OCR processing requested")
         return await extract_text_from_pdf_via_ocr(file_path, current_config)
-    
+
     else:  # process_type == "default"
         # 기존 자동 선택 로직 유지
         return await _extract_pdf_default(file_path, current_config)

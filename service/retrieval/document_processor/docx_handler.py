@@ -6,7 +6,6 @@ from docx import Document
 
 from .utils import clean_text
 from .ocr import convert_images_to_text_batch, convert_pdf_to_markdown_with_html_reference
-from .config import is_image_text_enabled
 from .html_reprocessor import clean_html_file
 logger = logging.getLogger("document-processor")
 
@@ -114,24 +113,24 @@ async def convert_docx_to_pdf_libreoffice(file_path: str) -> str:
         import subprocess
         with tempfile.TemporaryDirectory() as temp_dir:
             cmd = [
-                'libreoffice', '--headless', '--convert-to', 'pdf', 
+                'libreoffice', '--headless', '--convert-to', 'pdf',
                 '--outdir', temp_dir, file_path
             ]
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            
+
             docx_name = Path(file_path).stem
             pdf_path = os.path.join(temp_dir, f"{docx_name}.pdf")
-            
+
             if not os.path.exists(pdf_path):
                 raise FileNotFoundError(f"PDF conversion failed: {pdf_path}")
-            
+
             # 임시 파일로 복사
             with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_pdf:
                 with open(pdf_path, 'rb') as f:
                     temp_pdf.write(f.read())
                 logger.info(f"DOCX → PDF 변환 완료: {temp_pdf.name}")
                 return temp_pdf.name
-                
+
     except subprocess.CalledProcessError as e:
         logger.error(f"LibreOffice PDF conversion failed: {e.stderr}")
         raise
@@ -180,28 +179,28 @@ async def convert_docx_to_html_text(file_path: str) -> str:
     """DOCX를 HTML로 변환 후 정리된 HTML 반환"""
     try:
         import subprocess
-        
+
         with tempfile.TemporaryDirectory() as temp_dir:
             cmd = [
                 'libreoffice', '--headless', '--convert-to', 'html',
                 '--outdir', temp_dir, file_path
             ]
             subprocess.run(cmd, check=True, capture_output=True)
-            
+
             docx_name = Path(file_path).stem
             html_path = os.path.join(temp_dir, f"{docx_name}.html")
-            
+
             if not os.path.exists(html_path):
                 raise FileNotFoundError("HTML conversion failed")
-            
+
             # HTML 파일 읽기
             with open(html_path, 'r', encoding='utf-8') as f:
                 html_content = f.read()
-            
+
             # HTML 정리해서 반환
             cleaned_html = clean_html_file(html_content)
             return cleaned_html
-            
+
     except Exception as e:
         logger.error(f"HTML conversion failed: {e}")
         raise
@@ -261,15 +260,11 @@ async def extract_text_from_docx_fallback_html(file_path: str) -> str:
 # 3. 이미지 OCR 방식
 async def extract_text_from_docx_via_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
     """DOCX → 이미지 → OCR 처리"""
-    if not is_image_text_enabled(current_config, True):
-        logger.warning("DOCX: OCR requested but not enabled, falling back to text extraction")
-        return await extract_text_from_docx_fallback(file_path)
-    
     images = await convert_docx_to_images(file_path)
     if not images:
         logger.warning("DOCX: Image conversion failed, falling back to text extraction")
         return await extract_text_from_docx_fallback(file_path)
-    
+
     try:
         batch_size = current_config.get('batch_size', 1)
         page_texts = await convert_images_to_text_batch(images, current_config, batch_size)
@@ -277,7 +272,7 @@ async def extract_text_from_docx_via_ocr(file_path: str, current_config: Dict[st
         for i, t in enumerate(page_texts):
             if not str(t).startswith("[이미지 파일:"):
                 all_text += f"\n<페이지 번호> {i+1} (OCR) </페이지 번호>n{t}\n"
-        
+
         if all_text.strip():
             logger.info(f"DOCX: OCR processing completed for {len(page_texts)} pages")
             return clean_text(all_text)
@@ -292,32 +287,28 @@ async def extract_text_from_docx_via_ocr(file_path: str, current_config: Dict[st
 # 4. HTML+PDF OCR 복합 방식
 async def extract_text_from_docx_via_html_pdf_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
     """DOCX를 HTML(텍스트) + PDF(이미지)로 변환 후 OCR로 마크다운 생성"""
-    if not is_image_text_enabled(current_config, True):
-        logger.warning("DOCX: HTML+PDF OCR requested but not enabled, falling back to HTML extraction")
-        return await extract_text_from_docx_fallback_html(file_path)
-    
     pdf_path = None
     try:
         # 1. DOCX → HTML 텍스트 추출 (reference용)
         html_reference_text = await convert_docx_to_html_text(file_path)
         logger.info("DOCX → HTML 텍스트 추출 완료")
-        
+
         # 2. DOCX → PDF 변환
         pdf_path = await convert_docx_to_pdf_libreoffice(file_path)
         logger.info("DOCX → PDF 변환 완료")
-        
+
         # 3. PDF → 마크다운 (HTML 텍스트를 reference로 사용)
         markdown_result = await convert_pdf_to_markdown_with_html_reference(
             pdf_path, html_reference_text, current_config
         )
-        
+
         if markdown_result and not markdown_result.startswith("["):
             logger.info("DOCX: HTML+PDF OCR processing completed")
             return clean_text(markdown_result)
         else:
             logger.warning("DOCX: HTML+PDF OCR failed, falling back to HTML extraction")
             return await extract_text_from_docx_fallback_html(file_path)
-            
+
     except Exception as e:
         logger.error(f"DOCX: HTML+PDF OCR processing failed: {e}, falling back to HTML extraction")
         return await extract_text_from_docx_fallback_html(file_path)
@@ -331,10 +322,10 @@ async def extract_text_from_docx_via_html_pdf_ocr(file_path: str, current_config
 async def _extract_docx_default(file_path: str, current_config: Dict[str, Any]) -> str:
     """기존 DOCX 처리 로직 (자동 선택)"""
     provider = current_config.get('provider', 'no_model')
-    
+
     if provider == 'no_model':
         return await extract_text_from_docx_fallback_html(file_path)  # HTML 방식 사용
-    
+
     # 1순위: HTML+PDF OCR 방식
     try:
         return await extract_text_from_docx_fallback_html(file_path)  # HTML 방식 사용
@@ -347,27 +338,27 @@ async def extract_text_from_docx(file_path: str, current_config: Dict[str, Any],
     """DOCX 텍스트 추출 메인 함수"""
     provider = current_config.get('provider', 'no_model')
     logger.info(f"Real-time DOCX processing with provider: {provider}, process_type: {process_type}")
-    
+
     if process_type == "text":
         # 1. 기본 텍스트 추출 (python-docx 직접 사용)
         logger.info("DOCX basic text extraction processing requested")
         return await extract_text_from_docx_fallback(file_path)
-    
+
     elif process_type == "html":
         # 2. HTML 변환 방식
         logger.info("DOCX HTML processing requested")
         return await extract_text_from_docx_fallback_html(file_path)
-    
+
     elif process_type == "ocr":
         # 3. 이미지 OCR 방식
         logger.info("DOCX OCR processing requested")
         return await extract_text_from_docx_via_ocr(file_path, current_config)
-    
+
     elif process_type == "html_pdf_ocr":
         # 4. HTML+PDF OCR 복합 방식
         logger.info("DOCX HTML+PDF OCR processing requested")
         return await extract_text_from_docx_via_html_pdf_ocr(file_path, current_config)
-    
+
     else:  # process_type == "default"
         # 기존 자동 선택 로직 유지
         return await _extract_docx_default(file_path, current_config)
