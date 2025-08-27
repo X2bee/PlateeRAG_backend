@@ -21,10 +21,15 @@ from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, Vector
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from service.embedding import get_fastembed_service
-from service.retrieval.rag_service import RAGService
+
+from service.retrieval import RAGService
+from service.embedding.embedding_factory import EmbeddingFactory
+from service.vector_db.vector_manager import VectorManager
+from service.retrieval.document_processor.document_processor import DocumentProcessor
+from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 
 logger = logging.getLogger("retrieval-controller")
-router = APIRouter(prefix="/api/retrieval", tags=["retrieval"])
+router = APIRouter(prefix="/retrieval", tags=["retrieval"])
 
 # 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
 TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
@@ -78,7 +83,7 @@ class DocumentSearchRequest(BaseModel):
     rerank: Optional[bool] = False
     rerank_top_k: Optional[int] = 20
 
-# Collection Management Endpoints
+# Collection Management Endpoints 문제없음
 @router.get("/collections")
 async def list_collections(request: Request,):
     """모든 컬렉션 목록 조회"""
@@ -598,10 +603,7 @@ async def get_retrieval_config(request: Request):
                     "port": vectordb_config.QDRANT_PORT.value,
                     "use_grpc": vectordb_config.QDRANT_USE_GRPC.value,
                     "grpc_port": vectordb_config.QDRANT_GRPC_PORT.value,
-                    "collection_name": vectordb_config.COLLECTION_NAME.value,
                     "vector_dimension": vectordb_config.VECTOR_DIMENSION.value,
-                    "replicas": vectordb_config.REPLICAS.value,
-                    "shards": vectordb_config.SHARDS.value
                 }
             }
         else:
@@ -609,22 +611,22 @@ async def get_retrieval_config(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get retrieval config: {str(e)}")
 
-@router.post("/refresh-db")
+@router.post("/refresh/rag-system")
 async def refresh_retrieval_config(request: Request):
     """현재 retrieval 시스템 설정 조회"""
     try:
         config_composer = get_config_composer(request)
-        vectordb_category = config_composer.get_config_by_category_name('vectordb')
-        collection_category = config_composer.get_config_by_category_name('collection')
-        openai_category = config_composer.get_config_by_category_name('openai')
+        embedding_client = EmbeddingFactory.create_embedding_client(config_composer)
+        request.app.state.embedding_client = embedding_client
 
-        logger.info("Initializing RAG services...")
-        rag_service = RAGService(vectordb_category, collection_category, openai_category)
+        vector_manager = VectorManager(config_composer)
+        request.app.state.vector_manager = vector_manager
 
-        request.app.state.rag_service = rag_service
-        request.app.state.vector_manager = rag_service.vector_manager
-        request.app.state.embedding_client = rag_service.embeddings_client
-        request.app.state.document_processor = rag_service.document_processor
+        document_processor = DocumentProcessor(config_composer)
+        request.app.state.document_processor = document_processor
+
+        document_info_generator = DocumentInfoGenerator(config_composer)
+        request.app.state.document_info_generator = document_info_generator
 
         return {
             "message": "Retrieval configuration refreshed successfully"

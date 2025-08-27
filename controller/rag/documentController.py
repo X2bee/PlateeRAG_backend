@@ -22,7 +22,7 @@ from service.database.models.user import User
 logger = logging.getLogger("document-controller")
 security = HTTPBearer(auto_error=False)
 
-router = APIRouter(prefix="/api/documents", tags=["Documents"])
+router = APIRouter(prefix="/documents", tags=["Documents"])
 
 # 설정 상수
 DOCUMENTS_BASE_DIR = os.getenv("DOCUMENTS_BASE_DIR", "/polarag_backend/downloads")

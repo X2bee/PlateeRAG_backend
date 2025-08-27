@@ -62,26 +62,12 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
     """특정 PersistentConfig 값 업데이트"""
     try:
         config_composer = get_config_composer(request)
-        config_obj = config_composer.get_config_by_name(config_name)
-        old_value = config_obj.value
 
-        # 값 타입에 따라 적절히 변환
-        value = new_value.value
-        if isinstance(config_obj.env_value, bool):
-            config_obj.value = bool(value)
-        elif isinstance(config_obj.env_value, int):
-            config_obj.value = int(value)
-        elif isinstance(config_obj.env_value, float):
-            config_obj.value = float(value)
-        else:
-            config_obj.value = str(value)
+        # 새로운 통합 업데이트 메서드 사용
+        update_result = config_composer.update_config(config_name, new_value.value)
 
-        # 1. DB에 저장
-        config_obj.save()
-
-        # 2. config_composer의 all_configs 업데이트
-        config_composer.update_config_by_name(config_name, config_obj.value)
-        logger.info("Updated Config Composer '%s': %s -> %s", config_name, old_value, config_composer.get_config_by_name(config_name).value)
+        old_value = update_result["old_value"]
+        new_config_value = update_result["new_value"]
 
         # 3. app.state의 config도 업데이트 (메모리에서 실행 중인 설정들 동기화)
         if hasattr(request.app.state, 'config') and request.app.state.config:
@@ -89,16 +75,17 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
             for category_name, category_config in request.app.state.config.items():
                 if category_name != "all_configs" and hasattr(category_config, config_name):
                     # 해당 카테고리의 설정 객체도 같은 값으로 업데이트
+                    config_obj = getattr(category_config, config_name)
                     setattr(category_config, config_name, config_obj)
                     logger.info("Updated app.state config for category '%s': %s = %s",
                             category_name, config_name, config_obj.value)
 
             # all_configs도 업데이트
             if "all_configs" in request.app.state.config:
-                request.app.state.config["all_configs"][config_name] = config_obj
-                logger.info("Updated app.state.all_configs: %s = %s", config_name, config_obj.value)
+                request.app.state.config["all_configs"][config_name] = config_composer.get_config_by_name(config_name)
+                logger.info("Updated app.state.all_configs: %s = %s", config_name, new_config_value)
 
-        logger.info("Successfully updated config '%s': %s -> %s", config_name, old_value, config_obj.value)
+        logger.info("Successfully updated config '%s': %s -> %s", config_name, old_value, new_config_value)
 
         # 4. 관련 서비스들에게 설정 변경 알림 (필요시 재초기화)
         services_refreshed = []
@@ -148,7 +135,7 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
         return {
             "message": f"Config '{config_name}' updated successfully",
             "old_value": old_value,
-            "new_value": config_obj.value,
+            "new_value": new_config_value,
             "updated_in_memory": True,
             "services_refreshed": services_refreshed
         }
@@ -379,10 +366,7 @@ async def get_rag_config(request: Request):
                     "port": vectordb_config.QDRANT_PORT.value,
                     "use_grpc": vectordb_config.QDRANT_USE_GRPC.value,
                     "grpc_port": vectordb_config.QDRANT_GRPC_PORT.value,
-                    "collection_name": vectordb_config.COLLECTION_NAME.value,
                     "vector_dimension": vectordb_config.VECTOR_DIMENSION.value,
-                    "replicas": vectordb_config.REPLICAS.value,
-                    "shards": vectordb_config.SHARDS.value
                 },
                 "embedding": {
                     "provider": vectordb_config.EMBEDDING_PROVIDER.value,

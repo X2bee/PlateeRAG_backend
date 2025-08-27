@@ -23,24 +23,25 @@ logger = logging.getLogger("vector-manager")
 TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 class VectorManager:
     """벡터 DB 관리를 담당하는 클래스"""
-    def __init__(self, vectordb_config):
+    def __init__(self, config_composer):
         """VectorManager 초기화
 
         Args:
             vectordb_config: 벡터 DB 설정 객체
         """
-        self.config = vectordb_config
+        self.config_composer = config_composer
         self.client = None
         self._initialize_client()
 
     def _initialize_client(self):
         """Qdrant 클라이언트 초기화"""
+        config = self.config_composer.get_config_by_category_name("vectordb")
         try:
-            host = self.config.QDRANT_HOST.value
-            port = self.config.QDRANT_PORT.value
-            api_key = self.config.QDRANT_API_KEY.value
-            use_grpc = self.config.QDRANT_USE_GRPC.value
-            grpc_port = self.config.QDRANT_GRPC_PORT.value
+            host = config.QDRANT_HOST.value
+            port = config.QDRANT_PORT.value
+            api_key = config.QDRANT_API_KEY.value
+            use_grpc = config.QDRANT_USE_GRPC.value
+            grpc_port = config.QDRANT_GRPC_PORT.value
 
             if use_grpc:
                 self.client = QdrantClient(
@@ -495,6 +496,8 @@ class VectorManager:
             collection_name: 대상 컬렉션 이름
             increment: 증감량 (양수: 증가, 음수: 감소)
         """
+        config = self.config_composer.get_config_by_category_name("vectordb")
+
         try:
             # 기존 메타데이터 조회
             search_results = self.client.scroll(
@@ -527,7 +530,7 @@ class VectorManager:
                 # 메타데이터 포인트의 벡터 확인 및 수정
                 if metadata_point.vector is None or len(metadata_point.vector) == 0:
                     # 메타데이터 포인트의 벡터가 없으면 현재 설정된 차원으로 더미 벡터 생성
-                    current_dimension = self.config.VECTOR_DIMENSION.value
+                    current_dimension = config.QDRANT_VECTOR_DIMENSION.value
                     dummy_vector = [0.0] * current_dimension
                 else:
                     dummy_vector = metadata_point.vector

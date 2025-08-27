@@ -5,7 +5,6 @@ from pptx import Presentation
 
 from .utils import clean_text
 from .ocr import convert_images_to_text_batch
-from .config import is_image_text_enabled
 
 logger = logging.getLogger("document-processor")
 
@@ -120,8 +119,6 @@ async def extract_text_from_ppt_fallback(file_path: str) -> str:
     return clean_text(text)
 
 async def extract_text_from_ppt_via_ocr(file_path: str, current_config: Dict[str, Any]) -> str:
-    if not is_image_text_enabled(current_config, True):
-        return await extract_text_from_ppt_fallback(file_path)
     images = await convert_ppt_to_images(file_path)
     if not images:
         return await extract_text_from_ppt_fallback(file_path)

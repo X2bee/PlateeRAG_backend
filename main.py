@@ -9,25 +9,28 @@ from controller.node.nodeApiController import register_node_api_routes
 from controller.node.router import node_router
 from controller.admin.router import admin_router
 from controller.workflow.router import workflow_router
+from controller.rag.router import rag_router
 
 from controller.trainController import router as trainRouter
 from controller.configController import router as configRouter
 from controller.performanceController import router as performanceRouter
-from controller.embeddingController import router as embeddingRouter
-from controller.retrievalController import router as retrievalRouter
 from controller.interactionController import router as interactionRouter
 from controller.huggingface.huggingfaceController import router as huggingfaceRouter
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
-from controller.documentController import router as documentRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
 from service.database import AppDatabaseManager
 from service.database.models import APPLICATION_MODELS
+
 from service.retrieval import RAGService
+from service.embedding.embedding_factory import EmbeddingFactory
 from service.vast.vast_service import VastService
+from service.vector_db.vector_manager import VectorManager
+from service.retrieval.document_processor.document_processor import DocumentProcessor
+from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 
 def print_xgen_logo():
     logo = """
@@ -103,14 +106,24 @@ async def lifespan(app: FastAPI):
         # 4. RAG 서비스 초기화 (벡터 DB와 임베딩 제공자)
         print_step_banner(4, "RAG SERVICES INITIALIZATION", "Setting up vector DB and embedding services")
         try:
-            logger.info("⚙️  Step 4: RAG services initialization starting...")
-            rag_service = RAGService(configs["vectordb"], configs["collection"], configs.get("openai"))
-            # 개별 서비스들을 app.state에 등록
-            app.state.rag_service = rag_service
-            app.state.vector_manager = rag_service.vector_manager
-            app.state.embedding_client = rag_service.embeddings_client
-            app.state.document_processor = rag_service.document_processor
+            print_step_banner(4.1, "EMBEDDING SERVICE SETUP", "Setting up embedding services")
+            embedding_client = EmbeddingFactory.create_embedding_client(config_composer)
+            app.state.embedding_client = embedding_client
 
+            print_step_banner(4.2, "VECTOR SERVICE SETUP", "Setting up vector services")
+            vector_manager = VectorManager(config_composer)
+            app.state.vector_manager = vector_manager
+
+            print_step_banner(4.3, "DOCUMENT PROCESSOR SETUP", "Setting up document processing services")
+            document_processor = DocumentProcessor(config_composer)
+            app.state.document_processor = document_processor
+
+            print_step_banner(4.4, "DOCUMENT INFO GENERATOR SETUP", "Setting up document info generation services")
+            document_info_generator = DocumentInfoGenerator(config_composer)
+            app.state.document_info_generator = document_info_generator
+
+            rag_service = RAGService(config_composer, embedding_client, vector_manager, document_processor, document_info_generator)
+            app.state.rag_service = rag_service
             logger.info("✅ Step 4: RAG services initialized successfully!")
 
         except Exception as e:
@@ -224,18 +237,16 @@ app.add_middleware(
 app.include_router(node_router)
 app.include_router(admin_router)
 app.include_router(workflow_router)
+app.include_router(rag_router)
 
 app.include_router(authRouter)
 app.include_router(configRouter)
 app.include_router(performanceRouter)
 app.include_router(trainRouter)
-app.include_router(embeddingRouter)
-app.include_router(retrievalRouter)
 app.include_router(interactionRouter)
 app.include_router(appRouter)
 app.include_router(vastRouter)
 app.include_router(huggingfaceRouter)
-app.include_router(documentRouter)
 
 if __name__ == "__main__":
     try:
