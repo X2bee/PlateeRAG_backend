@@ -34,7 +34,7 @@ class DocumentProcessorConfig(BaseConfig):
         self.DOCUMENT_PROCESSOR_OPENAI_IMAGE_TEXT_MODEL_NAME = self.create_persistent_config(
             env_name="DOCUMENT_PROCESSOR_OPENAI_IMAGE_TEXT_MODEL_NAME",
             config_path="document_processor.openai.image_text_model_name",
-            default_value="gpt-4-vision-preview"
+            default_value="gpt-4.1-mini-2025-04-14"
         )
 
         # 이미지-텍스트 모델 Base URL

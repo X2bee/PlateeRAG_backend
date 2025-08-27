@@ -8,65 +8,33 @@ Embedding 컨트롤러
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 import logging
+import gc
 from controller.helper.singletonHelper import get_embedding_client, get_rag_service, get_config_composer
 from service.embedding.embedding_factory import EmbeddingFactory
+from controller.rag.helper import safely_replace_embedding_client
 
 logger = logging.getLogger("embedding-controller")
 router = APIRouter(prefix="/embedding", tags=["embedding"])
 
-# Pydantic Models
 class EmbeddingProviderSwitchRequest(BaseModel):
     new_provider: str
 
 class EmbeddingTestRequest(BaseModel):
     query_text: str = "Hello, world!"
 
-def get_config(request: Request):
-    """설정 의존성 주입"""
-    config_composer = get_config_composer(request)
-    if config_composer:
-        return config_composer.get_all_config()
-    else:
-        raise HTTPException(status_code=500, detail="Configuration not available")
-
-
-@router.get("/status")
-async def get_embedding_status(request: Request):
-    """현재 임베딩 클라이언트 상태 조회"""
-    try:
-        rag_service = get_rag_service(request)
-        embedding_client = get_embedding_client(request)
-
-        status_info = rag_service.get_embedding_status()
-
-        # 실제 사용 가능성 체크 (비동기)
-        if embedding_client:
-            try:
-                is_available = await embedding_client.is_available()
-                status_info["available"] = is_available
-            except Exception as e:
-                status_info["available"] = False
-                status_info["availability_error"] = str(e)
-
-        return status_info
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get embedding status: {str(e)}")
-
 @router.post("/test-query")
 async def test_embedding_query(request: Request, test_request: EmbeddingTestRequest):
     """임베딩 생성 테스트"""
     try:
         rag_service = get_rag_service(request)
-        config = get_config(request)
-
-        # 자동 복구 로직이 포함된 임베딩 생성 (debug=True로 상세 로그 출력)
+        config_composer = get_config_composer(request)
         embedding = await rag_service.generate_query_embedding(test_request.query_text, debug=True)
 
         return {
             "query_text": test_request.query_text,
             "embedding_dimension": len(embedding),
-            "embedding_preview": embedding[:5],  # 처음 5개 값만 미리보기
-            "provider": config["vectordb"].EMBEDDING_PROVIDER.value,
+            "embedding_preview": embedding[:5],
+            "provider": config_composer.get_config_by_name("EMBEDDING_PROVIDER").value,
             "success": True
         }
     except Exception as e:
@@ -76,7 +44,6 @@ async def test_embedding_query(request: Request, test_request: EmbeddingTestRequ
 async def switch_embedding_provider(request: Request, switch_request: EmbeddingProviderSwitchRequest):
     """임베딩 제공자 변경"""
     try:
-        rag_service = get_rag_service(request)
         config_composer = get_config_composer(request)
         new_provider = switch_request.new_provider
 
@@ -86,7 +53,6 @@ async def switch_embedding_provider(request: Request, switch_request: EmbeddingP
         update_result = config_composer.update_config('EMBEDDING_PROVIDER', new_provider)
 
         if not update_result:
-            # 실패 원인을 더 자세히 분석
             error_msg = f"Cannot switch to provider '{new_provider}'. "
             if new_provider.lower() == "openai":
                 openai_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
@@ -102,7 +68,7 @@ async def switch_embedding_provider(request: Request, switch_request: EmbeddingP
             raise HTTPException(status_code=400, detail=error_msg)
 
         embedding_client = EmbeddingFactory.create_embedding_client(config_composer)
-        request.app.state.embedding_client = embedding_client
+        safely_replace_embedding_client(request, embedding_client)
 
         if embedding_client:
             provider_info = embedding_client.get_provider_info()
@@ -116,7 +82,7 @@ async def switch_embedding_provider(request: Request, switch_request: EmbeddingP
         else:
             config_composer.update_config('EMBEDDING_PROVIDER', old_provider)
             embedding_client = EmbeddingFactory.create_embedding_client(config_composer)
-            request.app.state.embedding_client = embedding_client
+            safely_replace_embedding_client(request, embedding_client)
 
             raise HTTPException(
                 status_code=500,
@@ -131,14 +97,17 @@ async def switch_embedding_provider(request: Request, switch_request: EmbeddingP
 async def get_embedding_config_status(request: Request):
     """임베딩 설정 상태 조회"""
     try:
-        rag_service = get_rag_service(request)
-        config_status = rag_service.config.get_embedding_provider_status()
+        embedding_client = get_embedding_client(request)
+        config_status = {
+            "client_initialized": False,
+            "client_available": False,
+            "provider_info": {},
+        }
 
-        # 현재 클라이언트 상태 추가
-        if rag_service.embeddings_client:
+        if embedding_client:
             try:
-                is_available = await rag_service.embeddings_client.is_available()
-                provider_info = rag_service.embeddings_client.get_provider_info()
+                is_available = await embedding_client.is_available()
+                provider_info = embedding_client.get_provider_info()
                 config_status.update({
                     "client_initialized": True,
                     "client_available": is_available,

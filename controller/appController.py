@@ -27,13 +27,14 @@ class UserCreateRequest(BaseModel):
 
 @router.get("/status")
 async def get_app_status(request: Request):
-    """애플리케이션 상태 정보 반환"""
+    config_composer = get_config_composer(request)
+
     return {
         "config": {
             "app_name": "PlateeRAG Backend",
             "version": "1.0.0",
-            "environment": request.app.state.config["app"].ENVIRONMENT.value,
-            "debug_mode": request.app.state.config["app"].DEBUG_MODE.value
+            "environment": config_composer.get_config_by_name("ENVIRONMENT").value,
+            "debug_mode": config_composer.get_config_by_name("DEBUG_MODE").value
         },
         "node_count": getattr(request.app.state, 'node_count', 0),
         "available_nodes": [node["id"] for node in getattr(request.app.state, 'node_registry', [])],
@@ -62,82 +63,17 @@ async def update_persistent_config(config_name: str, new_value: ConfigUpdateRequ
     """특정 PersistentConfig 값 업데이트"""
     try:
         config_composer = get_config_composer(request)
-
-        # 새로운 통합 업데이트 메서드 사용
         update_result = config_composer.update_config(config_name, new_value.value)
-
         old_value = update_result["old_value"]
         new_config_value = update_result["new_value"]
 
-        # 3. app.state의 config도 업데이트 (메모리에서 실행 중인 설정들 동기화)
-        if hasattr(request.app.state, 'config') and request.app.state.config:
-            # config 카테고리별로 업데이트된 값 반영
-            for category_name, category_config in request.app.state.config.items():
-                if category_name != "all_configs" and hasattr(category_config, config_name):
-                    # 해당 카테고리의 설정 객체도 같은 값으로 업데이트
-                    config_obj = getattr(category_config, config_name)
-                    setattr(category_config, config_name, config_obj)
-                    logger.info("Updated app.state config for category '%s': %s = %s",
-                            category_name, config_name, config_obj.value)
-
-            # all_configs도 업데이트
-            if "all_configs" in request.app.state.config:
-                request.app.state.config["all_configs"][config_name] = config_composer.get_config_by_name(config_name)
-                logger.info("Updated app.state.all_configs: %s = %s", config_name, new_config_value)
-
         logger.info("Successfully updated config '%s': %s -> %s", config_name, old_value, new_config_value)
-
-        # 4. 관련 서비스들에게 설정 변경 알림 (필요시 재초기화)
-        services_refreshed = []
-        try:
-            # RAG 관련 설정이 변경된 경우 RAG 서비스 재초기화
-            if any(keyword in config_name.lower() for keyword in ['qdrant','embedding', 'vector']):
-                rag_service = get_rag_service(request)
-                logger.info(f"Reinitializing RAG services due to config change: {config_name}")
-
-                try:
-                    # RAG 서비스 재초기화 (main.py와 동일한 로직)
-                    from service.retrieval import RAGService
-
-                    # 기존 인스턴스가 있으면 완전히 정리하고 새로 생성 (싱글톤 패턴)
-                    logger.info("Creating new RAGService instance (existing instance will be cleaned up automatically)")
-
-                    # 새로운 설정으로 RAG 서비스 초기화
-                    vectordb_config = config_composer.get_config_by_category_name("vectordb")
-                    collection_config = config_composer.get_config_by_category_name("collection")
-                    openai_config = config_composer.get_config_by_category_name("openai")
-
-                    # 싱글톤 패턴으로 새 인스턴스 생성 (기존 인스턴스 자동 정리)
-                    rag_service = RAGService(vectordb_config, collection_config, openai_config)
-
-                    # 개별 서비스들을 app.state에 등록 (main.py와 동일)
-                    request.app.state.rag_service = rag_service
-                    request.app.state.vector_manager = rag_service.vector_manager
-                    request.app.state.embedding_client = rag_service.embeddings_client
-                    request.app.state.document_processor = rag_service.document_processor
-
-                    services_refreshed.extend(["rag_service", "vector_manager", "embedding_client", "document_processor"])
-                    logger.info("Successfully reinitialized RAG services with new configuration")
-
-                except Exception as rag_error:
-                    logger.error(f"Failed to reinitialize RAG services: {rag_error}")
-                    # 실패 시 기존 서비스들을 None으로 설정
-                    request.app.state.rag_service = None
-                    request.app.state.vector_manager = None
-                    request.app.state.embedding_client = None
-                    request.app.state.document_processor = None
-                    services_refreshed.append("rag_services_failed")
-
-        except (AttributeError, KeyError) as service_error:
-            logger.warning("Failed to refresh some services after config update: %s", service_error)
-
 
         return {
             "message": f"Config '{config_name}' updated successfully",
             "old_value": old_value,
             "new_value": new_config_value,
             "updated_in_memory": True,
-            "services_refreshed": services_refreshed
         }
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Config '{config_name}' not found") from exc
@@ -150,243 +86,3 @@ async def refresh_persistent_configs(request: Request):
     config_composer = get_config_composer(request)
     config_composer.refresh_all()
     return {"message": "All persistent configs refreshed successfully from database"}
-
-@router.post("/config/persistent/save")
-async def save_persistent_configs(request: Request):
-    """모든 PersistentConfig를 데이터베이스에 저장"""
-    config_composer = get_config_composer(request)
-    config_composer.save_all()
-    return {"message": "All persistent configs saved successfully to database"}
-
-@router.post("/config/test-update")
-async def test_config_update_flow(request: Request):
-    """설정 업데이트 흐름 테스트용 API"""
-    try:
-        config_composer = get_config_composer(request)
-
-        # 현재 app.state 상태 확인
-        state_info = {
-            "has_config": hasattr(request.app.state, 'config'),
-            "has_config_composer": hasattr(request.app.state, 'config_composer'),
-            "has_rag_service": hasattr(request.app.state, 'rag_service'),
-            "has_vector_manager": hasattr(request.app.state, 'vector_manager'),
-            "config_categories": list(request.app.state.config.keys()) if hasattr(request.app.state, 'config') else [],
-            "all_configs_count": len(config_composer.all_configs)
-        }
-
-        # 설정 객체들의 메모리 주소 확인 (참조가 같은지 확인)
-        memory_refs = {}
-        if hasattr(request.app.state, 'config') and request.app.state.config:
-            for category_name, category_config in request.app.state.config.items():
-                if category_name != "all_configs":
-                    memory_refs[category_name] = {
-                        "app_state_id": id(category_config),
-                        "composer_id": id(config_composer.config_categories.get(category_name, None))
-                    }
-
-        return {
-            "message": "Config update flow test completed",
-            "app_state_info": state_info,
-            "memory_references": memory_refs,
-            "reference_consistency": all(
-                ref["app_state_id"] == ref["composer_id"]
-                for ref in memory_refs.values()
-                if ref["composer_id"] is not None
-            )
-        }
-    except Exception as e:
-        logger.error("Config test failed: %s", e)
-        return {"error": f"Config test failed: {e}"}
-
-@router.post("/config/models/list")
-async def get_models_list(request: Request):
-    """모든 모델 관련 설정 정보 반환"""
-    config_composer = get_config_composer(request)
-
-    if not config_composer:
-        raise HTTPException(status_code=500, detail="Configuration composer not available")
-
-    openai_config = config_composer.get_config_by_category_name("openai").get_config_summary()
-    vllm_config = config_composer.get_config_by_category_name("vllm").get_config_summary()
-
-    result = []
-
-    if not openai_config:
-        openai_api_key = None
-        openai_url = None
-        print("OpenAI config not found")
-    else:
-        openai_api_key = openai_config.get("configs", {}).get("OPENAI_API_KEY", {}).get("current_value", "")
-        openai_url = openai_config.get("configs", {}).get("OPENAI_API_BASE_URL", {}).get("current_value", "")
-
-        openai_models = [
-            "gpt-4o-2024-11-20",
-            "gpt-4o-mini-2024-07-18",
-            "gpt-4.1-2025-04-14",
-            "gpt-4.1-mini-2025-04-14"
-        ]
-
-        temperature_default = openai_config.get("configs", {}).get("OPENAI_TEMPERATURE_DEFAULT", {}).get("current_value", 0.7)
-        max_tokens_default = openai_config.get("configs", {}).get("OPENAI_MAX_TOKENS_DEFAULT", {}).get("current_value", 1000)
-
-        for model in openai_models:
-            result.append({
-                "provider": "OpenAI",
-                "api_key": openai_api_key,
-                "api_base_url": openai_url,
-                "model": model,
-                "temperature_default": temperature_default,
-                "max_tokens_default": max_tokens_default
-            })
-
-    if not vllm_config:
-        vllm_model = None
-        vllm_url = None
-        print("VLLM config not found")
-    else:
-        vllm_model = vllm_config.get("configs", {}).get("VLLM_MODEL_NAME", {}).get("current_value", "")
-        vllm_url = vllm_config.get("configs", {}).get("VLLM_API_BASE_URL", {}).get("current_value", "")
-        result.append({
-            "provider": "vLLM",
-            "api_key": "",
-            "api_base_url": vllm_url,
-            "model": vllm_model,
-            "temperature_default": vllm_config.get("configs", {}).get("VLLM_TEMPERATURE_DEFAULT", {}).get("current_value", 0.7),
-            "max_tokens_default": vllm_config.get("configs", {}).get("VLLM_MAX_TOKENS_DEFAULT", {}).get("current_value", 512)
-        })
-
-    return {"result": result}
-
-@router.put("/config")
-async def update_app_config(new_config: dict):
-    """애플리케이션 설정 업데이트"""
-    return {"message": "Config update not implemented yet", "received": new_config}
-
-@router.get("/demo/users")
-async def get_demo_users(request: Request):
-    """데모용: 사용자 목록 조회"""
-    if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
-        raise HTTPException(status_code=500, detail="Application database not available")
-
-    users = request.app.state.app_db.find_all(User, limit=10)
-    return {
-        "users": [user.to_dict() for user in users],
-        "total": len(users)
-    }
-
-@router.post("/demo/users")
-async def create_demo_user(request: Request, user_data: UserCreateRequest):
-    """데모용: 새 사용자 생성"""
-    if not hasattr(request.app.state, 'app_db') or not request.app.state.app_db:
-        raise HTTPException(status_code=500, detail="Application database not available")
-
-    user = User(
-        username=user_data.username,
-        email=user_data.email,
-        full_name=user_data.full_name,
-        password_hash="demo_hash_" + user_data.username
-    )
-
-    user_id = request.app.state.app_db.insert(user)
-
-    if user_id:
-        user.id = user_id
-        return {"message": "User created successfully", "user": user.to_dict()}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to create user")
-
-# Health & Status Endpoints
-@router.get("/docs/health")
-async def health_check(request: Request):
-    """RAG 시스템 연결 상태 확인"""
-    try:
-        rag_service = get_rag_service(request)
-
-        health_status = {
-            "qdrant_client": rag_service.vector_manager.is_connected(),
-            "embeddings_client": bool(rag_service.embeddings_client),
-            "embedding_provider": rag_service.config.EMBEDDING_PROVIDER.value
-        }
-
-        if rag_service.vector_manager.is_connected():
-            collections = rag_service.vector_manager.list_collections()
-            health_status.update({
-                "collections_count": len(collections["collections"]),
-                "qdrant_status": "connected"
-            })
-        else:
-            health_status["qdrant_status"] = "disconnected"
-
-        # 임베딩 클라이언트 상태 상세 확인
-        if rag_service.embeddings_client:
-            try:
-                is_available = await rag_service.embeddings_client.is_available()
-                health_status["embeddings_status"] = "available" if is_available else "unavailable"
-                health_status["embeddings_available"] = is_available
-            except Exception as e:
-                health_status["embeddings_status"] = "error"
-                health_status["embeddings_error"] = str(e)
-                health_status["embeddings_available"] = False
-        else:
-            health_status["embeddings_status"] = "not_initialized"
-            health_status["embeddings_available"] = False
-
-        overall_status = "healthy" if all([
-            rag_service.vector_manager.is_connected(),
-            rag_service.embeddings_client,
-            health_status.get("embeddings_available", False)
-        ]) else "partial"
-
-        return {
-            "status": overall_status,
-            "message": "RAG system status check",
-            "components": health_status
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "message": f"Health check failed: {e}"
-        }
-
-# Configuration Endpoints
-@router.get("/docs/config")
-async def get_rag_config(request: Request):
-    """현재 RAG 시스템 설정 조회"""
-    config_composer = get_config_composer(request)
-
-    try:
-        if config_composer:
-            vectordb_config = config_composer.get_config_by_category_name("vectordb")
-            huggingface_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value
-
-            return {
-                "vectordb": {
-                    "host": vectordb_config.QDRANT_HOST.value,
-                    "port": vectordb_config.QDRANT_PORT.value,
-                    "use_grpc": vectordb_config.QDRANT_USE_GRPC.value,
-                    "grpc_port": vectordb_config.QDRANT_GRPC_PORT.value,
-                    "vector_dimension": vectordb_config.VECTOR_DIMENSION.value,
-                },
-                "embedding": {
-                    "provider": vectordb_config.EMBEDDING_PROVIDER.value,
-                    "auto_detect_dimension": vectordb_config.AUTO_DETECT_EMBEDDING_DIM.value,
-                    "openai": {
-                        "api_key_configured": bool(vectordb_config.get_openai_api_key()),
-                        "model": vectordb_config.OPENAI_EMBEDDING_MODEL.value
-                    },
-                    "huggingface": {
-                        "model_name": vectordb_config.HUGGINGFACE_MODEL_NAME.value,
-                        "api_key_configured": bool(huggingface_token)
-                    },
-                    "custom_http": {
-                        "url": vectordb_config.CUSTOM_EMBEDDING_URL.value,
-                        "model": vectordb_config.CUSTOM_EMBEDDING_MODEL.value,
-                        "api_key_configured": bool(vectordb_config.CUSTOM_EMBEDDING_API_KEY.value)
-                    }
-                }
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Configuration not available")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get config: {str(e)}")

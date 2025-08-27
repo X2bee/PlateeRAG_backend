@@ -107,7 +107,7 @@ class DocumentProcessor:
                 config = {
                     'provider': str(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_MODEL_PROVIDER.value).lower(),
                     'base_url': str(document_processor_config.DOCUMENT_PROCESSOR_OPENAI_IMAGE_TEXT_BASE_URL.value),
-                    'api_key': str(document_processor_config.DOCUMENT_PROCESSOR_OPENAI_IMAGE_TEXT_API_KEY.value),
+                    'api_key': str(self.config_composer.get_config_by_name("OPENAI_API_KEY").value),
                     'model': str(document_processor_config.DOCUMENT_PROCESSOR_OPENAI_IMAGE_TEXT_MODEL_NAME.value),
                     'temperature': float(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_TEMPERATURE.value),
                     'batch_size': int(document_processor_config.DOCUMENT_PROCESSOR_IMAGE_TEXT_BATCH_SIZE.value),
