@@ -6,6 +6,9 @@ from controller.helper.controllerHelper import require_admin_access
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from controller.admin.adminBaseController import validate_superuser
 
+# authController에서 필요한 함수들과 모델들 import
+from controller.authController import (LoginRequest, LoginResponse, login, find_user_by_email)
+
 from service.database.models.user import User
 from service.database.models.executor import ExecutionIO, ExecutionMeta
 from service.database.models.workflow import WorkflowMeta
@@ -14,6 +17,50 @@ from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, Vector
 
 logger = logging.getLogger("admin-controller")
 router = APIRouter(prefix="/user", tags=["Admin"])
+
+@router.post("/superuser-login", response_model=LoginResponse)
+async def superuser_login(request: Request, login_data: LoginRequest):
+    """
+    슈퍼유저 로그인 API
+
+    기본 로그인 함수를 사용하되 슈퍼유저 검증만 추가
+    """
+    try:
+        # 먼저 사용자가 슈퍼유저인지 확인
+        app_db = get_db_manager(request)
+        user = find_user_by_email(app_db, login_data.email)
+
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid email or password"
+            )
+
+        # 슈퍼유저 여부 확인
+        if user.user_type != "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail="Superuser privileges required"
+            )
+
+        # 슈퍼유저가 맞으면 기본 로그인 함수 호출
+        result = await login(request, login_data)
+
+        # 로그인 성공 시 메시지 수정
+        if result.success:
+            result.message = "Superuser login successful"
+            logger.info(f"Superuser logged in: {login_data.email}")
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Superuser login error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 @router.get("/all-users")
 async def get_all_users(request: Request):
@@ -30,6 +77,85 @@ async def get_all_users(request: Request):
         return {"users": users}
     except Exception as e:
         logger.error(f"Error fetching all users: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.get("/standby-users")
+async def get_standby_users(request: Request):
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
+    try:
+        app_db = get_db_manager(request)
+        users = app_db.find_by_condition(User, {"is_active": False})
+        return {"users": users}
+    except Exception as e:
+        logger.error(f"Error fetching standby users: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.post("/approve-user")
+async def approve_user(request: Request, user_data: dict):
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
+    try:
+        app_db = get_db_manager(request)
+        user_id = user_data.get("id")
+        username = user_data.get("username")
+        user_email = user_data.get("email")
+
+        # 사용자 존재 여부 확인
+        db_user_info = app_db.find_by_condition(User, {"id": user_id, "is_active": False})
+        if not db_user_info:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+
+        db_user_info = db_user_info[0]
+
+        # 사용자 정보 일치 확인
+        if db_user_info.username != username or db_user_info.email != user_email:
+            raise HTTPException(
+                status_code=400,
+                detail="User information mismatch"
+            )
+
+        # 이미 활성화된 사용자인지 확인
+        if db_user_info.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="User is already active"
+            )
+
+        db_user_info.is_active = True
+        app_db.update(db_user_info)
+
+        logger.info(f"Successfully approved user {user_id} ({username})")
+        return {
+            "detail": "User approved successfully",
+            "user": {
+                "id": user_id,
+                "username": username,
+                "email": user_email,
+                "is_active": True
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error approving user: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
