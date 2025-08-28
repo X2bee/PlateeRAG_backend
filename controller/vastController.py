@@ -14,7 +14,7 @@ import json
 import asyncio
 from urllib import request as urllib_request
 from service.vast.vast_service import VastService
-from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_vast_service
 
 router = APIRouter(prefix="/api/vast", tags=["vastAI"])
 logger = logging.getLogger("vast-controller")
@@ -177,32 +177,6 @@ class CommandExecutionResponse(BaseModel):
     background: bool = Field(..., description="백그라운드 실행 여부")
     error: Optional[str] = Field(None, description="에러 메시지")
 
-# ========== Helper Functions ==========
-def get_vast_service(request: Request) -> VastService:
-    """VastService 인스턴스 생성"""
-    try:
-        service = request.app.state.vast_service
-        service.set_status_change_callback(_sync_broadcast_status_change)
-
-        return service
-    except Exception as e:
-        logger.error(f"VastService 초기화 실패: {e}")
-        raise HTTPException(status_code=500, detail="VastService 초기화 실패")
-
-# ========== SSE 관련 함수들 ==========
-def _sync_broadcast_status_change(instance_id: str, status: str):
-    """동기적으로 호출 가능한 상태 변경 브로드캐스트 래퍼"""
-    try:
-        # 현재 실행 중인 이벤트 루프가 있는지 확인
-        try:
-            loop = asyncio.get_running_loop()
-            # 이벤트 루프가 실행 중이면 태스크로 스케줄링
-            loop.create_task(_broadcast_status_change(instance_id, status))
-        except RuntimeError:
-            # 이벤트 루프가 없으면 새로 생성하여 실행
-            asyncio.run(_broadcast_status_change(instance_id, status))
-    except Exception as e:
-        logger.warning(f"SSE 브로드캐스트 실패: {e}")
 
 async def _broadcast_status_change(instance_id: str, status: str):
     """인스턴스 상태 변경을 모든 SSE 클라이언트에게 브로드캐스트"""
@@ -259,11 +233,12 @@ def _remove_sse_connection(instance_id: str, queue: asyncio.Queue):
 async def health_check(request: Request):
     try:
         service = get_vast_service(request)
-        return {
-            "status": "healthy",
-            "service": "vast",
-            "message": "VastAI 서비스가 정상적으로 작동 중입니다"
-        }
+        if service:
+            return {
+                "status": "healthy",
+                "service": "vast",
+                "message": "VastAI 서비스가 정상적으로 작동 중입니다"
+            }
     except Exception as e:
         logger.error(f"Health check 실패: {e}")
         raise HTTPException(status_code=503, detail="서비스 사용 불가")
@@ -342,7 +317,7 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
 async def create_instance(request: Request, create_request: CreateInstanceRequest, background_tasks: BackgroundTasks):
     try:
         service = get_vast_service(request)
-        config_composer = request.app.state.config_composer
+        config_composer = get_config_composer(request)
         vast_config = config_composer.get_config_by_category_name("vast")
 
         # 템플릿 적용

@@ -14,7 +14,7 @@ from service.database.models.executor import ExecutionIO
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 
 from controller.workflow.helper import _workflow_parameter_helper, _default_workflow_parameter_helper
-from controller.workflow.utils import get_db_manager
+from controller.helper.singletonHelper import get_db_manager
 from controller.workflow.model import WorkflowRequest
 
 logger = logging.getLogger("workflow-controller")

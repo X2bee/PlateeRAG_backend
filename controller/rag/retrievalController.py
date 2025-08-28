@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 import logging
 import aiofiles
-import aiofiles.os
 import os
 import json
 from pathlib import Path
@@ -87,13 +86,8 @@ class DocumentSearchRequest(BaseModel):
 async def list_collections(request: Request,):
     """모든 컬렉션 목록 조회"""
     user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
 
-    app_db = request.app.state.app_db
-    if not app_db:
-        raise HTTPException(
-            status_code=500,
-            detail="Database connection not available"
-        )
     try:
         existing_data = app_db.find_by_condition(
             VectorDB,
@@ -111,13 +105,7 @@ async def list_collections(request: Request,):
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):
     """새 컬렉션 생성 및 메타 등록"""
     user_id = extract_user_id_from_request(request)
-
-    app_db = request.app.state.app_db
-    if not app_db:
-        raise HTTPException(
-            status_code=500,
-            detail="Database connection not available"
-        )
+    app_db = get_db_manager(request)
     config_composer = get_config_composer(request)
     vector_size = config_composer.get_config_by_name("QDRANT_VECTOR_DIMENSION").value
     vector_manager = get_vector_manager(request)
@@ -171,12 +159,7 @@ async def delete_collection(request: Request, collection_request: CollectionDele
         result = vector_manager.delete_collection(collection_request.collection_name)
 
         if result.get("status") == "success":
-            app_db = request.app.state.app_db
-            if not app_db:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Database connection not available"
-                )
+            app_db = get_db_manager(request)
             rag_service = get_rag_service(request)
             vector_manager = rag_service.vector_manager
 
@@ -284,7 +267,6 @@ async def search_documents(request: Request, search_request: DocumentSearchReque
     """문서 검색"""
     try:
         rag_service = get_rag_service(request)
-        # support optional rerank parameters
         result = await rag_service.search_documents(
             search_request.collection_name,
             search_request.query_text,

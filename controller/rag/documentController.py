@@ -13,8 +13,6 @@ import aiofiles
 import hashlib
 import logging
 from datetime import datetime
-import jwt
-from pathlib import Path
 import urllib.parse
 from controller.authController import verify_token, get_user_by_token
 from service.database.models.user import User
