@@ -48,21 +48,12 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
     try:
         user_id = extract_user_id_from_request(request)
 
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
-        # SQL 쿼리 작성 - 조건에 따라 동적으로 구성
+        app_db = get_db_manager(request)
         where_conditions = {}
-        query_params = []
         where_conditions["user_id"] = user_id
 
         if interaction_id:
             where_conditions["interaction_id"] = interaction_id
-
-        # 로직 제거
-        # if workflow_id:
-        #     where_conditions["workflow_id"] = workflow_id
 
         result = app_db.find_by_condition(
             ExecutionMeta,
@@ -72,15 +63,6 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
             limit=1000000,
             return_list=True
         )
-
-        print(result)
-
-        # # SQLite인 경우 파라미터 플레이스홀더 변경
-        # if db_manager.config_db_manager.db_type == "sqlite":
-        #     query = query.replace("%s", "?")
-
-        # # 쿼리 실행
-        # result = db_manager.config_db_manager.execute_query(query, tuple(query_params))
 
         if not result:
             return JSONResponse(content={

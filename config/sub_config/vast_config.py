@@ -23,55 +23,54 @@ class VastConfig(BaseConfig):
             file_path="vast_api_key.txt",
         )
         # ‣ 인스턴스 템플릿(컨테이너) ─────────────────────
-        self.IMAGE_NAME = self.create_persistent_config(
+        self.VAST_IMAGE_NAME = self.create_persistent_config(
             env_name="VAST_IMAGE_NAME",
             config_path="vast.image.name",
             default_value="cocorof/vllm-openai-praque",
         )
-        self.IMAGE_TAG = self.create_persistent_config(
+        self.VAST_IMAGE_TAG = self.create_persistent_config(
             env_name="VAST_IMAGE_TAG",
             config_path="vast.image.tag",
             default_value="v0.10.0",
         )
         # ‣ 트레인 인스턴스 템플릿(컨테이너) ─────────────────────
-        self.TRAIN_IMAGE_NAME = self.create_persistent_config(
+        self.VAST_TRAIN_IMAGE_NAME = self.create_persistent_config(
             env_name="VAST_TRAIN_IMAGE_NAME",
             config_path="vast.train.image.name",
             default_value="cocorof/vllm-openai-praque",
         )
-        self.TRAIN_IMAGE_TAG = self.create_persistent_config(
+        self.VAST_TRAIN_IMAGE_TAG = self.create_persistent_config(
             env_name="VAST_TRAIN_IMAGE_TAG",
             config_path="vast.train.image.tag",
             default_value="v0.10.0",
         )
 
         # ‣ 자원/가격 한계 ───────────────────────────────
-        self.MAX_PRICE = self.create_persistent_config(
+        self.VAST_MAX_PRICE = self.create_persistent_config(
             env_name="VAST_MAX_PRICE",
             config_path="vast.resource.max_price",
             default_value="1.0",
             type_converter=convert_to_float,
         )
-        self.DISK_SIZE_GB = self.create_persistent_config(
+        self.VAST_DISK_SIZE_GB = self.create_persistent_config(
             env_name="VAST_DISK_SIZE",
             config_path="vast.resource.disk_size_gb",
             default_value="256",
             type_converter=convert_to_int,
         )
-        self.MIN_GPU_RAM_GB = self.create_persistent_config(
+        self.VAST_MIN_GPU_RAM_GB = self.create_persistent_config(
             env_name="VAST_MIN_GPU_RAM",
             config_path="vast.resource.min_gpu_ram",
             default_value="8",
             type_converter=convert_to_int,
         )
-        self.MIN_DISK_GB = self.create_persistent_config(
+        self.VAST_MIN_DISK_GB = self.create_persistent_config(
             env_name="VAST_MIN_DISK",
             config_path="vast.resource.min_disk",
             default_value="200",
             type_converter=convert_to_int,
         )
-        # ‣ 검색 쿼리 기본값 ──────────────────────────────
-        self.SEARCH_QUERY = self.create_persistent_config(
+        self.VAST_SEARCH_QUERY = self.create_persistent_config(
             env_name="VAST_SEARCH_QUERY",
             config_path="vast.search.query",
             default_value=(
@@ -82,19 +81,21 @@ class VastConfig(BaseConfig):
                 "disk_space>=200"
             ),
         )
-        # ‣ 네트워크 및 포트 설정 ──────────────────────────
-        self.DEFAULT_PORTS = self.create_persistent_config(
+        self.VAST_DEFAULT_PORTS = self.create_persistent_config(
             env_name="VAST_DEFAULT_PORTS",
             config_path="vast.network.default_ports",
             default_value=[1111, 6006, 8080, 8384, 72299, 12434, 12435],  # 리스트로 저장
             type_converter=convert_to_int_list,
         )
-        self.DEFAULT_TRAIN_PORTS = self.create_persistent_config(
+        self.VAST_DEFAULT_TRAIN_PORTS = self.create_persistent_config(
             env_name="VAST_DEFAULT_TRAIN_PORTS",
             config_path="vast.network.default_train_ports",
             default_value=[1111, 6006, 8080, 8384, 72299, 8010],  # 리스트로 저장
             type_converter=convert_to_int_list,
         )
+
+
+
         self.VLLM_HOST_IP = self.create_persistent_config(
             env_name="VLLM_HOST_IP",
             config_path="vast.vllm.host_ip",
@@ -113,13 +114,6 @@ class VastConfig(BaseConfig):
             type_converter=convert_to_int,
         )
 
-        # ‣ vLLM 모델 및 실행 설정 ─────────────────────────
-        # self.VLLM_MODEL_NAME = self.create_persistent_config(
-        #     env_name="VLLM_MODEL_NAME",
-        #     config_path="vast.vllm.model_name",
-        #     default_value="Qwen/Qwen3-1.7B",
-        #     type_converter=convert_to_str,
-        # )
         self.VLLM_SERVE_MODEL_NAME = self.create_persistent_config(
             env_name="VLLM_SERVE_MODEL_NAME",
             config_path="vast.vllm.serve_model_name",
@@ -164,19 +158,19 @@ class VastConfig(BaseConfig):
         )
 
         # ‣ 런타임 플래그 ────────────────────────────────
-        self.DEBUG = self.create_persistent_config(
+        self.VAST_DEBUG = self.create_persistent_config(
             env_name="VAST_DEBUG",
             config_path="vast.debug",
             default_value="false",
             type_converter=convert_to_bool,
         )
-        self.AUTO_DESTROY = self.create_persistent_config(
+        self.VAST_AUTO_DESTROY = self.create_persistent_config(
             env_name="VAST_AUTO_DESTROY",
             config_path="vast.auto_destroy",
             default_value="false",
             type_converter=convert_to_bool,
         )
-        self.TIMEOUT = self.create_persistent_config(
+        self.VAST_TIMEOUT = self.create_persistent_config(
             env_name="VAST_TIMEOUT",
             config_path="vast.timeout",
             default_value="600",
@@ -184,7 +178,7 @@ class VastConfig(BaseConfig):
         )
 
         # ‣ onstart 명령어 설정 ──────────────────────────
-        self.ONSTART_SCRIPT = self.create_persistent_config(
+        self.VAST_ONSTART_SCRIPT = self.create_persistent_config(
             env_name="VAST_ONSTART_SCRIPT",
             config_path="vast.onstart.script",
             default_value="",

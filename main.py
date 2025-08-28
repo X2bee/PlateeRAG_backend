@@ -12,7 +12,7 @@ from controller.workflow.router import workflow_router
 from controller.rag.router import rag_router
 
 from controller.trainController import router as trainRouter
-from controller.configController import router as configRouter
+from controller.llmController import router as llmRouter
 from controller.performanceController import router as performanceRouter
 from controller.interactionController import router as interactionRouter
 from controller.huggingface.huggingfaceController import router as huggingfaceRouter
@@ -22,10 +22,9 @@ from controller.vastController import router as vastRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
-from service.database import AppDatabaseManager
 from service.database.models import APPLICATION_MODELS
 
-from service.retrieval import RAGService
+from service.database import AppDatabaseManager
 from service.embedding.embedding_factory import EmbeddingFactory
 from service.vast.vast_service import VastService
 from service.vector_db.vector_manager import VectorManager
@@ -99,7 +98,6 @@ async def lifespan(app: FastAPI):
         logger.info("⚙️  Step 3: System configuration initialization starting...")
 
         configs = config_composer.initialize_remaining_configs()
-        app.state.config = configs
         app.state.config_composer = config_composer
         logger.info("✅ Step 3: System configurations loaded successfully!")
 
@@ -121,10 +119,7 @@ async def lifespan(app: FastAPI):
             print_step_banner(4.4, "DOCUMENT INFO GENERATOR SETUP", "Setting up document info generation services")
             document_info_generator = DocumentInfoGenerator(config_composer)
             app.state.document_info_generator = document_info_generator
-
-            rag_service = RAGService(config_composer, embedding_client, vector_manager, document_processor, document_info_generator)
-            app.state.rag_service = rag_service
-            logger.info("✅ Step 4: RAG services initialized successfully!")
+            logger.info("✅ Step 4: RAG services components initialized successfully!")
 
         except Exception as e:
             logger.error(f"❌ Step 4: Failed to initialize RAG services: {e}")
@@ -137,7 +132,7 @@ async def lifespan(app: FastAPI):
         # 5. vast_service Instance 생성
         print_step_banner(5, "VAST SERVICE SETUP", "Initializing cloud compute management")
         logger.info("⚙️  Step 5: VAST service initialization starting...")
-        app.state.vast_service = VastService(app.state.app_db, config_composer)
+        app.state.vast_service = VastService(app_db, config_composer)
         logger.info("✅ Step 5: VAST service initialized successfully!")
 
         # 6. 워크플로우 실행 매니저 초기화
@@ -240,7 +235,7 @@ app.include_router(workflow_router)
 app.include_router(rag_router)
 
 app.include_router(authRouter)
-app.include_router(configRouter)
+app.include_router(llmRouter)
 app.include_router(performanceRouter)
 app.include_router(trainRouter)
 app.include_router(interactionRouter)

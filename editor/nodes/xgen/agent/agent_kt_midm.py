@@ -12,6 +12,7 @@ from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from fastapi import Request
+from controller.helper.singletonHelper import get_config_composer
 
 logger = logging.getLogger(__name__)
 
@@ -51,27 +52,12 @@ class AgentKTNode(Node):
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
     ]
 
-    def __init__(self, user_id: str = None, **kwargs):
-        super().__init__(**kwargs)
-        self.user_id = user_id
-        self.config_composer = AppServiceManager.get_config_composer()
-        self.llm_provider = self.config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
-        self.vllm_api_base_url = self.config_composer.get_config_by_name("VLLM_API_BASE_URL").value
-        self.vllm_model_name = self.config_composer.get_config_by_name("VLLM_MODEL_NAME").value
-        self.vllm_temperature_default = self.config_composer.get_config_by_name("VLLM_TEMPERATURE_DEFAULT").value
-        self.vllm_max_tokens_default = self.config_composer.get_config_by_name("VLLM_MAX_TOKENS_DEFAULT").value
-        self.vllm_top_p = self.config_composer.get_config_by_name("VLLM_TOP_P").value
-        self.vllm_top_k = self.config_composer.get_config_by_name("VLLM_TOP_K").value
-        self.vllm_frequency_penalty = self.config_composer.get_config_by_name("VLLM_FREQUENCY_PENALTY").value
-        self.vllm_repetition_penalty = self.config_composer.get_config_by_name("VLLM_REPETITION_PENALTY").value
-        self.vllm_best_of = self.config_composer.get_config_by_name("VLLM_BEST_OF").value
-
     def api_vllm_model_name(self, request: Request) -> Dict[str, Any]:
-        config_composer = request.app.state.config_composer
+        config_composer = get_config_composer(request)
         return config_composer.get_config_by_name("VLLM_MODEL_NAME").value
 
     def api_vllm_api_base_url(self, request: Request) -> Dict[str, Any]:
-        config_composer = request.app.state.config_composer
+        config_composer = get_config_composer(request)
         return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
 
     def execute(

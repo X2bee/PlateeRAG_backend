@@ -3,6 +3,7 @@ from typing import Dict, Any
 from editor.node_composer import Node
 from editor.utils.helper.service_helper import AppServiceManager
 from langchain_openai import ChatOpenAI
+from controller.helper.singletonHelper import get_config_composer
 
 class ModelVLLMProvider(Node):
     categoryId = "xgen"
@@ -26,11 +27,11 @@ class ModelVLLMProvider(Node):
     ]
 
     def api_vllm_model_name(self, request: Request) -> Dict[str, Any]:
-        config_composer = request.app.state.config_composer
+        config_composer = get_config_composer(request)
         return config_composer.get_config_by_name("VLLM_MODEL_NAME").value
 
     def api_vllm_api_base_url(self, request: Request) -> Dict[str, Any]:
-        config_composer = request.app.state.config_composer
+        config_composer = get_config_composer(request)
         return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
 
     def execute(self, model: str = "gpt-5", temperature: float = 0.7, max_tokens: int = 8192, base_url: str = "https://api.openai.com/v1", streaming: bool = False) -> str:

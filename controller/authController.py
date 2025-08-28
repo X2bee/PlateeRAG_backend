@@ -306,14 +306,7 @@ async def login(request: Request, login_data: LoginRequest):
         LoginResponse: 로그인 결과
     """
     try:
-        # 데이터베이스 매니저 가져오기
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
-
+        app_db = get_db_manager(request)
         # 입력 데이터 검증
         if not login_data.email or not login_data.password:
             raise HTTPException(
@@ -509,14 +502,7 @@ async def refresh_token(request: Request, refresh_data: RefreshTokenRequest):
                 detail="Invalid token payload"
             )
 
-        # 사용자 정보 가져오기
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
-
+        app_db = get_db_manager(request)
         user = app_db.find_by_id(User, int(user_id))
         if not user or not user.is_active:
             raise HTTPException(

@@ -12,6 +12,7 @@ from service.database.models.vectordb import VectorDB
 from fastapi import Request
 from controller.helper.controllerHelper import extract_user_id_from_request
 from pydantic import BaseModel, Field
+from controller.helper.singletonHelper import get_db_manager
 
 logger = logging.getLogger(__name__)
 enhance_prompt = """You are an AI assistant that must strictly follow these guidelines when using the provided document context:
@@ -60,7 +61,7 @@ class QdrantRetrievalTool(Node):
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
         user_id = extract_user_id_from_request(request)
-        db_service = request.app.state.app_db
+        db_service = get_db_manager(request)
         collections = db_service.find_by_condition(
             VectorDB,
             {
