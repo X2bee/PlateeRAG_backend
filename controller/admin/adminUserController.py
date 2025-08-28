@@ -63,7 +63,7 @@ async def superuser_login(request: Request, login_data: LoginRequest):
         )
 
 @router.get("/all-users")
-async def get_all_users(request: Request):
+async def get_all_users(request: Request, page: int = 1, page_size: int = 100):
     val_superuser = await validate_superuser(request)
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
@@ -72,9 +72,26 @@ async def get_all_users(request: Request):
         )
 
     try:
+        # 페이지 번호 검증
+        if page < 1:
+            page = 1
+        if page_size < 1 or page_size > 1000:
+            page_size = 100
+
+        offset = (page - 1) * page_size
+
         app_db = get_db_manager(request)
-        users = app_db.find_all(User)
-        return {"users": users}
+        users = app_db.find_all(User, limit=page_size, offset=offset)
+
+        return {
+            "users": users,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "offset": offset,
+                "total_returned": len(users)
+            }
+        }
     except Exception as e:
         logger.error(f"Error fetching all users: {str(e)}")
         raise HTTPException(
