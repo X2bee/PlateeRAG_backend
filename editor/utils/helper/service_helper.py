@@ -1,40 +1,56 @@
 import logging
 from typing import Optional
+from service.retrieval.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
 def get_rag_service() -> Optional[object]:
-    """FastAPI 앱에서 RAG 서비스를 가져오는 헬퍼 함수"""
+    """FastAPI 앱에서 RAG 서비스를 생성하는 헬퍼 함수"""
     try:
         import sys
-
-        # 먼저 main 모듈에서 찾기
+        app = None
         if 'main' in sys.modules:
             main_module = sys.modules['main']
-            if hasattr(main_module, 'app') and hasattr(main_module.app, 'state'):
-                if hasattr(main_module.app.state, 'rag_service'):
-                    rag_service = main_module.app.state.rag_service
-                    logger.info("main 모듈에서 RAG 서비스를 찾았습니다.")
-                    return rag_service
+            if hasattr(main_module, 'app'):
+                app = main_module.app
+                logger.info("main 모듈에서 app을 찾았습니다.")
 
-        # 다른 모듈들에서 찾기
-        for module_name, module in sys.modules.items():
-            if hasattr(module, 'app'):
-                app = getattr(module, 'app')
-                if hasattr(app, 'state') and hasattr(app.state, 'rag_service'):
-                    rag_service = app.state.rag_service
-                    logger.info(f"{module_name} 모듈에서 RAG 서비스를 찾았습니다.")
-                    return rag_service
+        if app is None:
+            for module_name, module in sys.modules.items():
+                if hasattr(module, 'app'):
+                    app = getattr(module, 'app')
+                    logger.info(f"{module_name} 모듈에서 app을 찾았습니다.")
+                    break
 
-        logger.warning("RAG 서비스를 찾을 수 없습니다. 서버가 실행되지 않았을 수 있습니다.")
-        return None
+        if app is None or not hasattr(app, 'state'):
+            logger.warning("FastAPI app을 찾을 수 없습니다. 서버가 실행되지 않았을 수 있습니다.")
+            return None
+
+        config_composer = getattr(app.state, 'config_composer', None)
+        embedding_client = getattr(app.state, 'embedding_client', None)
+        vector_manager = getattr(app.state, 'vector_manager', None)
+        document_processor = getattr(app.state, 'document_processor', None)
+        document_info_generator = getattr(app.state, 'document_info_generator', None)
+
+        if not all([config_composer, embedding_client, vector_manager, document_processor, document_info_generator]):
+            logger.warning("RAG 서비스 생성에 필요한 일부 서비스를 찾을 수 없습니다.")
+            return None
+
+        rag_service = RAGService(
+            config_composer,
+            embedding_client,
+            vector_manager,
+            document_processor,
+            document_info_generator
+        )
+        logger.info("RAG 서비스를 성공적으로 생성했습니다.")
+        return rag_service
 
     except Exception as e:
-        logger.error(f"RAG 서비스 접근 중 오류: {e}")
+        logger.error(f"RAG 서비스 생성 중 오류: {e}")
         return None
 
 def get_db_manager() -> Optional[object]:
-    """FastAPI 앱에서 DB 매니저를 가져오는 헬퍼 함수"""
     try:
         import sys
 
