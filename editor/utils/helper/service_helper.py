@@ -5,7 +5,6 @@ from service.retrieval.rag_service import RAGService
 logger = logging.getLogger(__name__)
 
 def get_rag_service() -> Optional[object]:
-    """FastAPI 앱에서 RAG 서비스를 생성하는 헬퍼 함수"""
     try:
         import sys
         app = None
@@ -110,14 +109,9 @@ def get_config_composer() -> Optional[object]:
         return None
 
 class RAGServiceManager:
-    """RAG 서비스 매니저 클래스 (캐싱 기능 포함)"""
-    _cached_service = None
-
     @classmethod
     def get_service(cls):
-        """캐시된 RAG 서비스 반환 (없으면 새로 찾기)"""
-        if cls._cached_service is None:
-            cls._cached_service = get_rag_service()
+        cls._cached_service = get_rag_service()
         return cls._cached_service
 
     @classmethod
@@ -126,14 +120,9 @@ class RAGServiceManager:
         cls._cached_service = None
 
 class DBManager:
-    """DB 매니저 클래스 (캐싱 기능 포함)"""
-    _cached_manager = None
-
     @classmethod
     def get_manager(cls):
-        """캐시된 DB 매니저 반환 (없으면 새로 찾기)"""
-        if cls._cached_manager is None:
-            cls._cached_manager = get_db_manager()
+        cls._cached_manager = get_db_manager()
         return cls._cached_manager
 
     @classmethod
@@ -142,14 +131,9 @@ class DBManager:
         cls._cached_manager = None
 
 class ConfigComposerManager:
-    """Config Composer 매니저 클래스 (캐싱 기능 포함)"""
-    _cached_composer = None
-
     @classmethod
     def get_composer(cls):
-        """캐시된 Config Composer 반환 (없으면 새로 찾기)"""
-        if cls._cached_composer is None:
-            cls._cached_composer = get_config_composer()
+        cls._cached_composer = get_config_composer()
         return cls._cached_composer
 
     @classmethod
@@ -159,8 +143,6 @@ class ConfigComposerManager:
 
 # 통합 매니저 클래스
 class AppServiceManager:
-    """앱 서비스들을 통합 관리하는 클래스"""
-
     @staticmethod
     def get_rag_service():
         """RAG 서비스 반환"""
@@ -175,10 +157,3 @@ class AppServiceManager:
     def get_config_composer():
         """Config Composer 반환"""
         return ConfigComposerManager.get_composer()
-
-    @staticmethod
-    def clear_all_caches():
-        """모든 캐시 초기화"""
-        RAGServiceManager.clear_cache()
-        DBManager.clear_cache()
-        ConfigComposerManager.clear_cache()

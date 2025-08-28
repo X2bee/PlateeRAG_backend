@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from .adminBaseController import router as adminBaseRouter
 from .adminUserController import router as adminUserRouter
 from .adminWorkflowController import router as adminWorkflowRouter
+from .adminSystemController import router as adminSystemRouter
 
 # Admin 라우터 통합
 admin_router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -13,3 +14,4 @@ admin_router = APIRouter(prefix="/api/admin", tags=["Admin"])
 admin_router.include_router(adminBaseRouter)
 admin_router.include_router(adminUserRouter)
 admin_router.include_router(adminWorkflowRouter)
+admin_router.include_router(adminSystemRouter)
