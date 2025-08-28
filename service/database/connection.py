@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional, Type
-from config.database_manager import DatabaseManager
+from service.database.database_manager import DatabaseManager
 from service.database.models.base_model import BaseModel
 
 logger = logging.getLogger("app-database")
@@ -179,7 +179,7 @@ class AppDatabaseManager:
                             model_class.__name__, record_id, e)
             return None
 
-    def find_all(self, model_class: Type[BaseModel], limit: int = 100, offset: int = 0) -> List[BaseModel]:
+    def find_all(self, model_class: Type[BaseModel], limit: int = 10000, offset: int = 0) -> List[BaseModel]:
         """모든 레코드 조회 (페이징 지원)"""
         try:
             table_name = model_class().get_table_name()
@@ -200,7 +200,7 @@ class AppDatabaseManager:
 
     def find_by_condition(self, model_class: Type[BaseModel],
                          conditions: Dict[str, Any],
-                         limit: int = 1000,
+                         limit: int = 10000,
                          offset: int = 0,
                          orderby: str = "id",
                          orderby_asc: bool = False,

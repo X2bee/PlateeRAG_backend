@@ -16,6 +16,7 @@ class ExecutionIO(BaseModel):
         self.expected_output: Optional[str] = kwargs.get('expected_output', None)
         self.llm_eval_score: Optional[float] = kwargs.get('llm_eval_score', None)
         self.test_mode: Optional[bool] = kwargs.get('test_mode', False)
+        self.user_score: Optional[int] = kwargs.get('user_score', 0)
 
     def get_table_name(self) -> str:
         return "execution_io"
@@ -30,7 +31,8 @@ class ExecutionIO(BaseModel):
             'output_data': 'TEXT',
             'expected_output': 'TEXT',
             'llm_eval_score': 'FLOAT',
-            'test_mode': 'BOOLEAN DEFAULT FALSE'
+            'test_mode': 'BOOLEAN DEFAULT FALSE',
+            'user_score': 'INTEGER DEFAULT 0'
         }
 
 class ExecutionMeta(BaseModel):

@@ -10,9 +10,9 @@ import json
 import logging
 import re
 from datetime import datetime
-from editor.async_workflow_executor import AsyncWorkflowExecutor, execution_manager
+from editor.async_workflow_executor import execution_manager
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
-from controller.controller_helper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.workflow.helper import _workflow_parameter_helper, _default_workflow_parameter_helper
 from controller.workflow.model import WorkflowRequest, WorkflowData, SaveWorkflowRequest, ConversationRequest
 from langchain_openai import ChatOpenAI
@@ -22,7 +22,7 @@ from service.database.models.user import User
 from service.database.models.executor import ExecutionMeta, ExecutionIO
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.performance import NodePerformance
-from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 import uuid
 import time
@@ -1470,6 +1470,7 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
     """
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
+    config_composer = get_config_composer(request=request)
 
     async def tester_stream_generator():
         batch_id = str(uuid.uuid4())

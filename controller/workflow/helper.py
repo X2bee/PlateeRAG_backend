@@ -8,7 +8,7 @@ from typing import Dict, Any
 from controller.workflow.utils import extract_collection_name
 from fastapi import HTTPException
 from controller.workflow.model import WorkflowRequest
-
+from controller.helper.singletonHelper import get_config_composer
 async def _workflow_parameter_helper(request_body: WorkflowRequest, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Updates the workflow data by setting the interaction ID in the parameters of nodes
@@ -66,10 +66,7 @@ async def _default_workflow_parameter_helper(request, request_body: WorkflowRequ
     Returns:
         A dictionary representing the updated workflow data with modified parameters.
     """
-    config_composer = request.app.state.config_composer
-    if not config_composer:
-        raise HTTPException(status_code=500, detail="Config composer not available")
-
+    config_composer = get_config_composer(request)
     llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
 
     if llm_provider == "openai":

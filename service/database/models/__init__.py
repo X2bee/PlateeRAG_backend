@@ -4,8 +4,8 @@
 from service.database.models.base_model import BaseModel
 from service.database.models.user import User, UserSession
 # from service.database.models.chat import ChatSession, ChatMessage
-from service.database.models.performance import WorkflowExecution, NodeExecution, SystemMetrics, NodePerformance
-from service.database.models.persistent_config_model import PersistentConfigModel
+from service.database.models.performance import WorkflowExecution, NodePerformance
+from service.database.models.persistent_config import PersistentConfigModel
 from service.database.models.executor import ExecutionIO, ExecutionMeta
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
@@ -16,7 +16,7 @@ from service.database.models.train import TrainMeta
 __all__ = [
     'BaseModel',
     'User', 'UserSession',
-    'WorkflowExecution', 'NodeExecution', 'SystemMetrics', 'NodePerformance',
+    'WorkflowExecution', 'NodePerformance',
     'PersistentConfigModel',
     'ExecutionIO', 'ExecutionMeta', 'WorkflowMeta',
     'VectorDB', 'VectorDBChunkMeta', 'VectorDBChunkEdge',
@@ -30,8 +30,6 @@ APPLICATION_MODELS = [
     User,
     UserSession,
     WorkflowExecution,
-    NodeExecution,
-    SystemMetrics,
     NodePerformance,
     ExecutionIO, ExecutionMeta,
     WorkflowMeta,

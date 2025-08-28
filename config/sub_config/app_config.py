@@ -42,7 +42,6 @@ class AppConfig(BaseConfig):
             type_converter=int
         )
 
-        # 로그 포맷
         self.LOG_FORMAT = self.create_persistent_config(
             env_name="LOG_FORMAT",
             config_path="app.log_format",

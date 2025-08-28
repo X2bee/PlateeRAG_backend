@@ -8,7 +8,7 @@ from typing import Dict, Any
 from pathlib import Path
 from config.base_config import BaseConfig
 from config.persistent_config import PersistentConfig, export_config_summary, refresh_all_configs, save_all_configs
-from config.database_manager import initialize_database
+from service.database.database_manager import initialize_database
 logger = logging.getLogger("config-composer")
 
 class ConfigComposer:
@@ -298,14 +298,6 @@ class ConfigComposer:
             "errors": []
         }
 
-        # OpenAI API 키 검증 (openai 카테고리가 있는 경우)
-        if "openai" in self.config_categories:
-            openai_config = self.config_categories["openai"]
-            if hasattr(openai_config, "API_KEY"):
-                api_key = openai_config.API_KEY.value
-                if not api_key or not api_key.strip():
-                    validation_results["warnings"].append("OpenAI API key is not configured")
-
         # 포트 범위 검증 (app 카테고리가 있는 경우)
         if "app" in self.config_categories:
             app_config = self.config_categories["app"]
@@ -313,15 +305,6 @@ class ConfigComposer:
                 port = app_config.PORT.value
                 if not (1 <= port <= 65535):
                     validation_results["errors"].append(f"Invalid port number: {port}")
-                    validation_results["valid"] = False
-
-        # 타임아웃 값 검증 (workflow 카테고리가 있는 경우)
-        if "workflow" in self.config_categories:
-            workflow_config = self.config_categories["workflow"]
-            if hasattr(workflow_config, "EXECUTION_TIMEOUT"):
-                workflow_timeout = workflow_config.EXECUTION_TIMEOUT.value
-                if workflow_timeout <= 0:
-                    validation_results["errors"].append(f"Invalid workflow timeout: {workflow_timeout}")
                     validation_results["valid"] = False
 
         return validation_results
@@ -353,6 +336,62 @@ class ConfigComposer:
 
         except Exception as e:
             self.logger.error("Failed to ensure initial config values in database: %s", e)
+            raise
+
+    def update_config(self, config_name: str, new_value: Any) -> Dict[str, Any]:
+        """
+        설정값을 업데이트하고 저장하는 통합 메서드
+
+        Args:
+            config_name: 설정 이름
+            new_value: 새로운 값
+
+        Returns:
+            Dict: 업데이트 결과 정보
+
+        Raises:
+            KeyError: 설정이 존재하지 않는 경우
+            ValueError: 타입 변환 실패 시
+        """
+        try:
+            # 설정 객체 가져오기
+            config_obj = self.get_config_by_name(config_name)
+            old_value = config_obj.value
+
+            # 값 타입에 따라 적절히 변환
+            if isinstance(config_obj.env_value, bool):
+                config_obj.value = bool(new_value)
+            elif isinstance(config_obj.env_value, int):
+                config_obj.value = int(new_value)
+            elif isinstance(config_obj.env_value, float):
+                config_obj.value = float(new_value)
+            else:
+                config_obj.value = str(new_value)
+
+            # 1. DB에 저장
+            config_obj.save()
+
+            # 2. config_composer의 all_configs 업데이트
+            self.update_config_by_name(config_name, config_obj.value)
+
+            self.logger.info("Successfully updated config '%s': %s -> %s",
+                           config_name, old_value, config_obj.value)
+
+            return {
+                "config_name": config_name,
+                "old_value": old_value,
+                "new_value": config_obj.value,
+                "success": True
+            }
+
+        except KeyError:
+            self.logger.error("Config '%s' not found", config_name)
+            raise KeyError(f"Config '{config_name}' not found")
+        except (ValueError, TypeError) as e:
+            self.logger.error("Failed to convert value for '%s': %s", config_name, e)
+            raise ValueError(f"Invalid value type for '{config_name}': {e}")
+        except Exception as e:
+            self.logger.error("Failed to update config '%s': %s", config_name, e)
             raise
 
 # 전역 설정 컴포저 인스턴스

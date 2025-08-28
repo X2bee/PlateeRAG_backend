@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
-from controller.controller_helper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request
 from huggingface_hub import HfApi
+from controller.helper.singletonHelper import get_config_composer
 
 router = APIRouter(
     prefix="/api/huggingface",
@@ -8,21 +9,13 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-def get_config_composer(request: Request):
-    if hasattr(request.app.state, 'config_composer') and request.app.state.config_composer:
-        return request.app.state.config_composer
-    else:
-        from config.config_composer import config_composer
-        return config_composer
-
 @router.get("/models")
 async def get_models(request: Request):
     user_id = extract_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
+
     config_composer = get_config_composer(request)
-    if not config_composer:
-        raise HTTPException(status_code=500, detail="Config composer not found in request state")
 
     hugging_face_user_id = config_composer.get_config_by_name("HUGGING_FACE_USER_ID").value
     hugging_face_hub_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value
@@ -95,8 +88,6 @@ async def get_datasets(request: Request):
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
     config_composer = get_config_composer(request)
-    if not config_composer:
-        raise HTTPException(status_code=500, detail="Config composer not found in request state")
 
     hugging_face_user_id = config_composer.get_config_by_name("HUGGING_FACE_USER_ID").value
     hugging_face_hub_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value

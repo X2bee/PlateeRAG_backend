@@ -14,12 +14,12 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import os
-from controller.controller_helper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from service.database.models.train import TrainMeta
 from controller.vastController import CreateInstanceRequest, get_vast_service, _broadcast_status_change
-from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("train-controller")
 router = APIRouter(prefix="/api/train", tags=["training"])

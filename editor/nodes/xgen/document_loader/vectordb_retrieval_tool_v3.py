@@ -8,9 +8,9 @@ from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from service.database.models.vectordb import VectorDB
 from fastapi import Request
-from controller.controller_helper import extract_user_id_from_request
-
+from controller.helper.controllerHelper import extract_user_id_from_request
 from editor.utils.citation_prompt import citation_prompt
+from controller.helper.singletonHelper import get_db_manager
 
 logger = logging.getLogger(__name__)
 enhance_prompt = """You are an AI assistant that must strictly follow these guidelines when using the provided document context:
@@ -54,7 +54,7 @@ class QdrantRetrievalTool(Node):
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
         user_id = extract_user_id_from_request(request)
-        db_service = request.app.state.app_db
+        db_service = get_db_manager(request)
         collections = db_service.find_by_condition(
             VectorDB,
             {
@@ -64,7 +64,7 @@ class QdrantRetrievalTool(Node):
         )
         return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
 
-    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, use_model_prompt: bool = True, score_threshold: float = 0.2, 
+    def execute(self, tool_name, description, collection_name: str, top_k: int = 4, use_model_prompt: bool = True, score_threshold: float = 0.2,
         strict_citation: bool = True, enhance_prompt: str = enhance_prompt, rerank: bool = False, rerank_top_k: int = 5):
         def create_vectordb_tool():
             @tool(tool_name, description=description)
@@ -99,7 +99,7 @@ class QdrantRetrievalTool(Node):
                             score = item.get("score", 0.0)
                             chunk_text = item["chunk_text"]
                             context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
-                            
+
                     if context_parts:
                         context_text = "\n".join(context_parts)
                         enhanced_prompt = f"""{enhance_prompt}

@@ -13,16 +13,15 @@ import aiofiles
 import hashlib
 import logging
 from datetime import datetime
-import jwt
-from pathlib import Path
 import urllib.parse
 from controller.authController import verify_token, get_user_by_token
 from service.database.models.user import User
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_document_info_generator
 
 logger = logging.getLogger("document-controller")
 security = HTTPBearer(auto_error=False)
 
-router = APIRouter(prefix="/api/documents", tags=["Documents"])
+router = APIRouter(prefix="/documents", tags=["Documents"])
 
 # 설정 상수
 DOCUMENTS_BASE_DIR = os.getenv("DOCUMENTS_BASE_DIR", "/polarag_backend/downloads")
@@ -223,10 +222,7 @@ async def fetch_document(
             safe_path = safe_original_path
 
         # 접근 권한 확인
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
+        app_db = get_db_manager(request)
         access_check = await check_document_access(app_db, user_id, joined_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
@@ -302,10 +298,7 @@ async def fetch_document_deploy(
             safe_path = safe_original_path
 
         # 접근 권한 확인
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
+        app_db = get_db_manager(request)
         access_check = await check_document_access(app_db, user_id, joined_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
@@ -367,10 +360,7 @@ async def get_document_metadata_endpoint(
         safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
 
         # 접근 권한 확인
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
+        app_db = get_db_manager(request)
         access_check = await check_document_access(app_db, user_id, decoded_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
@@ -411,10 +401,7 @@ async def get_document_metadata_deploy(
         safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
 
         # 접근 권한 확인
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
+        app_db = get_db_manager(request)
         access_check = await check_document_access(app_db, user_id, decoded_path)
         if not access_check["has_access"]:
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
@@ -449,10 +436,7 @@ async def check_document_access_endpoint(
         user_id = await get_user_id_from_request(request, document_request, credentials)
 
         # 접근 권한 확인
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
+        app_db = get_db_manager(request)
         decoded_path = urllib.parse.unquote(document_request.file_path)
         access_check = await check_document_access(app_db, user_id, decoded_path)
 
@@ -487,11 +471,7 @@ async def check_document_access_deploy(
         user_id = document_request.user_id
 
         # 접근 권한 확인
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
-
+        app_db = get_db_manager(request)
         decoded_path = urllib.parse.unquote(document_request.file_path)
         access_check = await check_document_access(app_db, user_id, decoded_path)
 

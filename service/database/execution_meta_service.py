@@ -7,7 +7,6 @@ from service.database.models.executor import ExecutionMeta
 
 logger = logging.getLogger("execution-meta-service")
 
-
 async def get_or_create_execution_meta(
     db_manager,
     user_id: int,
@@ -104,7 +103,6 @@ async def get_or_create_execution_meta(
             interaction_count=0,
             metadata={}
         )
-
 
 async def update_execution_meta_count(db_manager, execution_meta: ExecutionMeta):
     """

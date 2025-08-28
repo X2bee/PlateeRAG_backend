@@ -6,11 +6,10 @@ import os
 import json
 import logging
 from datetime import datetime
-from editor.workflow_executor import WorkflowExecutor
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
-from controller.controller_helper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request
 from service.database.models.executor import ExecutionMeta
-from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("interaction-controller")
 router = APIRouter(prefix="/api/interaction", tags=["interaction"])
@@ -49,21 +48,12 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
     try:
         user_id = extract_user_id_from_request(request)
 
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(status_code=500, detail="Database connection not available")
-
-        # SQL 쿼리 작성 - 조건에 따라 동적으로 구성
+        app_db = get_db_manager(request)
         where_conditions = {}
-        query_params = []
         where_conditions["user_id"] = user_id
 
         if interaction_id:
             where_conditions["interaction_id"] = interaction_id
-
-        # 로직 제거
-        # if workflow_id:
-        #     where_conditions["workflow_id"] = workflow_id
 
         result = app_db.find_by_condition(
             ExecutionMeta,
@@ -73,15 +63,6 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
             limit=1000000,
             return_list=True
         )
-
-        print(result)
-
-        # # SQLite인 경우 파라미터 플레이스홀더 변경
-        # if db_manager.config_db_manager.db_type == "sqlite":
-        #     query = query.replace("%s", "?")
-
-        # # 쿼리 실행
-        # result = db_manager.config_db_manager.execute_query(query, tuple(query_params))
 
         if not result:
             return JSONResponse(content={

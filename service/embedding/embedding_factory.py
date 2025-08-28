@@ -21,32 +21,46 @@ class EmbeddingFactory:
         "custom_http": CustomHTTPEmbedding
     }
 
+    _instance = None
+    _last_config_hash = None
+
     @classmethod
-    def create_embedding_client(cls, vectordb_config) -> BaseEmbedding:
-        """
-        설정에 따라 임베딩 클라이언트 생성
+    def create_embedding_client(cls, config_composer) -> BaseEmbedding:
+        embedding_config = config_composer.get_config_by_category_name("embedding")
+        provider = embedding_config.EMBEDDING_PROVIDER.value.lower()
 
-        Args:
-            vectordb_config: VectorDBConfig 객체
+        # 설정 해시 생성 (설정이 변경되었는지 확인용)
+        config_hash = cls._generate_config_hash(provider, config_composer)
 
-        Returns:
-            BaseEmbedding 구현체
-        """
-        provider = vectordb_config.EMBEDDING_PROVIDER.value.lower()
+        # 기존 인스턴스가 있고 설정이 동일하면 재사용
+        if cls._instance is not None and cls._last_config_hash == config_hash:
+            logger.info("Reusing existing embedding client instance")
+            return cls._instance
+
+        # 기존 인스턴스가 있지만 설정이 변경된 경우
+        if cls._instance is not None:
+            logger.info("Configuration changed, replacing embedding client")
+            cls._instance = None
 
         if provider not in cls.PROVIDERS:
             available_providers = list(cls.PROVIDERS.keys())
             raise ValueError(f"Unsupported embedding provider: {provider}. Available: {available_providers}")
 
-        # 제공자별 설정 준비
-        config = cls._prepare_config(provider, vectordb_config)
+        config = cls._prepare_config(provider, config_composer)
 
-        # 클라이언트 생성
         try:
             embedding_class = cls.PROVIDERS[provider]
             client = embedding_class(config)
 
             logger.info(f"Created {provider} embedding client")
+
+            if embedding_config.AUTO_DETECT_EMBEDDING_DIM.value:
+                dimension = client.get_embedding_dimension()
+                config_composer.update_config("QDRANT_VECTOR_DIMENSION", dimension)
+
+            # 새 인스턴스와 설정 해시 저장
+            cls._instance = client
+            cls._last_config_hash = config_hash
             return client
 
         except ImportError as e:
@@ -57,73 +71,47 @@ class EmbeddingFactory:
             raise
 
     @classmethod
-    def _prepare_config(cls, provider: str, vectordb_config) -> Dict[str, Any]:
-        """제공자별 설정 준비"""
+    def _generate_config_hash(cls, provider: str, config_composer) -> str:
+        """설정 변경 감지를 위한 해시 생성"""
+        embedding_config = config_composer.get_config_by_category_name("embedding")
+
+        if provider == "openai":
+            config_str = f"{provider}:{config_composer.get_config_by_name('OPENAI_API_KEY').value}:{embedding_config.OPENAI_EMBEDDING_MODEL_NAME.value}"
+        elif provider == "huggingface":
+            config_str = f"{provider}:{embedding_config.HUGGINGFACE_EMBEDDING_MODEL_NAME.value}:{config_composer.get_config_by_name('HUGGING_FACE_HUB_TOKEN').value}:{embedding_config.HUGGINGFACE_EMBEDDING_MODEL_DEVICE.value}"
+        elif provider == "custom_http":
+            config_str = f"{provider}:{embedding_config.CUSTOM_EMBEDDING_URL.value}:{embedding_config.CUSTOM_EMBEDDING_API_KEY.value}:{embedding_config.CUSTOM_EMBEDDING_MODEL_NAME.value}"
+        else:
+            config_str = provider
+
+        return str(hash(config_str))
+
+    @classmethod
+    def _prepare_config(cls, provider: str, config_composer) -> Dict[str, Any]:
+        embedding_config = config_composer.get_config_by_category_name("embedding")
 
         if provider == "openai":
             return {
-                "api_key": vectordb_config.get_openai_api_key(),
-                "model": vectordb_config.OPENAI_EMBEDDING_MODEL.value
+                "api_key": config_composer.get_config_by_name("OPENAI_API_KEY").value,
+                "model": embedding_config.OPENAI_EMBEDDING_MODEL_NAME.value
             }
 
         elif provider == "huggingface":
             return {
-                "model_name": vectordb_config.HUGGINGFACE_MODEL_NAME.value,
-                "api_key": vectordb_config.HUGGINGFACE_API_KEY.value,
-                "model_device": vectordb_config.HUGGINGFACE_EMBEDDING_MODEL_DEVICE.value,
+                "model_name": embedding_config.HUGGINGFACE_EMBEDDING_MODEL_NAME.value,
+                "api_key": config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value,
+                "model_device": embedding_config.HUGGINGFACE_EMBEDDING_MODEL_DEVICE.value,
             }
 
         elif provider == "custom_http":
             return {
-                "url": vectordb_config.CUSTOM_EMBEDDING_URL.value,
-                "api_key": vectordb_config.CUSTOM_EMBEDDING_API_KEY.value,
-                "model": vectordb_config.CUSTOM_EMBEDDING_MODEL.value
+                "url": embedding_config.CUSTOM_EMBEDDING_URL.value,
+                "api_key": embedding_config.CUSTOM_EMBEDDING_API_KEY.value,
+                "model": embedding_config.CUSTOM_EMBEDDING_MODEL_NAME.value
             }
 
         else:
             raise ValueError(f"Unknown provider: {provider}")
-
-    @classmethod
-    async def test_all_providers(cls, vectordb_config) -> Dict[str, Dict[str, Any]]:
-        """
-        모든 임베딩 제공자 테스트
-
-        Args:
-            vectordb_config: VectorDBConfig 객체
-
-        Returns:
-            제공자별 테스트 결과
-        """
-        results = {}
-
-        for provider_name in cls.PROVIDERS:
-            try:
-                # 임시로 제공자 변경
-                original_provider = vectordb_config.EMBEDDING_PROVIDER.value
-                vectordb_config.EMBEDDING_PROVIDER.value = provider_name
-
-                # 클라이언트 생성 및 테스트
-                client = cls.create_embedding_client(vectordb_config)
-                is_available = await client.is_available()
-                provider_info = client.get_provider_info()
-                provider_info["available"] = is_available
-
-                results[provider_name] = provider_info
-
-                # 원래 제공자로 복원
-                vectordb_config.EMBEDDING_PROVIDER.value = original_provider
-
-            except Exception as e:
-                results[provider_name] = {
-                    "provider": provider_name,
-                    "available": False,
-                    "error": str(e)
-                }
-
-                # 원래 제공자로 복원
-                vectordb_config.EMBEDDING_PROVIDER.value = original_provider
-
-        return results
 
     @classmethod
     def get_available_providers(cls) -> Dict[str, str]:
@@ -134,7 +122,7 @@ class EmbeddingFactory:
             제공자명과 설명
         """
         return {
-            "openai": "OpenAI 임베딩 API (text-embedding-3-small, text-embedding-ada-002 등)",
-            "huggingface": "HuggingFace sentence-transformers 모델 (로컬 실행)",
-            "custom_http": "Custom HTTP API (vLLM, FastAPI 등 OpenAI 호환 서버)"
+            "openai": "",
+            "huggingface": "",
+            "custom_http": ""
         }

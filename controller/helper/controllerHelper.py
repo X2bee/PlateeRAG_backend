@@ -7,12 +7,10 @@ from fastapi import HTTPException, Request
 from typing import Optional, Dict, Any
 from service.database.models.user import User
 import logging
-
-# authController에서 사용하는 함수들을 import
 from controller.authController import get_user_by_token
+from controller.helper.singletonHelper import get_db_manager
 
 logger = logging.getLogger("controller-helper")
-
 
 def validate_user_authentication(request: Request) -> Dict[str, Any]:
     """
@@ -133,7 +131,7 @@ def require_admin_access(request: Request) -> Dict[str, Any]:
     Raises:
         HTTPException: 인증 실패 또는 권한 부족 시 발생
     """
-    app_db = request.app.state.app_db
+    app_db = get_db_manager(request)
     user_session = validate_user_authentication(request)
     existing_data = app_db.find_by_condition(
         User,

@@ -12,7 +12,7 @@ import hashlib
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from service.database.models.user import User
-from controller.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("auth-controller")
 
@@ -27,6 +27,9 @@ class SignupRequest(BaseModel):
     email: str
     password: str
     full_name: Optional[str] = None
+    group_name: Optional[str] = "none"
+    mobile_phone_number: Optional[str] = None
+
 
 class SignupResponse(BaseModel):
     """회원가입 응답 모델"""
@@ -242,17 +245,21 @@ async def signup(request: Request, signup_data: SignupRequest):
                 detail="Email already exists"
             )
 
+        preferences = {}
+        if signup_data.mobile_phone_number:
+            preferences['mobile_phone_number'] = signup_data.mobile_phone_number
+
         new_user = User(
             username=signup_data.username,
             email=signup_data.email,
             password_hash=signup_data.password,
             full_name=signup_data.full_name,
-            is_active=True,
+            is_active=False, # 이제 False로 변경해서 사용자 승인이 되어야 하는 것으로 변경.
             is_admin=False,
             last_login=None,
             user_type="standard",
-            group_name="none",
-            preferences={}
+            group_name=signup_data.group_name,
+            preferences=preferences
         )
 
         # 데이터베이스에 사용자 추가
@@ -299,14 +306,7 @@ async def login(request: Request, login_data: LoginRequest):
         LoginResponse: 로그인 결과
     """
     try:
-        # 데이터베이스 매니저 가져오기
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
-
+        app_db = get_db_manager(request)
         # 입력 데이터 검증
         if not login_data.email or not login_data.password:
             raise HTTPException(
@@ -502,14 +502,7 @@ async def refresh_token(request: Request, refresh_data: RefreshTokenRequest):
                 detail="Invalid token payload"
             )
 
-        # 사용자 정보 가져오기
-        app_db = request.app.state.app_db
-        if not app_db:
-            raise HTTPException(
-                status_code=500,
-                detail="Database connection not available"
-            )
-
+        app_db = get_db_manager(request)
         user = app_db.find_by_id(User, int(user_id))
         if not user or not user.is_active:
             raise HTTPException(
