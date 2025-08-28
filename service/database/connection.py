@@ -179,7 +179,7 @@ class AppDatabaseManager:
                             model_class.__name__, record_id, e)
             return None
 
-    def find_all(self, model_class: Type[BaseModel], limit: int = 10000, offset: int = 0) -> List[BaseModel]:
+    def find_all(self, model_class: Type[BaseModel], limit: int = 500, offset: int = 0) -> List[BaseModel]:
         """모든 레코드 조회 (페이징 지원)"""
         try:
             table_name = model_class().get_table_name()
@@ -200,7 +200,7 @@ class AppDatabaseManager:
 
     def find_by_condition(self, model_class: Type[BaseModel],
                          conditions: Dict[str, Any],
-                         limit: int = 10000,
+                         limit: int = 500,
                          offset: int = 0,
                          orderby: str = "id",
                          orderby_asc: bool = False,
