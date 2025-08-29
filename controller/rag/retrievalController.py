@@ -17,6 +17,8 @@ import datetime
 import uuid
 from zoneinfo import ZoneInfo
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
+from service.database.models.user import User
+
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_document_info_generator
 from service.embedding import get_fastembed_service
@@ -81,24 +83,90 @@ class DocumentSearchRequest(BaseModel):
     rerank: Optional[bool] = False
     rerank_top_k: Optional[int] = 20
 
-# Collection Management Endpoints 문제없음
 @router.get("/collections")
 async def list_collections(request: Request,):
     """모든 컬렉션 목록 조회"""
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
-
+    user = app_db.find_by_id(User, user_id)
+    groups = user.groups
     try:
         existing_data = app_db.find_by_condition(
             VectorDB,
             {
                 "user_id": user_id,
             },
-            limit=10000,
-            return_list=True
+        limit=10000,
+        return_list=True
         )
-        return existing_data
+
+        if groups and groups != None and groups != [] and len(groups) > 0:
+            for group_name in groups:
+                shared_data = app_db.find_by_condition(
+                    VectorDB,
+                    {
+                        "share_group": group_name,
+                        "is_shared": True,
+                    },
+                    limit=10000,
+                    return_list=True
+                )
+                existing_data.extend(shared_data)
+
+        # 중복 제거: id를 기준으로 중복 제거
+        seen_ids = set()
+        unique_data = []
+        for item in existing_data:
+            if item['id'] not in seen_ids:
+                seen_ids.add(item['id'])
+                unique_data.append(item)
+
+        return unique_data
     except Exception as e:
+        logger.error(f"Failed to list collections: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
+
+#TODO 컬렉션 업데이트해서 공유 상태 + 공유 그룹 설정 가능하게 만들어야 함.
+@router.get("/update/collections")
+async def update_collections(request: Request):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    user = app_db.find_by_id(User, user_id)
+    groups = user.groups
+    try:
+        existing_data = app_db.find_by_condition(
+            VectorDB,
+            {
+                "user_id": user_id,
+            },
+        limit=10000,
+        return_list=True
+        )
+
+        if groups and groups != None and groups != [] and len(groups) > 0:
+            for group_name in groups:
+                shared_data = app_db.find_by_condition(
+                    VectorDB,
+                    {
+                        "share_group": group_name,
+                        "is_shared": True,
+                    },
+                    limit=10000,
+                    return_list=True
+                )
+                existing_data.extend(shared_data)
+
+        # 중복 제거: id를 기준으로 중복 제거
+        seen_ids = set()
+        unique_data = []
+        for item in existing_data:
+            if item['id'] not in seen_ids:
+                seen_ids.add(item['id'])
+                unique_data.append(item)
+
+        return unique_data
+    except Exception as e:
+        logger.error(f"Failed to list collections: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
 
 @router.post("/collections")
@@ -154,22 +222,32 @@ async def create_collection(request: Request, collection_request: CollectionCrea
 @router.delete("/collections")
 async def delete_collection(request: Request, collection_request: CollectionDeleteRequest):
     """컬렉션 삭제"""
-    try:
-        vector_manager = get_vector_manager(request)
-        result = vector_manager.delete_collection(collection_request.collection_name)
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
 
-        if result.get("status") == "success":
-            app_db = get_db_manager(request)
-            rag_service = get_rag_service(request)
-            vector_manager = rag_service.vector_manager
+    existing_collection = app_db.find_by_condition(VectorDB, {'user_id': user_id, 'collection_name': collection_request.collection_name})
 
-            app_db.delete_by_condition(VectorDB, {
-                "collection_name": collection_request.collection_name
-            })
+    if existing_collection:
+        try:
+            vector_manager = get_vector_manager(request)
+            result = vector_manager.delete_collection(collection_request.collection_name)
 
-        return {"message": "Collection deleted"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}")
+            if result.get("status") == "success":
+                app_db = get_db_manager(request)
+                rag_service = get_rag_service(request)
+                vector_manager = rag_service.vector_manager
+
+                app_db.delete_by_condition(VectorDB, {
+                    "collection_name": collection_request.collection_name
+                })
+
+            return {"message": "Collection deleted"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}")
+
+    else:
+        raise HTTPException(status_code=404, detail="Collection not found or not owned by user")
+
 
 @router.get("/collections/{collection_name}")
 async def get_collection_info(request: Request, collection_name: str):

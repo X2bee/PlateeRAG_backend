@@ -171,26 +171,29 @@ async def delete_group(request: Request, group_name: str):
 
         app_db.delete_by_condition(GroupMeta, {'group_name': group_name})
 
-        users = app_db.find_by_condition(User, {'group_name': group_name})
+        # 해당 그룹을 groups 배열에 가지고 있는 모든 사용자 찾기
         db_type = app_db.config_db_manager.db_type
 
-        if users:
-            if db_type == "postgresql":
-                update_query = """
-                UPDATE users
-                SET group_name = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE group_name = %s
-                """
-                params = ('none', group_name)
-            else:
-                update_query = """
-                UPDATE users
-                SET group_name = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE group_name = ?
-                """
-                params = ('none', group_name)
+        if db_type == "postgresql":
+            # PostgreSQL: 배열에서 특정 값 포함 여부 확인
+            query = "SELECT * FROM users WHERE %s = ANY(groups)"
+            params = (group_name,)
+            results = app_db.config_db_manager.execute_query(query, params)
+            users = [User.from_dict(dict(row)) for row in results] if results else []
+        else:
+            # SQLite: JSON 배열에서 검색 (LIKE 사용)
+            query = "SELECT * FROM users WHERE groups LIKE ?"
+            params = (f'%"{group_name}"%',)
+            results = app_db.config_db_manager.execute_query(query, params)
+            users = [User.from_dict(dict(row)) for row in results] if results else []
 
-            app_db.config_db_manager.execute_update_delete(update_query, params)
+        # 각 사용자의 groups에서 해당 그룹명 제거
+        for user in users:
+            existing_groups = user.groups if user.groups else []
+            new_groups = [group for group in existing_groups if group != group_name]
+
+            # update_list_columns 메서드로 업데이트 (첫 번째 인자는 모델 클래스가 아닌 인스턴스)
+            app_db.update_list_columns(User, {"groups": new_groups}, {"id": user.id})
         return {"detail": f"Group '{group_name}' deleted successfully and {len(users)} users moved to 'none' group"}
 
     except Exception as e:
@@ -238,7 +241,7 @@ async def update_group_permissions(request: Request, group_data: dict):
         if "available" in group_data:
             updates['available'] = group_data.get("available", group.available)
 
-        app_db.update_list_columns(group, updates, {'group_name': group.group_name})
+        app_db.update_list_columns(GroupMeta, updates, {'group_name': group.group_name})
 
         return {"detail": "Group permissions updated successfully"}
     except Exception as e:
