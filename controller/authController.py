@@ -12,6 +12,7 @@ import hashlib
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from service.database.models.user import User
+from service.database.models.group import GroupMeta
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 logger = logging.getLogger("auth-controller")
@@ -561,3 +562,36 @@ async def check_superuser(request: Request):
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
+
+@router.get("/available-section")
+async def get_group_available_sections(request: Request, user_id=None):
+    try:
+        app_db = get_db_manager(request)
+        user = app_db.find_by_id(User, user_id)
+        group_name = user.group_name
+        user_type = user.user_type
+
+        if user_type == "superuser":
+            return {"available_sections": ["canvas", "documents", "train", "workflows", "eval", "train-monitor", "storage"]}
+
+        if group_name == "none":
+            return {"available_sections": []}
+
+        else:
+            group = app_db.find_by_condition(GroupMeta, {'group_name': group_name})
+            if group:
+                group = group[0]
+                group_available_sections = group.available_sections
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Group not found"
+                )
+        return {"available_sections": group_available_sections}
+
+    except Exception as e:
+        logger.error("Error fetching all users: %s", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        ) from e

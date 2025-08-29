@@ -204,12 +204,12 @@ def get_system_uptime() -> float:
 @router.get("/status", response_model=SystemMonitorResponse)
 async def get_system_status(request: Request):
     """Get comprehensive system monitoring information"""
-    # val_superuser = await validate_superuser(request)
-    # if val_superuser.get("superuser") is not True:
-    #     raise HTTPException(
-    #         status_code=403,
-    #         detail="Admin privileges required"
-    #     )
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
 
     try:
         # Gather all system information
