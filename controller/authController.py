@@ -323,18 +323,11 @@ async def login(request: Request, login_data: LoginRequest):
                 detail="Invalid email or password"
             )
 
-        if user.user_type == "superuser":
-            if login_data.password != generate_sha256_hash(user.password_hash):
-                raise HTTPException(
-                    status_code=401,
-                    detail="Invalid username or password"
-                )
-        else:
-            if login_data.password != user.password_hash:
-                raise HTTPException(
-                    status_code=401,
-                    detail="Invalid username or password"
-                )
+        if login_data.password != user.password_hash:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid username or password"
+            )
 
         # 사용자가 활성 상태인지 확인
         if not user.is_active:
@@ -572,7 +565,7 @@ async def get_group_available_sections(request: Request, user_id=None):
         user_type = user.user_type
 
         if user_type == "superuser":
-            return {"available_sections": ["canvas", "documents", "train", "workflows", "eval", "train-monitor", "storage"]}
+            return {"available_sections": ["canvas", "documents", "train", "workflows", "eval", "train-monitor", "storage", "admin-page"]}
 
         if group_name == "none":
             return {"available_sections": []}
