@@ -1,4 +1,5 @@
 import logging
+import json
 from typing import List, Dict, Any, Optional, Type
 from service.database.database_manager import DatabaseManager
 from service.database.models.base_model import BaseModel
@@ -258,6 +259,72 @@ class AppDatabaseManager:
             return []
 
 
+    def update_list_columns(self, model_class: Type[BaseModel], updates: Dict[str, Any], conditions: Dict[str, Any]) -> bool:
+        """리스트 컬럼을 포함한 모델 업데이트
+
+        Args:
+            model: 업데이트할 모델 클래스 인스턴스
+            updates: 업데이트할 컬럼과 값들의 딕셔너리
+            conditions: WHERE 조건으로 사용할 컬럼과 값들의 딕셔너리
+
+        Returns:
+            bool: 성공 여부
+        """
+        try:
+            table_name = model_class().get_table_name()
+            db_type = self.config_db_manager.db_type
+
+            # SET 절 생성
+            set_clauses = []
+            values = []
+
+            for column, value in updates.items():
+                # 리스트 데이터 처리
+                if isinstance(value, list):
+                    if db_type == "postgresql":
+                        # PostgreSQL 배열 형식으로 변환: {item1,item2,item3}
+                        escaped_items = []
+                        for item in value:
+                            # 특수문자 이스케이프 처리
+                            escaped_item = str(item).replace('"', '""')
+                            escaped_items.append(f'"{escaped_item}"')
+                        array_literal = "{" + ",".join(escaped_items) + "}"
+                        set_clauses.append(f"{column} = %s")
+                        values.append(array_literal)
+                    else:
+                        # SQLite JSON 형식으로 변환
+                        array_json = json.dumps(value)
+                        set_clauses.append(f"{column} = ?")
+                        values.append(array_json)
+                else:
+                    # 일반 데이터 처리
+                    if db_type == "postgresql":
+                        set_clauses.append(f"{column} = %s")
+                    else:
+                        set_clauses.append(f"{column} = ?")
+                    values.append(value)
+
+            # WHERE 절 생성
+            where_clauses = []
+            for key, value in conditions.items():
+                if db_type == "postgresql":
+                    where_clauses.append(f"{key} = %s")
+                else:
+                    where_clauses.append(f"{key} = ?")
+                values.append(value)
+
+            set_clause = ", ".join(set_clauses)
+            where_clause = " AND ".join(where_clauses)
+
+            query = f"UPDATE {table_name} SET {set_clause} WHERE {where_clause}"
+
+            affected_rows = self.config_db_manager.execute_update_delete(query, tuple(values))
+            return affected_rows is not None and affected_rows > 0
+
+        except (AttributeError, ValueError) as e:
+            self.logger.error("Failed to update list columns for %s: %s", model_class.__name__, e)
+            return False
+
     def close(self):
         """데이터베이스 연결 종료"""
         if self.config_db_manager.connection:
@@ -268,6 +335,6 @@ class AppDatabaseManager:
         """데이터베이스 스키마 마이그레이션 실행"""
         try:
             return self.config_db_manager.run_migrations(self._models_registry)
-        except Exception as e:
+        except (AttributeError, ValueError) as e:
             self.logger.error("Failed to run migrations: %s", e)
             return False
