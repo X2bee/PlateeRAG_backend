@@ -38,13 +38,6 @@ async def get_all_groups(request: Request):
 
 @router.get("/all-groups/list")
 async def get_all_groups_list(request: Request):
-    val_superuser = await validate_superuser(request)
-    if val_superuser.get("superuser") is not True:
-        raise HTTPException(
-            status_code=403,
-            detail="Admin privileges required"
-        )
-
     try:
         app_db = get_db_manager(request)
         groups = app_db.find_by_condition(GroupMeta, {'available': True})
