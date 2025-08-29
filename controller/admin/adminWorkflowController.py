@@ -38,7 +38,7 @@ def process_io_logs_efficient(io_logs):
     return list(map(process_single_log, io_logs))
 
 @router.get("/all-io-logs")
-async def get_all_workflows(request: Request, page: int = 1, page_size: int = 250):
+async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: int = 250, user_id = None):
     val_superuser = await validate_superuser(request)
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
@@ -56,8 +56,10 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
         offset = (page - 1) * page_size
 
         app_db = get_db_manager(request)
-
-        io_logs = app_db.find_all(ExecutionIO, limit=page_size, offset=offset)
+        if user_id:
+            io_logs = app_db.find_by_condition(ExecutionIO, {'user_id': user_id}, limit=page_size, offset=offset)
+        else:
+            io_logs = app_db.find_all(ExecutionIO, limit=page_size, offset=offset)
         processed_logs = process_io_logs_efficient(io_logs)
 
         return {
