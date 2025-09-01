@@ -84,7 +84,7 @@ class DocumentSearchRequest(BaseModel):
     rerank_top_k: Optional[int] = 20
 
 @router.get("/collections")
-async def list_collections(request: Request,):
+async def list_collections(request: Request):
     """모든 컬렉션 목록 조회"""
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
@@ -126,48 +126,38 @@ async def list_collections(request: Request,):
         logger.error(f"Failed to list collections: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
 
-#TODO 컬렉션 업데이트해서 공유 상태 + 공유 그룹 설정 가능하게 만들어야 함.
-@router.get("/update/collections")
-async def update_collections(request: Request):
+@router.post("/update/collections")
+async def update_collections(request: Request, update_dict: dict):
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
-    user = app_db.find_by_id(User, user_id)
-    groups = user.groups
+
     try:
         existing_data = app_db.find_by_condition(
             VectorDB,
             {
                 "user_id": user_id,
+                "collection_name": update_dict.get("collection_name")
             },
-        limit=10000,
-        return_list=True
         )
 
-        if groups and groups != None and groups != [] and len(groups) > 0:
-            for group_name in groups:
-                shared_data = app_db.find_by_condition(
-                    VectorDB,
-                    {
-                        "share_group": group_name,
-                        "is_shared": True,
-                    },
-                    limit=10000,
-                    return_list=True
-                )
-                existing_data.extend(shared_data)
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        existing_data = existing_data[0]
 
-        # 중복 제거: id를 기준으로 중복 제거
-        seen_ids = set()
-        unique_data = []
-        for item in existing_data:
-            if item['id'] not in seen_ids:
-                seen_ids.add(item['id'])
-                unique_data.append(item)
+        existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
+        existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
 
-        return unique_data
+        app_db.update(existing_data)
+
+        logger.info(f"Collection '{existing_data.collection_name}' updated successfully.")
+        return {
+            "message": "Collection updated successfully",
+            "collection_name": existing_data.collection_name
+        }
+
     except Exception as e:
-        logger.error(f"Failed to list collections: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
+        logger.error(f"Failed to update collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update collection: {str(e)}")
 
 @router.post("/collections")
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):

@@ -557,6 +557,26 @@ async def check_superuser(request: Request):
             detail=f"Internal server error: {str(e)}"
         )
 
+@router.get("/available-group")
+async def get_group_available_groups(request: Request, user_id=None):
+    try:
+        app_db = get_db_manager(request)
+        user = app_db.find_by_id(User, user_id)
+
+        groups = user.groups
+        if not groups or groups == None or groups == [] or len(groups) == 0:
+            return {"available_groups": []}
+
+        else:
+            return {"available_groups": groups}
+
+    except Exception as e:
+        logger.error("Error fetching all users: %s", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        ) from e
+
 @router.get("/available-section")
 async def get_group_available_sections(request: Request, user_id=None):
     try:
