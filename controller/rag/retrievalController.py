@@ -195,7 +195,11 @@ async def create_collection(request: Request, collection_request: CollectionCrea
                 collection_name=collection_name,
                 description=collection_request.description,
                 registered_at=datetime.datetime.now(TIMEZONE),
-                updated_at=datetime.datetime.now(TIMEZONE)
+                updated_at=datetime.datetime.now(TIMEZONE),
+                vector_size=vector_size,
+                is_shared=False,
+                share_group=None,
+                share_permissions=None,
             )
             app_db.insert(vector_db)
 

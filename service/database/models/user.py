@@ -18,8 +18,8 @@ class User(BaseModel):
         self.user_type: str = kwargs.get('user_type', "standard")
         self.last_login: Optional[str] = kwargs.get('last_login')
         self.preferences: Optional[Dict] = kwargs.get('preferences', {})
-        self.groups: str = kwargs.get('groups', 'none')
-        self.group_name: List[str] = kwargs.get('group_name', [])
+        self.groups: List[str] = kwargs.get('groups', [])
+        self.group_name: str = kwargs.get('group_name', 'none')
 
 
     def get_table_name(self) -> str:

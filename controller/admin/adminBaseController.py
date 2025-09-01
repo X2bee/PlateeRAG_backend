@@ -131,7 +131,8 @@ async def create_superuser(request: Request, signup_data: SignupRequest):
             last_login=None,
             preferences={},
             user_type="superuser",
-            group_name="superuser"
+            group_name="superuser",
+            groups={},
         )
 
         insert_result = app_db.insert(new_user)

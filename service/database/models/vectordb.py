@@ -13,6 +13,7 @@ class VectorDB(BaseModel):
         self.collection_name: str = kwargs.get('collection_name', '')
         self.description: str = kwargs.get('description', '')
         self.registered_at: datetime.datetime = kwargs.get('registered_at', self.now())
+        self.vector_size: int = kwargs.get('vector_size', 0)
         self.is_shared: bool = kwargs.get('is_shared', False)
         self.share_group: Optional[str] = kwargs.get('share_group', None)
         self.share_permissions: Optional[str] = kwargs.get('share_permissions', 'read')
@@ -27,6 +28,7 @@ class VectorDB(BaseModel):
             'collection_name': 'VARCHAR(500) NOT NULL',
             'description': 'TEXT',
             'registered_at': 'TIMESTAMP',
+            'vector_size': 'INTEGER DEFAULT 0',
             'is_shared': 'BOOLEAN DEFAULT FALSE',
             'share_group': 'VARCHAR(50)',
             'share_permissions': 'VARCHAR(50)'

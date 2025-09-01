@@ -260,7 +260,7 @@ async def signup(request: Request, signup_data: SignupRequest):
             last_login=None,
             user_type="standard",
             group_name='none',
-            groups=[],
+            groups={},
             preferences=preferences
         )
 
