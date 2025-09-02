@@ -113,7 +113,6 @@ async def list_collections(request: Request):
                 )
                 existing_data.extend(shared_data)
 
-        # 중복 제거: id를 기준으로 중복 제거
         seen_ids = set()
         unique_data = []
         for item in existing_data:

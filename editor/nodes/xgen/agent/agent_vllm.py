@@ -203,13 +203,14 @@ class AgentVLLMNode(Node):
                 "additional_rag_context": additional_rag_context if additional_rag_context else ""
             }
 
+            if args_schema:
+                parser = JsonOutputParser(pydantic_object=args_schema)
+                format_instructions = parser.get_format_instructions()
+                escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
+                prompt = f"{prompt}\n\n{escaped_instructions}"
+
             if tools is not None:
                 if additional_rag_context and additional_rag_context.strip():
-                    if args_schema:
-                        parser = JsonOutputParser(pydantic_object=args_schema)
-                        format_instructions = parser.get_format_instructions()
-                        escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
-                        prompt = f"{prompt}\n\n{escaped_instructions}"
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
@@ -247,6 +248,7 @@ class AgentVLLMNode(Node):
                 return handler.get_formatted_output(output)
 
             else:
+
                 if additional_rag_context and additional_rag_context.strip():
                     if strict_citation:
                         prompt = prompt + citation_prompt
@@ -262,11 +264,13 @@ class AgentVLLMNode(Node):
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}")
                     ])
+
                 if args_schema:
-                    parser = JsonOutputParser(pydantic_object=args_schema)
-                    chain = final_prompt | llm | parser
+                    parser = JsonOutputParser()
                 else:
-                    chain = final_prompt | llm | StrOutputParser()
+                    parser = StrOutputParser()
+
+                chain = final_prompt | llm | parser
                 response = chain.invoke(inputs)
                 return response
 

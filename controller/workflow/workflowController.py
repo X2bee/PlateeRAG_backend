@@ -246,6 +246,9 @@ async def list_workflows_detail(request: Request):
     try:
         user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
+        user = app_db.find_by_id(User, user_id)
+        groups = user.groups
+        user_name = user.username if user else "Unknown User"
 
         existing_data = app_db.find_by_condition(
             WorkflowMeta,
@@ -255,13 +258,28 @@ async def list_workflows_detail(request: Request):
             limit=10000,
             orderby="updated_at",
         )
+        if groups and groups != None and groups != [] and len(groups) > 0:
+            for group_name in groups:
+                shared_data = app_db.find_by_condition(
+                    WorkflowMeta,
+                    {
+                        "share_group": group_name,
+                        "is_shared": True,
+                    },
+                    limit=10000,
+                    orderby="updated_at",
+                )
+                existing_data.extend(shared_data)
 
-        user_data = app_db.find_by_condition(User,{"id": user_id}, limit=1,
-        )
-        user_name = user_data[0].username if user_data else "Unknown User"
+        seen_ids = set()
+        unique_data = []
+        for item in existing_data:
+            if item.id not in seen_ids:
+                seen_ids.add(item.id)
+                unique_data.append(item)
 
         response_data = []
-        for data in existing_data:
+        for data in unique_data:
             data_dict = data.to_dict()
             data_dict['user_name'] = user_name
             response_data.append(data_dict)

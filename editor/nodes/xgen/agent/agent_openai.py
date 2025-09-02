@@ -123,7 +123,6 @@ class AgentOpenAINode(Node):
 
             response = self._generate_chat_response(text, default_prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context, args_schema, return_intermediate_steps)
             logger.info(f"[AGENT_EXECUTE] Chat Agent 응답 생성 완료: {len(response)}자")
-            logger.debug(f"[AGENT_EXECUTE] 생성된 응답: {response[:200]}{'...' if len(response) > 200 else ''}")
             return response
 
         except Exception as e:
@@ -150,13 +149,9 @@ class AgentOpenAINode(Node):
                     return "OpenAI API 키가 설정되지 않았습니다."
 
             elif llm_provider == "vllm":
-                api_key = None # 현재 vLLM API 키는 별도로 설정하지 않음
+                api_key = None
                 logger.info(f"[CHAT_RESPONSE] vLLM API 키는 None으로 설정")
 
-                # TODO: vLLM API 키 설정 로직 추가
-                # api_key = config_composer.get_config_by_name("VLLM_API_KEY").value
-                # if not api_key:
-                #     return "vLLM API 키가 설정되지 않았습니다."
             else:
                 logger.error(f"[CHAT_RESPONSE] 지원하지 않는 LLM Provider: {llm_provider}")
                 return f"지원하지 않는 LLM Provider: {llm_provider}"
@@ -187,13 +182,13 @@ class AgentOpenAINode(Node):
                 "additional_rag_context": additional_rag_context if additional_rag_context else ""
             }
 
+            if args_schema:
+                parser = JsonOutputParser(pydantic_object=args_schema)
+                format_instructions = parser.get_format_instructions()
+                escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
+                prompt = f"{prompt}\n\n{escaped_instructions}"
             if tools is not None:
                 if additional_rag_context and additional_rag_context.strip():
-                    if args_schema:
-                        parser = JsonOutputParser(pydantic_object=args_schema)
-                        format_instructions = parser.get_format_instructions()
-                        escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
-                        prompt = f"{prompt}\n\n{escaped_instructions}"
                     final_prompt = ChatPromptTemplate.from_messages([
                         ("system", prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
@@ -245,7 +240,11 @@ class AgentOpenAINode(Node):
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}")
                     ])
-                chain = final_prompt | llm | StrOutputParser()
+                if args_schema:
+                    parser = JsonOutputParser()
+                else:
+                    parser = StrOutputParser()
+                chain = final_prompt | llm | parser
                 response = chain.invoke(inputs)
                 return response
 

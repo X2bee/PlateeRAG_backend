@@ -6,8 +6,7 @@ from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from service.database.models.vectordb import VectorDB, VectorDBChunkEdge
 from fastapi import Request
-from controller.helper.controllerHelper import extract_user_id_from_request
-from controller.helper.singletonHelper import get_db_manager
+from controller.rag.retrievalController import list_collections
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +55,8 @@ class GraphEnhancedRetrievalTool(Node):
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
-        user_id = extract_user_id_from_request(request)
-        db_service = get_db_manager(request)
-        collections = db_service.find_by_condition(
-            VectorDB,
-            {"user_id": user_id},
-            limit=1000,
-        )
-        return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
+        collections = sync_run_async(list_collections(request))
+        return [{"value": collection.get("collection_name"), "label": collection.get("collection_make_name")} for collection in collections]
 
     def get_chunk_concepts(self, chunk_id: str, collection_name: str, app_db, relation_types: List[str] = None, collection_limit: bool = True) -> Dict[str, List[str]]:
         """청크와 연결된 개념들을 관계 타입별로 반환 (양방향 검색)"""

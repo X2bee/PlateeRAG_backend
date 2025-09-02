@@ -8,11 +8,9 @@ from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import tool
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
-from service.database.models.vectordb import VectorDB
 from fastapi import Request
-from controller.helper.controllerHelper import extract_user_id_from_request
+from controller.rag.retrievalController import list_collections
 from pydantic import BaseModel, Field
-from controller.helper.singletonHelper import get_db_manager
 
 logger = logging.getLogger(__name__)
 enhance_prompt = """You are an AI assistant that must strictly follow these guidelines when using the provided document context:
@@ -60,16 +58,8 @@ class QdrantRetrievalTool(Node):
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
-        user_id = extract_user_id_from_request(request)
-        db_service = get_db_manager(request)
-        collections = db_service.find_by_condition(
-            VectorDB,
-            {
-            "user_id": user_id
-            },
-            limit=1000,
-        )
-        return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
+        collections = sync_run_async(list_collections(request))
+        return [{"value": collection.get("collection_name"), "label": collection.get("collection_make_name")} for collection in collections]
 
 
     def execute(self, tool_name, description, collection_name: str, top_k: int = 4, use_model_prompt: bool = True, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt, rerank: bool = False, rerank_top_k: int = 5, model=None):
@@ -105,7 +95,7 @@ class QdrantRetrievalTool(Node):
                         most_common_file_id = next((file_id for file_name, file_id in items_file_info if file_name == most_common_file), None)
 
                     if most_common_file_id:
-                        document_detail = sync_run_async(rag_service.get_document_detail(
+                        document_detail = sync_run_async(rag_service.get_document_details(
                             collection_name=collection_name,
                             document_id=most_common_file_id
                         ))

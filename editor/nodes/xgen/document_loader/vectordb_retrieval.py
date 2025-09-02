@@ -6,8 +6,8 @@ from editor.node_composer import Node
 from editor.utils.helper.service_helper import AppServiceManager
 from service.database.models.vectordb import VectorDB
 from fastapi import Request
-from controller.helper.controllerHelper import extract_user_id_from_request
-from controller.helper.singletonHelper import get_db_manager
+from controller.rag.retrievalController import list_collections
+from editor.utils.helper.async_helper import sync_run_async
 
 logger = logging.getLogger(__name__)
 enhance_prompt = """You are an AI assistant that must strictly follow these guidelines when using the provided document context:
@@ -48,16 +48,8 @@ class QdrantRetrievalTool(Node):
     ]
 
     def api_collection(self, request: Request) -> Dict[str, Any]:
-        user_id = extract_user_id_from_request(request)
-        db_service = get_db_manager(request)
-        collections = db_service.find_by_condition(
-            VectorDB,
-            {
-            "user_id": user_id
-            },
-            limit=1000,
-        )
-        return [{"value": collection.collection_name, "label": collection.collection_make_name} for collection in collections]
+        collections = sync_run_async(list_collections(request))
+        return [{"value": collection.get("collection_name"), "label": collection.get("collection_make_name")} for collection in collections]
 
     def execute(self, collection_name: str, top_k: int = 4, score_threshold: float = 0.2, enhance_prompt: str = enhance_prompt, use_model_prompt: bool = True, rerank: bool = False, rerank_top_k: int = 5):
         rag_service = AppServiceManager.get_rag_service()
