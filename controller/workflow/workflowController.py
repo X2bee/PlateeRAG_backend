@@ -30,6 +30,33 @@ import time
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="", tags=["workflow"])
 
+def workflow_user_id_extractor(app_db, login_user_id, requested_user_id, workflow_id):
+    if login_user_id is not None:
+        login_user_id = str(login_user_id).strip()
+
+    if requested_user_id is not None:
+        requested_user_id = str(requested_user_id).strip()
+    else:
+        requested_user_id = None
+
+    if (login_user_id == requested_user_id) or requested_user_id == None or len(requested_user_id) == 0:
+        logger.info(f"Using login_user_id: {login_user_id}")
+        return login_user_id
+    else:
+        user = app_db.find_by_id(User, login_user_id)
+        groups = user.groups
+        requested_workflow_meta = app_db.find_by_condition(WorkflowMeta, {'user_id': requested_user_id, 'workflow_name': workflow_id}, limit=1)
+
+        if requested_workflow_meta:
+            requested_workflow_meta = requested_workflow_meta[0]
+            if requested_workflow_meta.is_shared and requested_workflow_meta.share_group in groups:
+                logger.info(f"Using requested_user_id: {requested_user_id}")
+                return requested_user_id
+            else:
+                return login_user_id
+
+        return login_user_id
+
 def extract_collection_name(collection_full_name: str) -> str:
     """
     컬렉션 이름에서 UUID 부분을 제거하고 실제 이름만 추출합니다.
@@ -167,15 +194,16 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
         raise HTTPException(status_code=500, detail=f"Failed to save workflow: {str(e)}")
 
 @router.get("/load/{workflow_id}")
-async def load_workflow(request: Request, workflow_id: str):
+async def load_workflow(request: Request, workflow_id: str, user_id):
     """
     특정 workflow를 로드합니다.
     """
     try:
-        user_id = extract_user_id_from_request(request)
-
+        login_user_id = extract_user_id_from_request(request)
         downloads_path = os.path.join(os.getcwd(), "downloads")
-        download_path_id = os.path.join(downloads_path, user_id)
+        app_db = get_db_manager(request)
+        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_id)
+        download_path_id = os.path.join(downloads_path, using_id)
 
         filename = f"{workflow_id}.json"
         file_path = os.path.join(download_path_id, filename)
@@ -661,7 +689,8 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     """
     try:
         user_id = extract_user_id_from_request(request)
-
+        app_db = get_db_manager(request)
+        extracted_user_id = workflow_user_id_extractor(app_db, user_id, request_body.user_id, request_body.workflow_name)
         ## 일반채팅인 경우 미리 정의된 워크플로우를 이용하여 일반 채팅에 사용.
         if request_body.workflow_name == 'default_mode':
             default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
@@ -673,7 +702,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
         ## 워크플로우 실행인 경우, 해당하는 워크플로우 파일을 찾아서 사용.
         else:
             downloads_path = os.path.join(os.getcwd(), "downloads")
-            download_path_id = os.path.join(downloads_path, user_id)
+            download_path_id = os.path.join(downloads_path, extracted_user_id)
 
             if not request_body.workflow_name.endswith('.json'):
                 filename = f"{request_body.workflow_name}.json"
@@ -774,6 +803,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
     """
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
+    extracted_user_id = workflow_user_id_extractor(app_db, user_id, request_body.user_id, request_body.workflow_name)
 
     async def stream_generator(async_result_generator, db_manager, user_id, workflow_req):
         """결과 제너레이터를 SSE 형식으로 변환하는 비동기 제너레이터"""
@@ -846,8 +876,6 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
 
 
     try:
-        user_id = extract_user_id_from_request(request)
-
         if request_body.workflow_name == 'default_mode':
             default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
             file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
@@ -856,7 +884,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             workflow_data = await _default_workflow_parameter_helper(request, request_body, workflow_data)
         else:
             downloads_path = os.path.join(os.getcwd(), "downloads")
-            download_path_id = os.path.join(downloads_path, user_id)
+            download_path_id = os.path.join(downloads_path, extracted_user_id)
             filename = f"{request_body.workflow_name}.json" if not request_body.workflow_name.endswith('.json') else request_body.workflow_name
             file_path = os.path.join(download_path_id, filename)
             with open(file_path, 'r', encoding='utf-8') as f:
