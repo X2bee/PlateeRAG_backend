@@ -223,6 +223,70 @@ async def load_workflow(request: Request, workflow_id: str, user_id):
         logger.error(f"Error loading workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to load workflow: {str(e)}")
 
+@router.get("/duplicate/{workflow_id}")
+async def duplicate_workflow(request: Request, workflow_id: str, user_id):
+    """
+    특정 workflow를 복제합니다.
+    """
+    try:
+        login_user_id = extract_user_id_from_request(request)
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        app_db = get_db_manager(request)
+        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_id)
+
+        origin_path_id = os.path.join(downloads_path, using_id)
+        target_path_id = os.path.join(downloads_path, login_user_id)
+
+        filename = f"{workflow_id}.json"
+        origin_path = os.path.join(origin_path_id, filename)
+        target_path = os.path.join(target_path_id, filename)
+
+        if not os.path.exists(origin_path):
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+
+        if os.path.exists(target_path):
+            logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
+            counter = 1
+            while os.path.exists(target_path):
+                target_path = os.path.join(target_path_id, f"{filename}_{counter}")
+                counter += 1
+
+        with open(origin_path, 'r', encoding='utf-8') as f:
+            workflow_data = json.load(f)
+
+        nodes = workflow_data.get('nodes', [])
+        node_count = len(nodes) if isinstance(nodes, list) else 0
+        has_startnode = any(node.get('data', {}).get('functionId') == 'startnode' for node in nodes)
+        has_endnode = any(node.get('data', {}).get('functionId') == 'endnode' for node in nodes)
+
+        edges = workflow_data.get('edges', [])
+        edge_count = len(edges) if isinstance(edges, list) else 0
+
+        workflow_meta = WorkflowMeta(
+            user_id=user_id,
+            workflow_id=workflow_data.get('workflow_id'),
+            workflow_name=workflow_data.get('workflow_name'),
+            node_count=node_count,
+            edge_count=edge_count,
+            has_startnode=has_startnode,
+            has_endnode=has_endnode,
+            is_completed=(has_startnode and has_endnode),
+        )
+
+        insert_result = app_db.insert(workflow_meta)
+
+        with open(target_path, 'w', encoding='utf-8') as wf:
+            json.dump(workflow_data, wf, ensure_ascii=False, indent=2)
+
+        logger.info(f"Workflow duplicated successfully: {filename}")
+        return {"success": True, "message": f"Workflow '{workflow_id}' duplicated successfully", "filename": filename}
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+    except Exception as e:
+        logger.error(f"Error loading workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to load workflow: {str(e)}")
+
 @router.delete("/delete/{workflow_name}")
 async def delete_workflow(request: Request, workflow_name: str):
     """

@@ -216,13 +216,19 @@ class AppDatabaseManager:
             values = []
 
             for key, value in conditions.items():
-                # LIKE 검색을 위한 키 인식 (예: "name__like__")
                 if key.endswith("__like__"):
                     real_key = key.removesuffix("__like__")
                     if db_type == "postgresql":
                         where_clauses.append(f"{real_key} ILIKE %s")
                     else:
                         where_clauses.append(f"{real_key} LIKE ?")
+                    values.append(f"%{value}%")
+                elif key.endswith("__notlike__"):
+                    real_key = key.removesuffix("__notlike__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{real_key} NOT ILIKE %s")
+                    else:
+                        where_clauses.append(f"{real_key} NOT LIKE ?")
                     values.append(f"%{value}%")
                 else:
                     if db_type == "postgresql":
