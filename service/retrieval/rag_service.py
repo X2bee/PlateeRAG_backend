@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 from fastapi import HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-from service.database.models.vectordb import VectorDBChunkEdge, VectorDBChunkMeta
+from service.database.models.vectordb import VectorDB, VectorDBChunkEdge, VectorDBChunkMeta
 
 logger = logging.getLogger("rag-service")
 
@@ -468,6 +468,11 @@ class RAGService:
                         source=point['id'],
                         relation_type="main_concept"
                     ))
+
+            vector_db_collection_meta = app_db.find_by_condition(VectorDB, {'collection_name': collection_name})[0]
+            if vector_db_collection_meta.init_embedding_model == None:
+                vector_db_collection_meta.init_embedding_model = embedding_model_name
+                app_db.update(vector_db_collection_meta)
 
             llm_enabled = use_llm_metadata and await self.metadata_generator.is_enabled()
             logger.info(f"use_llm_metadata: {use_llm_metadata}, LLM metadata enabled: {await self.metadata_generator.is_enabled()}")

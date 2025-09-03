@@ -14,6 +14,7 @@ class VectorDB(BaseModel):
         self.description: str = kwargs.get('description', '')
         self.registered_at: datetime.datetime = kwargs.get('registered_at', self.now())
         self.vector_size: int = kwargs.get('vector_size', 0)
+        self.init_embedding_model: str = kwargs.get('init_embedding_model', '')
         self.is_shared: bool = kwargs.get('is_shared', False)
         self.share_group: Optional[str] = kwargs.get('share_group', None)
         self.share_permissions: Optional[str] = kwargs.get('share_permissions', 'read')
@@ -29,6 +30,7 @@ class VectorDB(BaseModel):
             'description': 'TEXT',
             'registered_at': 'TIMESTAMP',
             'vector_size': 'INTEGER DEFAULT 0',
+            'init_embedding_model': 'VARCHAR(100)',
             'is_shared': 'BOOLEAN DEFAULT FALSE',
             'share_group': 'VARCHAR(50)',
             'share_permissions': 'VARCHAR(50)'
