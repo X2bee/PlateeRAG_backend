@@ -22,6 +22,7 @@ from service.database.models.user import User
 from service.database.models.executor import ExecutionMeta, ExecutionIO
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.performance import NodePerformance
+from service.database.models.deploy import DeployMeta
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
 import uuid
@@ -180,9 +181,34 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
 
 
         if insert_result and insert_result.get("result") == "success":
+            # Deploy metadata 생성
+            deploy_meta = DeployMeta(
+                user_id=user_id,
+                workflow_id=workflow_request.content.workflow_id,
+                workflow_name=workflow_request.workflow_name,
+                is_deployed=False,
+                deploy_key=""
+            )
+
+            # 기존 Deploy metadata 확인 및 생성/업데이트
+            existing_deploy_data = app_db.find_by_condition(
+                DeployMeta,
+                {
+                    "user_id": user_id,
+                    "workflow_name": workflow_request.workflow_name,
+                },
+                limit=1
+            )
+            if existing_deploy_data:
+                existing_deploy_id = existing_deploy_data[0].id
+                deploy_meta.id = existing_deploy_id
+                app_db.update(deploy_meta)
+            else:
+                app_db.insert(deploy_meta)
+
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(workflow_data, f, indent=2, ensure_ascii=False)
-            logger.info(f"Workflow metadata saved successfully: {workflow_request.workflow_name}")
+            logger.info(f"Workflow metadata and deploy metadata saved successfully: {workflow_request.workflow_name}")
         else:
             logger.error(f"Failed to save workflow metadata: {insert_result.get('error', 'Unknown error')}")
             raise HTTPException(
