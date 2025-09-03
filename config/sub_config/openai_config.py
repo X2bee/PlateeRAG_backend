@@ -56,12 +56,4 @@ class OpenAIConfig(BaseConfig):
             type_converter=int
         )
 
-        # API 키가 설정되었는지 확인하고 환경변수에 설정
-        if self.API_KEY.value and self.API_KEY.value.strip():
-            import os
-            os.environ["OPENAI_API_KEY"] = self.API_KEY.value.strip()
-            self.logger.info("OpenAI API key set in environment")
-        else:
-            self.logger.warning("OpenAI API key not configured")
-        
         return self.configs
