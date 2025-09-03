@@ -52,6 +52,7 @@ class VectorDBChunkMeta(BaseModel):
         self.topics: List[str] = kwargs.get('topics', [])
         self.entities: List[str] = kwargs.get('entities', [])
         self.sentiment: str = kwargs.get('sentiment', '')
+        self.document_id: str = kwargs.get('document_id', '')
         self.document_type: str = kwargs.get('document_type', '')
         self.language: str = kwargs.get('language', '')
         self.complexity_level: str = kwargs.get('complexity_level', '')
@@ -78,6 +79,7 @@ class VectorDBChunkMeta(BaseModel):
             'topics': 'TEXT[]',
             'entities': 'TEXT[]',
             'sentiment': 'VARCHAR(50)',
+            'document_id': 'VARCHAR(500)',
             'document_type': 'VARCHAR(50)',
             'language': 'VARCHAR(10)',
             'complexity_level': 'VARCHAR(50)',

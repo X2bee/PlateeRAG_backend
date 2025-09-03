@@ -428,7 +428,23 @@ async def get_document_details(request: Request, collection_name: str, document_
     """특정 문서의 상세 정보 조회"""
     try:
         rag_service = get_rag_service(request)
-        return rag_service.get_document_details(collection_name, document_id)
+        rag_default_info = rag_service.get_document_details(collection_name, document_id)
+
+        app_db = get_db_manager(request)
+        additional_info = app_db.find_by_condition(VectorDBChunkMeta, {'document_id': document_id, 'collection_name': collection_name})
+        if additional_info:
+            additional_info = additional_info[0]
+            provider_info = {
+                "embedding_provider": additional_info.embedding_provider,
+                "embedding_model_name": additional_info.embedding_model_name,
+                "embedding_dimension": additional_info.embedding_dimension
+            }
+
+            rag_default_info.update({
+                "provider_info": provider_info
+            })
+
+        return rag_default_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
 

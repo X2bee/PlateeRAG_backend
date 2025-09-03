@@ -410,6 +410,7 @@ class RAGService:
                     topics=safe_list_to_string(payload.get("topics")),
                     entities=safe_list_to_string(payload.get("entities")),
                     sentiment=payload.get("sentiment"),
+                    document_id=document_id,
                     document_type=payload.get("document_type"),
                     language=payload.get("language"),
                     complexity_level=payload.get("complexity_level"),
@@ -834,7 +835,6 @@ class RAGService:
             if not points:
                 raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found")
 
-            # 문서 기본 정보 추출
             first_point = points[0]
             payload = first_point.payload
 
@@ -929,11 +929,8 @@ class RAGService:
                 raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found")
 
             point_ids = [str(point.id) for point in points]
-
             operation_info = self.vector_manager.delete_points(collection_name, point_ids)
-
             self.vector_manager.update_collection_document_count(collection_name, -1)
-
             logger.info(f"Deleted document '{document_id}' from collection '{collection_name}': {len(point_ids)} chunks removed")
 
             return {
