@@ -3,24 +3,35 @@ citation_prompt = """
 문서 내용을 참조한 모든 답변에는 반드시 정확한 출처를 표시하세요.
 
 ## 출처 형식 (정확히 따르세요)
-[Cite. {{"file_name": "파일명", "file_path": "파일경로", "page_number": 페이지번호, "line_start": 시작줄, "line_end": 종료줄}}]
+[Cite. {{"file_name": "파일명", "file_path": "파일경로", "page_number": 페이지번호, "cite_context": "답변 생성에 실제 사용된 문서의 정확한 원본 컨텍스트"}}]
 - 페이지 번호는 <페이지 번호> 태그를 참조해라
+- cite_context는 답변 생성에 실제로 사용된 문서의 원본 컨텍스트를 정확히 인용해야 함 (수정이나 요약 없이 원문 그대로)
 
 ## 예시 (⚠️ 실제 문서가 제공된 경우만 사용 ⚠️)
 **주의: 아래 예시들은 실제 문서 내용이 컨텍스트에 제공된 경우에만 적용됩니다.**
 **컨텍스트에 실제 문서 내용이 없다면 이런 출처 표기를 하면 안 됩니다.**
 
 1. 단일 참조 (실제 문서 내용이 있을 때만): 
-   회사는 2023년부터 제도를 운영합니다. [Cite. {{"file_name": "규정.pdf", "file_path": "/docs/규정.pdf", "page_number": 3, "line_start": 15, "line_end": 18}}]
+   회사는 2023년부터 제도를 운영합니다. [Cite. {{"file_name": "규정.pdf", "file_path": "/docs/규정.pdf", "page_number": 3, "cite_context": "본 규정은 2023년 1월부터 시행되며, 회사의 제도 운영에 관한 사항을 정한다"}}]
 
 ## 예시
 ###실제 예시
-[Cite. {{"filename": "test.pdf", "filepath": "test_48b3bc25581-9806-4bba-bd3a-461efd2088fb/test.pdf", "pagenumber": 36, "linestart": 1, "lineend": 1}}]
+[Cite. {{"filename": "test.pdf", "filepath": "test_48b3bc25581-9806-4bba-bd3a-461efd2088fb/test.pdf", "pagenumber": 36, "cite_context": "이 문서에서 참조한 원본 문장 내용"}}]
 ### 단일 참조
-회사는 2023년부터 제도를 운영합니다. [Cite. {{"file_name": "규정.pdf", "file_path": "policy/규정.pdf", "page_number": 3, "line_start": 15, "line_end": 18}}]
+회사는 2023년부터 제도를 운영합니다. [Cite. {{"file_name": "규정.pdf", "file_path": "policy/규정.pdf", "page_number": 3, "cite_context": "본 규정은 2023년 1월부터 시행되며, 회사의 제도 운영에 관한 사항을 정한다"}}]
 
 ### 여러 참조
-투자가 증가했으며 [Cite. {{"file_name": "보고서.pdf", "file_path": "reports/보고서.pdf", "page_number": 12, "line_start": 5, "line_end": 8}}], AI에 집중하고 있습니다. [Cite. {{"file_name": "보고서.pdf", "file_path": "reports/보고서.pdf", "page_number": 15, "line_start": 22, "line_end": 25}}]
+투자가 증가했으며 [Cite. {{"file_name": "보고서.pdf", "file_path": "reports/보고서.pdf", "page_number": 12, "cite_context": "올해 투자 금액이 전년 대비 30% 증가하였습니다"}}], AI에 집중하고 있습니다. [Cite. {{"file_name": "보고서.pdf", "file_path": "reports/보고서.pdf", "page_number": 15, "cite_context": "향후 AI 기술 개발에 집중적으로 투자할 계획입니다"}}]
+
+## cite_context 작성 중요 지침
+### ✅ 올바른 cite_context (문서의 원문을 정확히 인용)
+- "회사는 2023년 1월부터 새로운 근무제도를 도입하여 직원들의 업무 효율성을 향상시키고 있다"
+- "본 연구에서는 AI 모델의 정확도가 95.2%로 측정되었으며, 기존 모델 대비 10% 향상된 결과를 보였다"
+
+### ❌ 잘못된 cite_context (수정하거나 요약한 내용)
+- "2023년부터 새로운 제도 시행" (요약된 내용)
+- "AI 정확도 향상됨" (축약된 내용)
+- "회사가 제도를 변경했다고 함" (의역된 내용)
 
 ## 핵심 규칙
 1. **정확성 필수**: 정확한 파일명, 경로, 페이지, 줄 번호만 사용
