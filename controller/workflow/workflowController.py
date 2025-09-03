@@ -40,22 +40,30 @@ def workflow_user_id_extractor(app_db, login_user_id, requested_user_id, workflo
         requested_user_id = None
 
     if (login_user_id == requested_user_id) or requested_user_id == None or len(requested_user_id) == 0:
-        logger.info(f"Using login_user_id: {login_user_id}")
         return login_user_id
     else:
         user = app_db.find_by_id(User, login_user_id)
+        if not user:
+            logger.error(f"Login user not found in database: {login_user_id}")
+            return login_user_id
+
         groups = user.groups
         requested_workflow_meta = app_db.find_by_condition(WorkflowMeta, {'user_id': requested_user_id, 'workflow_name': workflow_id}, limit=1)
 
         if requested_workflow_meta:
             requested_workflow_meta = requested_workflow_meta[0]
-            if requested_workflow_meta.is_shared and requested_workflow_meta.share_group in groups:
-                logger.info(f"Using requested_user_id: {requested_user_id}")
-                return requested_user_id
+            if requested_workflow_meta.is_shared:
+                if requested_workflow_meta.share_group in groups:
+                    logger.info(f"✓ Access granted! Login user belongs to share group '{requested_workflow_meta.share_group}'. Using requested_user_id: {requested_user_id}")
+                    return requested_user_id
+                else:
+                    return login_user_id
             else:
+                logger.warning(f"✗ Access denied! Workflow is not shared (is_shared=False). Using login_user_id: {login_user_id}")
                 return login_user_id
-
-        return login_user_id
+        else:
+            logger.warning(f"✗ No workflow metadata found for user_id: {requested_user_id}, workflow_name: {workflow_id}. Using login_user_id: {login_user_id}")
+            return login_user_id
 
 def extract_collection_name(collection_full_name: str) -> str:
     """
@@ -193,8 +201,8 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
         logger.error(f"Error saving workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to save workflow: {str(e)}")
 
-@router.get("/load/{workflow_id}")
-async def load_workflow(request: Request, workflow_id: str, user_id):
+@router.get("/load/{workflow_name}")
+async def load_workflow(request: Request, workflow_name: str, user_id):
     """
     특정 workflow를 로드합니다.
     """
@@ -202,14 +210,14 @@ async def load_workflow(request: Request, workflow_id: str, user_id):
         login_user_id = extract_user_id_from_request(request)
         downloads_path = os.path.join(os.getcwd(), "downloads")
         app_db = get_db_manager(request)
-        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_id)
+        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
         download_path_id = os.path.join(downloads_path, using_id)
 
-        filename = f"{workflow_id}.json"
+        filename = f"{workflow_name}.json"
         file_path = os.path.join(download_path_id, filename)
 
         if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
         with open(file_path, 'r', encoding='utf-8') as f:
             workflow_data = json.load(f)
@@ -218,13 +226,13 @@ async def load_workflow(request: Request, workflow_id: str, user_id):
         return JSONResponse(content=workflow_data)
 
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
     except Exception as e:
         logger.error(f"Error loading workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to load workflow: {str(e)}")
 
-@router.get("/duplicate/{workflow_id}")
-async def duplicate_workflow(request: Request, workflow_id: str, user_id):
+@router.get("/duplicate/{workflow_name}")
+async def duplicate_workflow(request: Request, workflow_name: str, user_id):
     """
     특정 workflow를 복제합니다.
     """
@@ -232,26 +240,33 @@ async def duplicate_workflow(request: Request, workflow_id: str, user_id):
         login_user_id = extract_user_id_from_request(request)
         downloads_path = os.path.join(os.getcwd(), "downloads")
         app_db = get_db_manager(request)
-        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_id)
+        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
 
         origin_path_id = os.path.join(downloads_path, using_id)
         target_path_id = os.path.join(downloads_path, login_user_id)
 
-        filename = f"{workflow_id}.json"
+        filename = f"{workflow_name}.json"
         origin_path = os.path.join(origin_path_id, filename)
-        target_path = os.path.join(target_path_id, filename)
 
         if not os.path.exists(origin_path):
-            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+            logger.info(f"Reading workflow data from: {origin_path}")
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
+        copy_workflow_name = f"{workflow_name}_copy"
+        copy_file_name = f"{copy_workflow_name}.json"
+        target_path = os.path.join(target_path_id, filename)
+        
         if os.path.exists(target_path):
             logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
             counter = 1
             while os.path.exists(target_path):
-                target_path = os.path.join(target_path_id, f"{filename}_{counter}")
+                copy_workflow_name = f"{workflow_name}_copy_{counter}"
+                copy_file_name = f"{copy_workflow_name}.json"
+                target_path = os.path.join(target_path_id, copy_file_name)
                 counter += 1
 
         with open(origin_path, 'r', encoding='utf-8') as f:
+            logger.info(f"Reading workflow data from: {origin_path}")
             workflow_data = json.load(f)
 
         nodes = workflow_data.get('nodes', [])
@@ -263,9 +278,9 @@ async def duplicate_workflow(request: Request, workflow_id: str, user_id):
         edge_count = len(edges) if isinstance(edges, list) else 0
 
         workflow_meta = WorkflowMeta(
-            user_id=user_id,
+            user_id=login_user_id,
             workflow_id=workflow_data.get('workflow_id'),
-            workflow_name=workflow_data.get('workflow_name'),
+            workflow_name=copy_workflow_name,
             node_count=node_count,
             edge_count=edge_count,
             has_startnode=has_startnode,
@@ -274,18 +289,49 @@ async def duplicate_workflow(request: Request, workflow_id: str, user_id):
         )
 
         insert_result = app_db.insert(workflow_meta)
-
         with open(target_path, 'w', encoding='utf-8') as wf:
             json.dump(workflow_data, wf, ensure_ascii=False, indent=2)
 
         logger.info(f"Workflow duplicated successfully: {filename}")
-        return {"success": True, "message": f"Workflow '{workflow_id}' duplicated successfully", "filename": filename}
+        return {"success": True, "message": f"Workflow '{workflow_name}' duplicated successfully", "filename": filename}
 
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
     except Exception as e:
         logger.error(f"Error loading workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to load workflow: {str(e)}")
+
+@router.post("/update/{workflow_name}")
+async def update_workflow(request: Request, workflow_name: str, update_dict: dict):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+
+    try:
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name
+            },
+        )
+
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        existing_data = existing_data[0]
+
+        existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
+        existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
+
+        app_db.update(existing_data)
+
+        return {
+            "message": "Workflow updated successfully",
+            "workflow_name": existing_data.workflow_name
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to update workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
 
 @router.delete("/delete/{workflow_name}")
 async def delete_workflow(request: Request, workflow_name: str):
