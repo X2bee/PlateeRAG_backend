@@ -15,7 +15,7 @@ from service.database.execution_meta_service import get_or_create_execution_meta
 
 from controller.workflow.helper import _workflow_parameter_helper, _default_workflow_parameter_helper
 from controller.helper.singletonHelper import get_db_manager
-from controller.workflow.model import WorkflowRequest
+from controller.workflow.models.requests import WorkflowRequest
 
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/deploy", tags=["workflow"])

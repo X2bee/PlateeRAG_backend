@@ -4,13 +4,16 @@
 import os
 import json
 import copy
+from datetime import datetime
 import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_db_manager
 from controller.workflow.models.requests import SaveWorkflowRequest
+from service.database.models.executor import ExecutionMeta, ExecutionIO
 from controller.workflow.utils.auth_helpers import workflow_user_id_extractor
+from controller.workflow.utils.data_parsers import parse_input_data
 from service.database.models.user import User
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.deploy import DeployMeta
@@ -386,3 +389,126 @@ async def list_workflows_detail(request: Request):
     except Exception as e:
         logger.error(f"Error listing workflow details: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
+    
+@router.get("/io_logs")
+async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = 'default'):
+    """
+    특정 워크플로우의 ExecutionIO 로그를 반환합니다.
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+        result = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            },
+            limit=1000000,
+            orderby="updated_at",
+            orderby_asc=True,
+            return_list=True
+        )
+
+        if not result:
+            logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "in_out_logs": [],
+                "message": "No in_out_logs data found for this workflow"
+            })
+
+        performance_stats = []
+        for idx, row in enumerate(result):
+            # input_data 파싱
+            raw_input_data = json.loads(row['input_data']).get('result', None) if row['input_data'] else None
+            parsed_input_data = parse_input_data(raw_input_data) if raw_input_data else None
+
+            log_entry = {
+                "log_id": idx + 1,
+                "interaction_id": row['interaction_id'],
+                "workflow_name": row['workflow_name'],
+                "workflow_id": row['workflow_id'],
+                "input_data": parsed_input_data,
+                "output_data": json.loads(row['output_data']).get('result', None) if row['output_data'] else None,
+                "updated_at": row['updated_at'].isoformat() if isinstance(row['updated_at'], datetime) else row['updated_at']
+            }
+            performance_stats.append(log_entry)
+
+        response_data = {
+            "workflow_name": workflow_name,
+            "workflow_id": workflow_id,
+            "in_out_logs": performance_stats,
+            "message": "In/Out logs retrieved successfully"
+        }
+
+        logger.info(f"Performance stats retrieved for workflow: {workflow_name} ({workflow_id})")
+        return JSONResponse(content=response_data)
+
+    except Exception as e:
+        logger.error(f"Error retrieving workflow performance: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
+
+@router.delete("/io_logs")
+async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = "default"):
+    """
+    특정 워크플로우의 ExecutionIO 로그를 삭제합니다.
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+
+        existing_data = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            },
+            limit=1000000
+        )
+
+        delete_count = len(existing_data) if existing_data else 0
+
+        if delete_count == 0:
+            logger.info(f"No logs found to delete for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id,
+                "deleted_count": 0,
+                "message": "No logs found to delete"
+            })
+
+        app_db.delete_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            }
+        )
+        app_db.delete_by_condition(
+            ExecutionMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            }
+        )
+
+        logger.info(f"Successfully deleted {delete_count} logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
+
+        return JSONResponse(content={
+            "workflow_name": workflow_name,
+            "interaction_id": interaction_id,
+            "deleted_count": delete_count,
+            "message": f"Successfully deleted {delete_count} execution logs"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting workflow logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")

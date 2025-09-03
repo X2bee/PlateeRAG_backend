@@ -5,9 +5,9 @@ import hashlib
 
 from typing import Dict, Any
 
-from controller.workflow.utils import extract_collection_name
+from controller.workflow.utils.data_parsers import extract_collection_name
 from fastapi import HTTPException
-from controller.workflow.model import WorkflowRequest
+from controller.workflow.models.requests import WorkflowRequest
 from controller.helper.singletonHelper import get_config_composer
 async def _workflow_parameter_helper(request_body: WorkflowRequest, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
     """
