@@ -62,6 +62,10 @@ class DocumentCreateRequest(BaseModel):
 class CollectionDeleteRequest(BaseModel):
     collection_name: str
 
+class CollectionRemakeRequest(BaseModel):
+    collection_name: str
+    new_embedding_model: Optional[str] = None
+
 class InsertPointsRequest(BaseModel):
     collection_name: str
     points: List[VectorPoint]
@@ -578,3 +582,35 @@ async def refresh_retrieval_config(request: Request):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get retrieval config: {str(e)}")
+
+@router.post("/collections/remake")
+async def remake_collection(request: Request, remake_request: CollectionRemakeRequest):
+    """컬렉션을 새로운 임베딩 모델로 재생성
+
+    기존 컬렉션의 모든 문서를 보존하면서 새로운 임베딩 차원으로 컬렉션을 재생성합니다.
+    """
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+
+    # 사용자 권한 확인
+    existing_collection = app_db.find_by_condition(VectorDB, {
+        'user_id': user_id,
+        'collection_name': remake_request.collection_name
+    })
+
+    if not existing_collection:
+        raise HTTPException(status_code=404, detail="Collection not found or not owned by user")
+
+    try:
+        rag_service = get_rag_service(request)
+        result = await rag_service.remake_collection(
+            user_id=user_id,
+            app_db=app_db,
+            collection_name=remake_request.collection_name,
+            new_embedding_model=remake_request.new_embedding_model
+        )
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to remake collection '{remake_request.collection_name}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to remake collection: {str(e)}")
