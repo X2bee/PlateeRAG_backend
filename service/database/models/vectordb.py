@@ -13,7 +13,11 @@ class VectorDB(BaseModel):
         self.collection_name: str = kwargs.get('collection_name', '')
         self.description: str = kwargs.get('description', '')
         self.registered_at: datetime.datetime = kwargs.get('registered_at', self.now())
-        self.updated_at: datetime.datetime = kwargs.get('updated_at', self.now())
+        self.vector_size: int = kwargs.get('vector_size', 0)
+        self.init_embedding_model: str = kwargs.get('init_embedding_model', '')
+        self.is_shared: bool = kwargs.get('is_shared', False)
+        self.share_group: Optional[str] = kwargs.get('share_group', None)
+        self.share_permissions: Optional[str] = kwargs.get('share_permissions', 'read')
 
     def get_table_name(self) -> str:
         return "vector_db"
@@ -25,7 +29,11 @@ class VectorDB(BaseModel):
             'collection_name': 'VARCHAR(500) NOT NULL',
             'description': 'TEXT',
             'registered_at': 'TIMESTAMP',
-            'updated_at': 'TIMESTAMP'
+            'vector_size': 'INTEGER DEFAULT 0',
+            'init_embedding_model': 'VARCHAR(100)',
+            'is_shared': 'BOOLEAN DEFAULT FALSE',
+            'share_group': 'VARCHAR(50)',
+            'share_permissions': 'VARCHAR(50)'
         }
 
 class VectorDBChunkMeta(BaseModel):
@@ -44,6 +52,7 @@ class VectorDBChunkMeta(BaseModel):
         self.topics: List[str] = kwargs.get('topics', [])
         self.entities: List[str] = kwargs.get('entities', [])
         self.sentiment: str = kwargs.get('sentiment', '')
+        self.document_id: str = kwargs.get('document_id', '')
         self.document_type: str = kwargs.get('document_type', '')
         self.language: str = kwargs.get('language', '')
         self.complexity_level: str = kwargs.get('complexity_level', '')
@@ -70,6 +79,7 @@ class VectorDBChunkMeta(BaseModel):
             'topics': 'TEXT[]',
             'entities': 'TEXT[]',
             'sentiment': 'VARCHAR(50)',
+            'document_id': 'VARCHAR(500)',
             'document_type': 'VARCHAR(50)',
             'language': 'VARCHAR(10)',
             'complexity_level': 'VARCHAR(50)',

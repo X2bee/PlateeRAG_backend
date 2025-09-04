@@ -204,7 +204,6 @@ async def edit_user(request: Request, user_data: dict):
         db_user_info.email = user_data.get("email", db_user_info.email)
         db_user_info.username = user_data.get("username", db_user_info.username)
         db_user_info.full_name = user_data.get("full_name", db_user_info.full_name)
-        db_user_info.group_name = user_data.get("group_name", db_user_info.group_name)
         db_user_info.is_admin = user_data.get("is_admin", db_user_info.is_admin)
         db_user_info.user_type = user_data.get("user_type", db_user_info.user_type)
         db_user_info.preferences = user_data.get("preferences", db_user_info.preferences)
@@ -221,6 +220,102 @@ async def edit_user(request: Request, user_data: dict):
         }
     except Exception as e:
         logger.error(f"Error approving user: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.put("/edit-user/groups")
+async def edit_user_groups(request: Request, user_data: dict):
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
+    try:
+        app_db = get_db_manager(request)
+        user_id = user_data.get("id")
+        db_user_info = app_db.find_by_condition(User, {"id": user_id})
+        if not db_user_info:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+
+        db_user_info = db_user_info[0]
+        existing_groups = db_user_info.groups if db_user_info.groups else []
+        add_group = user_data.get("group_name", db_user_info.group_name)
+
+        if isinstance(add_group, str):
+            add_group = [add_group]
+        elif not isinstance(add_group, list):
+            add_group = []
+
+        new_groups = list(set(existing_groups) | set(add_group))
+
+        app_db.update_list_columns(User, {"groups": new_groups}, {"id": user_id})
+
+        logger.info(f"Successfully edited user {user_id}")
+        return {
+            "detail": "User groups updated successfully",
+            "user": {
+                "id": user_id,
+                "groups": new_groups
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error approving user: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.delete("/edit-user/groups")
+async def delete_user_groups(request: Request, user_data: dict):
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
+    try:
+        app_db = get_db_manager(request)
+        user_id = user_data.get("id")
+
+        # 사용자 존재 여부 확인
+        db_user_info = app_db.find_by_condition(User, {"id": user_id})
+        if not db_user_info:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+
+        db_user_info = db_user_info[0]
+        existing_groups = db_user_info.groups if db_user_info.groups else []
+        remove_group = user_data.get("group_name", "")
+
+        if isinstance(remove_group, str):
+            remove_group = [remove_group]
+        elif not isinstance(remove_group, list):
+            remove_group = []
+
+        new_groups = [group for group in existing_groups if group not in remove_group]
+        app_db.update_list_columns(User, {"groups": new_groups}, {"id": user_id})
+
+        logger.info(f"Successfully removed groups from user {user_id}")
+        return {
+            "detail": "User groups updated successfully",
+            "user": {
+                "id": user_id,
+                "groups": new_groups,
+                "removed_groups": remove_group
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error removing user groups: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"

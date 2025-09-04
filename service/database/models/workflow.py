@@ -16,6 +16,9 @@ class WorkflowMeta(BaseModel):
         self.has_endnode: bool = kwargs.get('has_endnode', False)
         self.is_completed: bool = kwargs.get('is_completed', False)
         self.metadata: Optional[Dict] = kwargs.get('metadata', {})
+        self.is_shared: bool = kwargs.get('is_shared', False)
+        self.share_group: Optional[str] = kwargs.get('share_group', None)
+        self.share_permissions: Optional[str] = kwargs.get('share_permissions', 'read')
 
     def get_table_name(self) -> str:
         return "workflow_meta"
@@ -30,5 +33,8 @@ class WorkflowMeta(BaseModel):
             'has_startnode': 'BOOLEAN DEFAULT FALSE',
             'has_endnode': 'BOOLEAN DEFAULT FALSE',
             'is_completed': 'BOOLEAN DEFAULT FALSE',
-            'metadata': 'TEXT'  # JSON string
+            'metadata': 'TEXT',
+            'is_shared': 'BOOLEAN DEFAULT FALSE',
+            'share_group': 'VARCHAR(50)',
+            'share_permissions': 'VARCHAR(50)'
         }

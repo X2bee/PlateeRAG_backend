@@ -255,11 +255,12 @@ async def signup(request: Request, signup_data: SignupRequest):
             email=signup_data.email,
             password_hash=signup_data.password,
             full_name=signup_data.full_name,
-            is_active=False, # 이제 False로 변경해서 사용자 승인이 되어야 하는 것으로 변경.
+            is_active=False,
             is_admin=False,
             last_login=None,
             user_type="standard",
-            group_name=signup_data.group_name,
+            group_name='none',
+            groups={},
             preferences=preferences
         )
 
@@ -556,31 +557,53 @@ async def check_superuser(request: Request):
             detail=f"Internal server error: {str(e)}"
         )
 
+@router.get("/available-group")
+async def get_group_available_groups(request: Request, user_id=None):
+    try:
+        app_db = get_db_manager(request)
+        user = app_db.find_by_id(User, user_id)
+
+        groups = user.groups
+        if not groups or groups == None or groups == [] or len(groups) == 0:
+            return {"available_groups": []}
+
+        else:
+            return {"available_groups": groups}
+
+    except Exception as e:
+        logger.error("Error fetching all users: %s", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        ) from e
+
 @router.get("/available-section")
 async def get_group_available_sections(request: Request, user_id=None):
     try:
         app_db = get_db_manager(request)
         user = app_db.find_by_id(User, user_id)
-        group_name = user.group_name
+        groups = user.groups
         user_type = user.user_type
 
         if user_type == "superuser":
             return {"available_sections": ["canvas", "documents", "train", "workflows", "eval", "train-monitor", "storage", "admin-page"]}
 
-        if group_name == "none":
+        if not groups or groups == None or groups == [] or len(groups) == 0:
             return {"available_sections": []}
 
         else:
-            group = app_db.find_by_condition(GroupMeta, {'group_name': group_name})
-            if group:
-                group = group[0]
-                group_available_sections = group.available_sections
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Group not found"
-                )
-        return {"available_sections": group_available_sections}
+            total_available_sections = []
+            for group_name in groups:
+                group = app_db.find_by_condition(GroupMeta, {'group_name': group_name})
+                if group:
+                    group = group[0]
+                    total_available_sections.extend(group.available_sections)
+                else:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Group not found"
+                    )
+        return {"available_sections": total_available_sections}
 
     except Exception as e:
         logger.error("Error fetching all users: %s", str(e))

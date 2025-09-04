@@ -17,6 +17,8 @@ import datetime
 import uuid
 from zoneinfo import ZoneInfo
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
+from service.database.models.user import User
+
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_document_info_generator
 from service.embedding import get_fastembed_service
@@ -60,6 +62,10 @@ class DocumentCreateRequest(BaseModel):
 class CollectionDeleteRequest(BaseModel):
     collection_name: str
 
+class CollectionRemakeRequest(BaseModel):
+    collection_name: str
+    new_embedding_model: Optional[str] = None
+
 class InsertPointsRequest(BaseModel):
     collection_name: str
     points: List[VectorPoint]
@@ -81,10 +87,50 @@ class DocumentSearchRequest(BaseModel):
     rerank: Optional[bool] = False
     rerank_top_k: Optional[int] = 20
 
-# Collection Management Endpoints 문제없음
 @router.get("/collections")
-async def list_collections(request: Request,):
+async def list_collections(request: Request):
     """모든 컬렉션 목록 조회"""
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    user = app_db.find_by_id(User, user_id)
+    groups = user.groups
+    try:
+        existing_data = app_db.find_by_condition(
+            VectorDB,
+            {
+                "user_id": user_id,
+            },
+        limit=10000,
+        return_list=True
+        )
+
+        if groups and groups != None and groups != [] and len(groups) > 0:
+            for group_name in groups:
+                shared_data = app_db.find_by_condition(
+                    VectorDB,
+                    {
+                        "share_group": group_name,
+                        "is_shared": True,
+                    },
+                    limit=10000,
+                    return_list=True
+                )
+                existing_data.extend(shared_data)
+
+        seen_ids = set()
+        unique_data = []
+        for item in existing_data:
+            if item['id'] not in seen_ids:
+                seen_ids.add(item['id'])
+                unique_data.append(item)
+
+        return unique_data
+    except Exception as e:
+        logger.error(f"Failed to list collections: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
+
+@router.post("/update/collections")
+async def update_collections(request: Request, update_dict: dict):
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
 
@@ -93,13 +139,28 @@ async def list_collections(request: Request,):
             VectorDB,
             {
                 "user_id": user_id,
+                "collection_name": update_dict.get("collection_name")
             },
-            limit=10000,
-            return_list=True
         )
-        return existing_data
+
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        existing_data = existing_data[0]
+
+        existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
+        existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
+
+        app_db.update(existing_data)
+
+        logger.info(f"Collection '{existing_data.collection_name}' updated successfully.")
+        return {
+            "message": "Collection updated successfully",
+            "collection_name": existing_data.collection_name
+        }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
+        logger.error(f"Failed to update collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update collection: {str(e)}")
 
 @router.post("/collections")
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):
@@ -137,7 +198,11 @@ async def create_collection(request: Request, collection_request: CollectionCrea
                 collection_name=collection_name,
                 description=collection_request.description,
                 registered_at=datetime.datetime.now(TIMEZONE),
-                updated_at=datetime.datetime.now(TIMEZONE)
+                updated_at=datetime.datetime.now(TIMEZONE),
+                vector_size=vector_size,
+                is_shared=False,
+                share_group=None,
+                share_permissions=None,
             )
             app_db.insert(vector_db)
 
@@ -154,22 +219,32 @@ async def create_collection(request: Request, collection_request: CollectionCrea
 @router.delete("/collections")
 async def delete_collection(request: Request, collection_request: CollectionDeleteRequest):
     """컬렉션 삭제"""
-    try:
-        vector_manager = get_vector_manager(request)
-        result = vector_manager.delete_collection(collection_request.collection_name)
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
 
-        if result.get("status") == "success":
-            app_db = get_db_manager(request)
-            rag_service = get_rag_service(request)
-            vector_manager = rag_service.vector_manager
+    existing_collection = app_db.find_by_condition(VectorDB, {'user_id': user_id, 'collection_name': collection_request.collection_name})
 
-            app_db.delete_by_condition(VectorDB, {
-                "collection_name": collection_request.collection_name
-            })
+    if existing_collection:
+        try:
+            vector_manager = get_vector_manager(request)
+            result = vector_manager.delete_collection(collection_request.collection_name)
 
-        return {"message": "Collection deleted"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}")
+            if result.get("status") == "success":
+                app_db = get_db_manager(request)
+                rag_service = get_rag_service(request)
+                vector_manager = rag_service.vector_manager
+
+                app_db.delete_by_condition(VectorDB, {
+                    "collection_name": collection_request.collection_name
+                })
+
+            return {"message": "Collection deleted"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to delete collection: {str(e)}")
+
+    else:
+        raise HTTPException(status_code=404, detail="Collection not found or not owned by user")
+
 
 @router.get("/collections/{collection_name}")
 async def get_collection_info(request: Request, collection_name: str):
@@ -357,7 +432,23 @@ async def get_document_details(request: Request, collection_name: str, document_
     """특정 문서의 상세 정보 조회"""
     try:
         rag_service = get_rag_service(request)
-        return rag_service.get_document_details(collection_name, document_id)
+        rag_default_info = rag_service.get_document_details(collection_name, document_id)
+
+        app_db = get_db_manager(request)
+        additional_info = app_db.find_by_condition(VectorDBChunkMeta, {'document_id': document_id, 'collection_name': collection_name})
+        if additional_info:
+            additional_info = additional_info[0]
+            provider_info = {
+                "embedding_provider": additional_info.embedding_provider,
+                "embedding_model_name": additional_info.embedding_model_name,
+                "embedding_dimension": additional_info.embedding_dimension
+            }
+
+            rag_default_info.update({
+                "provider_info": provider_info
+            })
+
+        return rag_default_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
 
@@ -491,3 +582,35 @@ async def refresh_retrieval_config(request: Request):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get retrieval config: {str(e)}")
+
+@router.post("/collections/remake")
+async def remake_collection(request: Request, remake_request: CollectionRemakeRequest):
+    """컬렉션을 새로운 임베딩 모델로 재생성
+
+    기존 컬렉션의 모든 문서를 보존하면서 새로운 임베딩 차원으로 컬렉션을 재생성합니다.
+    """
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+
+    # 사용자 권한 확인
+    existing_collection = app_db.find_by_condition(VectorDB, {
+        'user_id': user_id,
+        'collection_name': remake_request.collection_name
+    })
+
+    if not existing_collection:
+        raise HTTPException(status_code=404, detail="Collection not found or not owned by user")
+
+    try:
+        rag_service = get_rag_service(request)
+        result = await rag_service.remake_collection(
+            user_id=user_id,
+            app_db=app_db,
+            collection_name=remake_request.collection_name,
+            new_embedding_model=remake_request.new_embedding_model
+        )
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to remake collection '{remake_request.collection_name}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to remake collection: {str(e)}")

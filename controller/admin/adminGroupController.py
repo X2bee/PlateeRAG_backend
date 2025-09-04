@@ -98,11 +98,23 @@ async def get_group_users(request: Request, group_name: str):
 
     try:
         app_db = get_db_manager(request)
-        users = app_db.find_by_condition(User, {'group_name': group_name})
+        db_type = app_db.config_db_manager.db_type
+
+        if db_type == "postgresql":
+            query = "SELECT * FROM users WHERE %s = ANY(groups)"
+            params = (group_name,)
+            results = app_db.config_db_manager.execute_query(query, params)
+            users = [User.from_dict(dict(row)) for row in results] if results else []
+        else:
+            query = "SELECT * FROM users WHERE groups LIKE ?"
+            params = (f'%"{group_name}"%',)
+            results = app_db.config_db_manager.execute_query(query, params)
+            users = [User.from_dict(dict(row)) for row in results] if results else []
+
         return {"users": users}
 
     except Exception as e:
-        logger.error("Error fetching all users: %s", str(e))
+        logger.error("Error fetching group users: %s", str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
@@ -159,26 +171,29 @@ async def delete_group(request: Request, group_name: str):
 
         app_db.delete_by_condition(GroupMeta, {'group_name': group_name})
 
-        users = app_db.find_by_condition(User, {'group_name': group_name})
+        # 해당 그룹을 groups 배열에 가지고 있는 모든 사용자 찾기
         db_type = app_db.config_db_manager.db_type
 
-        if users:
-            if db_type == "postgresql":
-                update_query = """
-                UPDATE users
-                SET group_name = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE group_name = %s
-                """
-                params = ('none', group_name)
-            else:
-                update_query = """
-                UPDATE users
-                SET group_name = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE group_name = ?
-                """
-                params = ('none', group_name)
+        if db_type == "postgresql":
+            # PostgreSQL: 배열에서 특정 값 포함 여부 확인
+            query = "SELECT * FROM users WHERE %s = ANY(groups)"
+            params = (group_name,)
+            results = app_db.config_db_manager.execute_query(query, params)
+            users = [User.from_dict(dict(row)) for row in results] if results else []
+        else:
+            # SQLite: JSON 배열에서 검색 (LIKE 사용)
+            query = "SELECT * FROM users WHERE groups LIKE ?"
+            params = (f'%"{group_name}"%',)
+            results = app_db.config_db_manager.execute_query(query, params)
+            users = [User.from_dict(dict(row)) for row in results] if results else []
 
-            app_db.config_db_manager.execute_update_delete(update_query, params)
+        # 각 사용자의 groups에서 해당 그룹명 제거
+        for user in users:
+            existing_groups = user.groups if user.groups else []
+            new_groups = [group for group in existing_groups if group != group_name]
+
+            # update_list_columns 메서드로 업데이트 (첫 번째 인자는 모델 클래스가 아닌 인스턴스)
+            app_db.update_list_columns(User, {"groups": new_groups}, {"id": user.id})
         return {"detail": f"Group '{group_name}' deleted successfully and {len(users)} users moved to 'none' group"}
 
     except Exception as e:
@@ -209,7 +224,7 @@ async def update_group_permissions(request: Request, group_data: dict):
         if group:
             group = group[0]
 
-        available_sections = group_data.get("available_sections")
+        available_sections = group_data.get("available_sections", group.available_sections)
         if available_sections is not None:
             if isinstance(available_sections, str):
                 try:
@@ -220,53 +235,13 @@ async def update_group_permissions(request: Request, group_data: dict):
             if not isinstance(available_sections, list):
                 available_sections = [str(available_sections)]
 
-            group.available_sections = available_sections
-
-        if "available" in group_data:
-            group.available = group_data.get("available", group.available)
-
-        app_db = get_db_manager(request)
-        db_type = app_db.config_db_manager.db_type
-
+        updates = {}
         if available_sections is not None:
-            if db_type == "postgresql":
-                array_literal = "{" + ",".join([f'"{item}"' for item in available_sections]) + "}"
+            updates['available_sections'] = available_sections
+        if "available" in group_data:
+            updates['available'] = group_data.get("available", group.available)
 
-                update_query = """
-                UPDATE group_meta
-                SET available = %s, available_sections = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE group_name = %s
-                """
-                params = (group.available, array_literal, group.group_name)
-
-            else:
-                array_json = json.dumps(available_sections)
-
-                update_query = """
-                UPDATE group_meta
-                SET available = ?, available_sections = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE group_name = ?
-                """
-                params = (group.available, array_json, group.group_name)
-
-            app_db.config_db_manager.execute_update_delete(update_query, params)
-        else:
-            if db_type == "postgresql":
-                update_query = """
-                UPDATE group_meta
-                SET available = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE group_name = %s
-                """
-                params = (group.available, group.group_name)
-            else:
-                update_query = """
-                UPDATE group_meta
-                SET available = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE group_name = ?
-                """
-                params = (group.available, group.group_name)
-
-            app_db.config_db_manager.execute_update_delete(update_query, params)
+        app_db.update_list_columns(GroupMeta, updates, {'group_name': group.group_name})
 
         return {"detail": "Group permissions updated successfully"}
     except Exception as e:

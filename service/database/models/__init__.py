@@ -8,6 +8,7 @@ from service.database.models.performance import WorkflowExecution, NodePerforman
 from service.database.models.persistent_config import PersistentConfigModel
 from service.database.models.executor import ExecutionIO, ExecutionMeta
 from service.database.models.workflow import WorkflowMeta
+from service.database.models.deploy import DeployMeta
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
 from service.database.models.vast import VastInstance, VastExecutionLog
 from service.database.models.train import TrainMeta
@@ -19,7 +20,7 @@ __all__ = [
     'User', 'UserSession',
     'WorkflowExecution', 'NodePerformance',
     'PersistentConfigModel',
-    'ExecutionIO', 'ExecutionMeta', 'WorkflowMeta',
+    'ExecutionIO', 'ExecutionMeta', 'WorkflowMeta', 'DeployMeta',
     'VectorDB', 'VectorDBChunkMeta', 'VectorDBChunkEdge',
     'VastInstance', 'VastExecutionLog',
     'TrainMeta',
@@ -35,6 +36,7 @@ APPLICATION_MODELS = [
     NodePerformance,
     ExecutionIO, ExecutionMeta,
     WorkflowMeta,
+    DeployMeta,
     VectorDB,
     VectorDBChunkMeta,
     VectorDBChunkEdge,

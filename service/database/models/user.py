@@ -1,7 +1,7 @@
 """
 사용자 관련 데이터 모델
 """
-from typing import Dict, Optional
+from typing import Dict, Optional, Union, List
 from service.database.models.base_model import BaseModel
 
 class User(BaseModel):
@@ -16,9 +16,11 @@ class User(BaseModel):
         self.is_active: bool = kwargs.get('is_active', True)
         self.is_admin: bool = kwargs.get('is_admin', False)
         self.user_type: str = kwargs.get('user_type', "standard")
-        self.group_name: str = kwargs.get('group_name', "none")
         self.last_login: Optional[str] = kwargs.get('last_login')
         self.preferences: Optional[Dict] = kwargs.get('preferences', {})
+        self.groups: List[str] = kwargs.get('groups', [])
+        self.group_name: str = kwargs.get('group_name', 'none')
+
 
     def get_table_name(self) -> str:
         return "users"
@@ -32,6 +34,7 @@ class User(BaseModel):
             'is_active': 'BOOLEAN DEFAULT TRUE',
             'is_admin': 'BOOLEAN DEFAULT FALSE',
             'user_type': "VARCHAR(50) DEFAULT 'standard'",
+            'groups': 'TEXT[]',
             'group_name': "VARCHAR(50) DEFAULT 'none'",
             'last_login': 'TIMESTAMP',
             'preferences': 'TEXT'

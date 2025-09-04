@@ -1,0 +1,514 @@
+"""
+기본 워크플로우 CRUD 작업 관련 엔드포인트들
+"""
+import os
+import json
+import copy
+from datetime import datetime
+import logging
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from controller.helper.controllerHelper import extract_user_id_from_request
+from controller.helper.singletonHelper import get_db_manager
+from controller.workflow.models.requests import SaveWorkflowRequest
+from service.database.models.executor import ExecutionMeta, ExecutionIO
+from controller.workflow.utils.auth_helpers import workflow_user_id_extractor
+from controller.workflow.utils.data_parsers import parse_input_data
+from service.database.models.user import User
+from service.database.models.workflow import WorkflowMeta
+from service.database.models.deploy import DeployMeta
+
+logger = logging.getLogger("basic-operations")
+router = APIRouter()
+
+@router.get("/list")
+async def list_workflows(request: Request):
+    """
+    downloads 폴더에 있는 모든 workflow 파일들의 이름을 반환합니다.
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        download_path_id = os.path.join(downloads_path, user_id)
+
+        # downloads 폴더가 존재하지 않으면 생성
+        if not os.path.exists(download_path_id):
+            os.makedirs(download_path_id)
+            return JSONResponse(content={"workflows": []})
+
+        # .json 확장자를 가진 파일들만 필터링
+        workflow_files = []
+        for file in os.listdir(download_path_id):
+            if file.endswith('.json'):
+                workflow_files.append(file)
+
+        logger.info(f"Found {len(workflow_files)} workflow files")
+        return JSONResponse(content={"workflows": workflow_files})
+
+    except Exception as e:
+        logger.error(f"Error listing workflows: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list workflows: {str(e)}")
+
+@router.post("/save")
+async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest):
+    """
+    Frontend에서 받은 workflow 정보를 파일로 저장합니다.
+    파일명: {workflow_name}.json
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        download_path_id = os.path.join(downloads_path, user_id)
+        workflow_data = workflow_request.content.dict()
+        
+        if not os.path.exists(download_path_id):
+            os.makedirs(download_path_id)
+
+        if not workflow_request.workflow_name.endswith('.json'):
+            filename = f"{workflow_request.workflow_name}.json"
+        else:
+            filename = workflow_request.workflow_name
+        file_path = os.path.join(download_path_id, filename)
+
+        app_db = get_db_manager(request)
+
+        # nodes 수 계산
+        nodes = workflow_data.get('nodes', [])
+        node_count = len(nodes) if isinstance(nodes, list) else 0
+        has_startnode = any(
+            node.get('data', {}).get('functionId') == 'startnode' for node in nodes
+        )
+        has_endnode = any(
+            node.get('data', {}).get('functionId') == 'endnode' for node in nodes
+        )
+
+        # edges 수 계산
+        edges = workflow_data.get('edges', [])
+        edge_count = len(edges) if isinstance(edges, list) else 0
+
+        workflow_meta = WorkflowMeta(
+            user_id=user_id,
+            workflow_id=workflow_request.content.workflow_id,
+            workflow_name=workflow_request.workflow_name,
+            node_count=node_count,
+            edge_count=edge_count,
+            has_startnode=has_startnode,
+            has_endnode=has_endnode,
+            is_completed=(has_startnode and has_endnode),
+        )
+
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_request.workflow_name,
+            },
+            limit=1
+        )
+        if existing_data:
+            existing_data_id = existing_data[0].id
+            workflow_meta.id = existing_data_id
+            insert_result = app_db.update(workflow_meta)
+        else:
+            insert_result = app_db.insert(workflow_meta)
+
+        if insert_result and insert_result.get("result") == "success":
+            # Deploy metadata 생성
+            deploy_meta = DeployMeta(
+                user_id=user_id,
+                workflow_id=workflow_request.content.workflow_id,
+                workflow_name=workflow_request.workflow_name,
+                is_deployed=False,
+                deploy_key=""
+            )
+
+            # 기존 Deploy metadata 확인 및 생성/업데이트
+            existing_deploy_data = app_db.find_by_condition(
+                DeployMeta,
+                {
+                    "user_id": user_id,
+                    "workflow_name": workflow_request.workflow_name,
+                },
+                limit=1
+            )
+            if existing_deploy_data:
+                existing_deploy_id = existing_deploy_data[0].id
+                deploy_meta.id = existing_deploy_id
+                app_db.update(deploy_meta)
+            else:
+                app_db.insert(deploy_meta)
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(workflow_data, f, indent=2, ensure_ascii=False)
+            logger.info(f"Workflow metadata and deploy metadata saved successfully: {workflow_request.workflow_name}")
+        else:
+            logger.error(f"Failed to save workflow metadata: {insert_result.get('error', 'Unknown error')}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save workflow metadata: {insert_result.get('error', 'Unknown error')}"
+            )
+
+        logger.info(f"Workflow saved successfully: {filename}")
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Workflow '{workflow_request.workflow_name}' saved successfully",
+            "filename": filename
+        })
+
+    except Exception as e:
+        logger.error(f"Error saving workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save workflow: {str(e)}")
+
+@router.get("/load/{workflow_name}")
+async def load_workflow(request: Request, workflow_name: str, user_id):
+    """
+    특정 workflow를 로드합니다.
+    """
+    try:
+        login_user_id = extract_user_id_from_request(request)
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        app_db = get_db_manager(request)
+        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
+        download_path_id = os.path.join(downloads_path, using_id)
+
+        filename = f"{workflow_name}.json"
+        file_path = os.path.join(download_path_id, filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            workflow_data = json.load(f)
+
+        logger.info(f"Workflow loaded successfully: {filename}")
+        return JSONResponse(content=workflow_data)
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+    except Exception as e:
+        logger.error(f"Error loading workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to load workflow: {str(e)}")
+
+@router.get("/duplicate/{workflow_name}")
+async def duplicate_workflow(request: Request, workflow_name: str, user_id):
+    """
+    특정 workflow를 복제합니다.
+    """
+    try:
+        login_user_id = extract_user_id_from_request(request)
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        app_db = get_db_manager(request)
+        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
+
+        origin_path_id = os.path.join(downloads_path, using_id)
+        target_path_id = os.path.join(downloads_path, login_user_id)
+
+        filename = f"{workflow_name}.json"
+        origin_path = os.path.join(origin_path_id, filename)
+
+        if not os.path.exists(origin_path):
+            logger.info(f"Reading workflow data from: {origin_path}")
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+        copy_workflow_name = f"{workflow_name}_copy"
+        copy_file_name = f"{copy_workflow_name}.json"
+        target_path = os.path.join(target_path_id, filename)
+        
+        if os.path.exists(target_path):
+            logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
+            counter = 1
+            while os.path.exists(target_path):
+                copy_workflow_name = f"{workflow_name}_copy_{counter}"
+                copy_file_name = f"{copy_workflow_name}.json"
+                target_path = os.path.join(target_path_id, copy_file_name)
+                counter += 1
+
+        with open(origin_path, 'r', encoding='utf-8') as f:
+            logger.info(f"Reading workflow data from: {origin_path}")
+            workflow_data = json.load(f)
+
+        nodes = workflow_data.get('nodes', [])
+        node_count = len(nodes) if isinstance(nodes, list) else 0
+        has_startnode = any(node.get('data', {}).get('functionId') == 'startnode' for node in nodes)
+        has_endnode = any(node.get('data', {}).get('functionId') == 'endnode' for node in nodes)
+
+        edges = workflow_data.get('edges', [])
+        edge_count = len(edges) if isinstance(edges, list) else 0
+
+        workflow_meta = WorkflowMeta(
+            user_id=login_user_id,
+            workflow_id=workflow_data.get('workflow_id'),
+            workflow_name=copy_workflow_name,
+            node_count=node_count,
+            edge_count=edge_count,
+            has_startnode=has_startnode,
+            has_endnode=has_endnode,
+            is_completed=(has_startnode and has_endnode),
+        )
+
+        app_db.insert(workflow_meta)
+        with open(target_path, 'w', encoding='utf-8') as wf:
+            json.dump(workflow_data, wf, ensure_ascii=False, indent=2)
+
+        logger.info(f"Workflow duplicated successfully: {filename}")
+        return {"success": True, "message": f"Workflow '{workflow_name}' duplicated successfully", "filename": filename}
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+    except Exception as e:
+        logger.error(f"Error loading workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to load workflow: {str(e)}")
+
+@router.post("/update/{workflow_name}")
+async def update_workflow(request: Request, workflow_name: str, update_dict: dict):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+
+    try:
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name
+            },
+        )
+
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        existing_data = existing_data[0]
+
+        existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
+        existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
+
+        app_db.update(existing_data)
+
+        return {
+            "message": "Workflow updated successfully",
+            "workflow_name": existing_data.workflow_name
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to update workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
+
+@router.delete("/delete/{workflow_name}")
+async def delete_workflow(request: Request, workflow_name: str):
+    """
+    특정 workflow를 삭제합니다.
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+
+        app_db.delete(WorkflowMeta, existing_data[0].id if existing_data else None)
+
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        download_path_id = os.path.join(downloads_path, user_id)
+        filename = f"{workflow_name}.json"
+        file_path = os.path.join(download_path_id, filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+        os.remove(file_path)
+
+        logger.info(f"Workflow deleted successfully: {filename}")
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Workflow '{workflow_name}' deleted successfully"
+        })
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+    except Exception as e:
+        logger.error(f"Error deleting workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete workflow: {str(e)}")
+
+@router.get("/list/detail")
+async def list_workflows_detail(request: Request):
+    """
+    downloads 폴더에 있는 모든 workflow 파일들의 상세 정보를 반환합니다.
+    각 워크플로우에 대해 파일명, workflow_id, 노드 수, 마지막 수정일자를 포함합니다.
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+        user = app_db.find_by_id(User, user_id)
+        groups = user.groups
+        user_name = user.username if user else "Unknown User"
+
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+            },
+            limit=10000,
+            orderby="updated_at",
+        )
+        if groups and groups != None and groups != [] and len(groups) > 0:
+            for group_name in groups:
+                shared_data = app_db.find_by_condition(
+                    WorkflowMeta,
+                    {
+                        "share_group": group_name,
+                        "is_shared": True,
+                    },
+                    limit=10000,
+                    orderby="updated_at",
+                )
+                existing_data.extend(shared_data)
+
+        seen_ids = set()
+        unique_data = []
+        for item in existing_data:
+            if item.id not in seen_ids:
+                seen_ids.add(item.id)
+                unique_data.append(item)
+
+        response_data = []
+        for data in unique_data:
+            data_dict = data.to_dict()
+            data_dict['user_name'] = user_name
+            response_data.append(data_dict)
+
+        logger.info(f"Found {len(existing_data)} workflow files with detailed information")
+
+        return JSONResponse(content={"workflows": response_data})
+
+    except Exception as e:
+        logger.error(f"Error listing workflow details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
+    
+@router.get("/io_logs")
+async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = 'default'):
+    """
+    특정 워크플로우의 ExecutionIO 로그를 반환합니다.
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+        result = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            },
+            limit=1000000,
+            orderby="updated_at",
+            orderby_asc=True,
+            return_list=True
+        )
+
+        if not result:
+            logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "workflow_id": workflow_id,
+                "in_out_logs": [],
+                "message": "No in_out_logs data found for this workflow"
+            })
+
+        performance_stats = []
+        for idx, row in enumerate(result):
+            # input_data 파싱
+            raw_input_data = json.loads(row['input_data']).get('result', None) if row['input_data'] else None
+            parsed_input_data = parse_input_data(raw_input_data) if raw_input_data else None
+
+            log_entry = {
+                "log_id": idx + 1,
+                "interaction_id": row['interaction_id'],
+                "workflow_name": row['workflow_name'],
+                "workflow_id": row['workflow_id'],
+                "input_data": parsed_input_data,
+                "output_data": json.loads(row['output_data']).get('result', None) if row['output_data'] else None,
+                "updated_at": row['updated_at'].isoformat() if isinstance(row['updated_at'], datetime) else row['updated_at']
+            }
+            performance_stats.append(log_entry)
+
+        response_data = {
+            "workflow_name": workflow_name,
+            "workflow_id": workflow_id,
+            "in_out_logs": performance_stats,
+            "message": "In/Out logs retrieved successfully"
+        }
+
+        logger.info(f"Performance stats retrieved for workflow: {workflow_name} ({workflow_id})")
+        return JSONResponse(content=response_data)
+
+    except Exception as e:
+        logger.error(f"Error retrieving workflow performance: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
+
+@router.delete("/io_logs")
+async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = "default"):
+    """
+    특정 워크플로우의 ExecutionIO 로그를 삭제합니다.
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+
+        existing_data = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            },
+            limit=1000000
+        )
+
+        delete_count = len(existing_data) if existing_data else 0
+
+        if delete_count == 0:
+            logger.info(f"No logs found to delete for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id,
+                "deleted_count": 0,
+                "message": "No logs found to delete"
+            })
+
+        app_db.delete_by_condition(
+            ExecutionIO,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            }
+        )
+        app_db.delete_by_condition(
+            ExecutionMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            }
+        )
+
+        logger.info(f"Successfully deleted {delete_count} logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
+
+        return JSONResponse(content={
+            "workflow_name": workflow_name,
+            "interaction_id": interaction_id,
+            "deleted_count": delete_count,
+            "message": f"Successfully deleted {delete_count} execution logs"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting workflow logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")

@@ -51,9 +51,7 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
         app_db = get_db_manager(request)
         where_conditions = {}
         where_conditions["user_id"] = user_id
-
-        if interaction_id:
-            where_conditions["interaction_id"] = interaction_id
+        where_conditions["interaction_id__notlike__"] = "deploy"
 
         result = app_db.find_by_condition(
             ExecutionMeta,
