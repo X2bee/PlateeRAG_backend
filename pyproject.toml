@@ -122,4 +122,5 @@ dependencies = [
     "xlrd==2.0.2",
     "python-pptx>=1.0.2",
     "beautifulsoup4>=4.13.4",
+    "ffmpeg-python==0.2.0"
 ]
