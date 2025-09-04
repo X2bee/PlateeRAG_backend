@@ -35,8 +35,8 @@ async def transcribe_audio(
             file_extension = audio_file.filename.split('.')[-1].lower() if audio_file.filename else 'wav'
             audio_format = file_extension
 
-        # 지원되는 형식 확인
-        supported_formats = ['wav', 'mp3', 'flac', 'm4a', 'ogg']
+        # 지원되는 형식 확인 (webm과 mp4 추가)
+        supported_formats = ['wav', 'mp3', 'flac', 'm4a', 'ogg', 'webm', 'mp4']
         if audio_format not in supported_formats:
             raise HTTPException(
                 status_code=400,
@@ -56,7 +56,7 @@ async def transcribe_audio(
         # 오디오를 텍스트로 변환
         transcription = await stt_service.transcribe_audio(audio_data, audio_format)
 
-        logger.info(f"Audio transcription completed for file: {audio_file.filename}")
+        logger.info("Audio transcription completed for file: %s", audio_file.filename)
 
         return JSONResponse(content={
             "transcription": transcription,
@@ -68,7 +68,7 @@ async def transcribe_audio(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error during audio transcription: {e}")
+        logger.error("Error during audio transcription: %s", e)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
 @router.get("/status")
@@ -92,7 +92,7 @@ async def get_stt_status(request: Request):
         })
 
     except Exception as e:
-        logger.error(f"Error getting STT status: {e}")
+        logger.error("Error getting STT status: %s", e)
         return JSONResponse(content={
             "available": False,
             "provider": None,

@@ -87,19 +87,76 @@ class HuggingFaceSTT(BaseSTT):
             logger.error("Failed to transcribe audio: %s", e)
             raise
 
+    def _convert_audio_to_numpy(self, input_path: str, audio_format: str) -> tuple:
+        """오디오 파일을 numpy array로 변환 (ffmpeg 사용)"""
+        import ffmpeg
+        import tempfile
+        import os
+        import numpy as np
+
+        # 모든 형식을 16kHz 모노 PCM으로 변환
+        logger.info("Converting %s audio to numpy array using ffmpeg", audio_format)
+
+        try:
+            # ffmpeg로 오디오를 16-bit PCM raw 데이터로 추출
+            process = (
+                ffmpeg
+                .input(input_path)
+                .output('pipe:', format='f32le', acodec='pcm_f32le', ac=1, ar=16000)
+                .run_async(pipe_stdout=True, pipe_stderr=True, quiet=True)
+            )
+
+            out, err = process.communicate()
+
+            if process.returncode != 0:
+                error_msg = err.decode() if err else "Unknown ffmpeg error"
+                raise RuntimeError(f"ffmpeg failed: {error_msg}")
+
+            # bytes를 numpy array로 변환
+            audio_array = np.frombuffer(out, np.float32)
+
+            logger.info("Audio conversion completed: %d samples at 16kHz", len(audio_array))
+
+            # 유효성 검사
+            if len(audio_array) == 0:
+                raise ValueError("Audio file appears to be empty or corrupted")
+
+            return audio_array, 16000
+
+        except Exception as e:
+            logger.error("Failed to convert audio: %s", e)
+            raise
+
     def _transcribe_audio_sync(self, audio_data: Union[bytes, str], audio_format: str) -> str:
         """오디오를 텍스트로 변환 (동기 함수)"""
         try:
-            import librosa
+            import tempfile
+            import os
+            import numpy as np
 
-            # 오디오 데이터 로드
+            # 오디오 데이터 준비
             if isinstance(audio_data, str):
                 # 파일 경로인 경우
-                audio_array, sampling_rate = librosa.load(audio_data, sr=16000)
+                input_path = audio_data
+                temp_input_path = None
             else:
-                # bytes 데이터인 경우
-                audio_buffer = io.BytesIO(audio_data)
-                audio_array, sampling_rate = librosa.load(audio_buffer, sr=16000)
+                # bytes 데이터인 경우 - 임시 파일로 저장
+                with tempfile.NamedTemporaryFile(suffix=f".{audio_format}", delete=False) as temp_file:
+                    temp_file.write(audio_data)
+                    temp_file.flush()
+                    input_path = temp_file.name
+                    temp_input_path = temp_file.name
+
+            try:
+                # ffmpeg로 오디오를 numpy array로 변환
+                audio_array, sampling_rate = self._convert_audio_to_numpy(input_path, audio_format)
+
+            finally:
+                # bytes에서 생성된 임시 파일 정리
+                if temp_input_path:
+                    os.unlink(temp_input_path)
+
+            logger.info("Audio loaded successfully: %d samples, sample_rate=%d", len(audio_array), sampling_rate)
 
             # 입력 특성 추출
             input_features = self.processor(
@@ -122,11 +179,27 @@ class HuggingFaceSTT(BaseSTT):
             return transcription[0] if transcription else ""
 
         except ImportError as import_error:
-            logger.error("librosa package not installed. Run: pip install librosa")
-            raise ValueError("Required package not installed: librosa") from import_error
-        except (RuntimeError, OSError, ValueError) as e:
-            logger.error("Error in audio transcription: %s", e)
-            raise
+            if "ffmpeg" in str(import_error):
+                logger.error("ffmpeg-python package not installed. Run: pip install ffmpeg-python")
+                raise ValueError("Required package not installed: ffmpeg-python") from import_error
+            else:
+                logger.error("numpy package not installed. Run: pip install numpy")
+                raise ValueError("Required package not installed: numpy") from import_error
+        except FileNotFoundError as fnf_error:
+            if "ffmpeg" in str(fnf_error):
+                logger.error("ffmpeg binary not found. Please install ffmpeg: apt install ffmpeg")
+                raise ValueError("ffmpeg is not installed. Please install ffmpeg to process audio files.") from fnf_error
+            else:
+                logger.error("File not found: %s", fnf_error)
+                raise ValueError("Audio file not found or inaccessible.") from fnf_error
+        except Exception as e:
+            # ffmpeg.Error는 Exception의 하위 클래스이므로 여기서 처리
+            if "ffmpeg" in str(type(e)) or "ffmpeg" in str(e):
+                logger.error("ffmpeg conversion failed: %s", e)
+                raise ValueError("Audio format conversion failed. Make sure the audio file is valid.") from e
+            else:
+                logger.error("Error in audio transcription: %s", e)
+                raise
 
     async def is_available(self) -> bool:
         """HuggingFace STT 서비스 사용 가능성 확인"""

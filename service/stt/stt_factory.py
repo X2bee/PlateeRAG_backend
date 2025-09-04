@@ -50,7 +50,7 @@ class STTFactory:
             stt_class = cls.PROVIDERS[provider]
             client = stt_class(config)
 
-            logger.info(f"Created {provider} STT client")
+            logger.info("Created %s STT client", provider)
 
             # 새 인스턴스와 설정 해시 저장
             cls._instance = client
@@ -58,10 +58,10 @@ class STTFactory:
             return client
 
         except ImportError as e:
-            logger.error(f"Missing dependencies for {provider} STT client: {e}")
-            raise ValueError(f"Cannot create {provider} STT client. Missing dependencies: {e}")
+            logger.error("Missing dependencies for %s STT client: %s", provider, e)
+            raise ValueError(f"Cannot create {provider} STT client. Missing dependencies: {e}") from e
         except Exception as e:
-            logger.error(f"Failed to create {provider} STT client: {e}")
+            logger.error("Failed to create %s STT client: %s", provider, e)
             raise
 
     @classmethod
@@ -118,7 +118,7 @@ class STTFactory:
             try:
                 await cls._instance.cleanup()
             except Exception as e:
-                logger.warning(f"Error during STT client cleanup: {e}")
+                logger.warning("Error during STT client cleanup: %s", e)
             finally:
                 cls._instance = None
                 cls._last_config_hash = None
