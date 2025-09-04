@@ -72,3 +72,8 @@ class ScoreModelParser(BaseModel):
 class DeployToggleRequest(BaseModel):
     """배포 상태 토글 요청 모델"""
     enable: bool = Field(description="배포 활성화 여부 (True: 활성화, False: 비활성화)")
+
+
+class DeployStatusRequest(BaseModel):
+    """배포 상태 요청 모델"""
+    user_id: Optional[str] = Field(description="사용자 ID")

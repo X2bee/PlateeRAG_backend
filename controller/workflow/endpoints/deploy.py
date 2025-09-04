@@ -8,14 +8,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_db_manager
-from controller.workflow.models.requests import DeployToggleRequest
+from controller.workflow.models.requests import DeployToggleRequest, DeployStatusRequest
 from service.database.models.deploy import DeployMeta
 
 logger = logging.getLogger("deploy-endpoints")
 router = APIRouter()
 
-@router.get("/status/{workflow_name}")
-async def get_deploy_status(request: Request, workflow_name: str):
+@router.post("/status/{workflow_name}")
+async def get_deploy_status(request: Request, workflow_name: str, staus_request: DeployStatusRequest):
     """
     특정 워크플로우의 배포 상태를 확인합니다.
     
@@ -26,7 +26,10 @@ async def get_deploy_status(request: Request, workflow_name: str):
         배포 상태 정보 (is_deployed, deploy_key 등)
     """
     try:
-        user_id = extract_user_id_from_request(request)
+        if not staus_request.user_id:
+            user_id = extract_user_id_from_request(request)
+        else:
+            user_id = staus_request.user_id
         app_db = get_db_manager(request)
         
         # DeployMeta 조회
@@ -53,7 +56,6 @@ async def get_deploy_status(request: Request, workflow_name: str):
             "updated_at": deploy_meta.updated_at.isoformat() if hasattr(deploy_meta, 'updated_at') and deploy_meta.updated_at else None
         }
         
-        logger.info(f"Deploy status retrieved for workflow: {workflow_name}")
         return JSONResponse(content=response_data)
         
     except HTTPException:
