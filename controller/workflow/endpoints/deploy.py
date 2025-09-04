@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_db_manager
+from controller.workflow.models.requests import DeployToggleRequest
 from service.database.models.deploy import DeployMeta
 
 logger = logging.getLogger("deploy-endpoints")
@@ -62,13 +63,13 @@ async def get_deploy_status(request: Request, workflow_name: str):
         raise HTTPException(status_code=500, detail=f"배포 상태 조회 실패: {str(e)}")
 
 @router.post("/toggle/{workflow_name}")
-async def toggle_deploy_status(request: Request, workflow_name: str, enable: bool):
+async def toggle_deploy_status(request: Request, workflow_name: str, toggle_request: DeployToggleRequest):
     """
     워크플로우의 배포 상태를 활성화/비활성화합니다.
     
     Args:
         workflow_name: 워크플로우 이름
-        enable: 배포 활성화 여부 (True: 활성화, False: 비활성화)
+        toggle_request: 배포 토글 요청 (enable: 활성화 여부)
     
     Returns:
         업데이트된 배포 상태 정보
@@ -93,9 +94,9 @@ async def toggle_deploy_status(request: Request, workflow_name: str, enable: boo
         deploy_meta = deploy_data[0]
         
         # 배포 상태 업데이트
-        deploy_meta.is_deployed = enable
+        deploy_meta.is_deployed = toggle_request.enable
         
-        if enable:
+        if toggle_request.enable:
             # 배포 활성화 시 새로운 deploy_key 생성
             # 32자리 랜덤 키 생성 (영문자 + 숫자)
             alphabet = string.ascii_letters + string.digits
@@ -122,11 +123,11 @@ async def toggle_deploy_status(request: Request, workflow_name: str, enable: boo
             "workflow_id": deploy_meta.workflow_id,
             "is_deployed": deploy_meta.is_deployed,
             "deploy_key": deploy_meta.deploy_key if deploy_meta.is_deployed else None,
-            "message": f"배포가 {'활성화' if enable else '비활성화'}되었습니다",
+            "message": f"배포가 {'활성화' if toggle_request.enable else '비활성화'}되었습니다",
             "updated_at": deploy_meta.updated_at.isoformat() if hasattr(deploy_meta, 'updated_at') and deploy_meta.updated_at else None
         }
         
-        logger.info(f"Deploy status {'enabled' if enable else 'disabled'} for workflow: {workflow_name}")
+        logger.info(f"Deploy status {'enabled' if toggle_request.enable else 'disabled'} for workflow: {workflow_name}")
         return JSONResponse(content=response_data)
         
     except HTTPException:

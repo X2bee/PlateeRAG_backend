@@ -67,3 +67,8 @@ class ScoreModelParser(BaseModel):
         ge=0.00, 
         le=1.00
     )
+
+# Deploy related models
+class DeployToggleRequest(BaseModel):
+    """배포 상태 토글 요청 모델"""
+    enable: bool = Field(description="배포 활성화 여부 (True: 활성화, False: 비활성화)")
