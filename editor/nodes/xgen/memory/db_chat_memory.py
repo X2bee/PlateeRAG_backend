@@ -90,9 +90,13 @@ class DBMemoryNode(Node):
         else:
             return None
 
-        if content and not include_thinking:
+        if content:
             import re
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+            content = re.sub(r'\[Cite\.\s*\{[^}]*\}\]', '', content, flags=re.DOTALL | re.IGNORECASE)
+            
+            if not include_thinking:
+                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+            
             content = content.strip()
 
         return content if content else None
