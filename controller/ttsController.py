@@ -177,7 +177,12 @@ async def generate_speech(
     """
     try:
         tts_controller = get_tts_service(request)
-        audio_data = await tts_controller.generate_speech(tts_request)
+        audio_data = await tts_controller.generate_speech(
+            text=tts_request.text,
+            speaker=tts_request.speaker,
+            output_format=tts_request.output_format,
+            language="ko",
+        )
 
         # MIME 타입 설정
         media_type_map = {
@@ -205,7 +210,7 @@ async def generate_speech(
 @router.get("/info",
            summary="TTS 서비스 정보 조회",
            description="현재 TTS 서비스의 설정과 상태 정보를 반환합니다.")
-async def get_tts_info(request: Request):
+async def get_provider_info(request: Request):
     """
     TTS 서비스 정보 반환
 
@@ -214,24 +219,7 @@ async def get_tts_info(request: Request):
     """
     try:
         tts_controller = get_tts_service(request)
-        return await tts_controller.get_tts_info()
+        return tts_controller.get_provider_info()
     except Exception as e:
         logger.error("Error retrieving TTS info: %s", e)
         raise HTTPException(status_code=500, detail="Failed to retrieve TTS service information") from e
-
-@router.get("/providers",
-           summary="사용 가능한 TTS 제공자 조회",
-           description="지원되는 TTS 제공자 목록을 반환합니다.")
-async def get_available_providers(request: Request):
-    """
-    사용 가능한 TTS 제공자 목록 반환
-
-    Returns:
-        TTS 제공자 목록과 설명
-    """
-    try:
-        tts_controller = get_tts_service(request)
-        return await tts_controller.get_available_providers()
-    except Exception as e:
-        logger.error("Error retrieving TTS providers: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to retrieve TTS providers") from e

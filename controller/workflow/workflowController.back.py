@@ -281,7 +281,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
         copy_workflow_name = f"{workflow_name}_copy"
         copy_file_name = f"{copy_workflow_name}.json"
         target_path = os.path.join(target_path_id, filename)
-        
+
         if os.path.exists(target_path):
             logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
             counter = 1
@@ -719,6 +719,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
 
             log_entry = {
                 "log_id": idx + 1,
+                "io_id": row['id'],
                 "interaction_id": row['interaction_id'],
                 "workflow_name": row['workflow_name'],
                 "workflow_id": row['workflow_id'],
@@ -1940,17 +1941,17 @@ async def cleanup_completed_executions():
 async def get_deploy_status(request: Request, workflow_name: str):
     """
     특정 워크플로우의 배포 상태를 확인합니다.
-    
+
     Args:
         workflow_name: 워크플로우 이름
-    
+
     Returns:
         배포 상태 정보 (is_deployed, deploy_key 등)
     """
     try:
         user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
-        
+
         # DeployMeta 조회
         deploy_data = app_db.find_by_condition(
             DeployMeta,
@@ -1960,12 +1961,12 @@ async def get_deploy_status(request: Request, workflow_name: str):
             },
             limit=1
         )
-        
+
         if not deploy_data:
             raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
-        
+
         deploy_meta = deploy_data[0]
-        
+
         response_data = {
             "workflow_name": workflow_name,
             "workflow_id": deploy_meta.workflow_id,
@@ -1974,10 +1975,10 @@ async def get_deploy_status(request: Request, workflow_name: str):
             "created_at": deploy_meta.created_at.isoformat() if hasattr(deploy_meta, 'created_at') and deploy_meta.created_at else None,
             "updated_at": deploy_meta.updated_at.isoformat() if hasattr(deploy_meta, 'updated_at') and deploy_meta.updated_at else None
         }
-        
+
         logger.info(f"Deploy status retrieved for workflow: {workflow_name}")
         return JSONResponse(content=response_data)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1988,18 +1989,18 @@ async def get_deploy_status(request: Request, workflow_name: str):
 async def toggle_deploy_status(request: Request, workflow_name: str, enable: bool):
     """
     워크플로우의 배포 상태를 활성화/비활성화합니다.
-    
+
     Args:
         workflow_name: 워크플로우 이름
         enable: 배포 활성화 여부 (True: 활성화, False: 비활성화)
-    
+
     Returns:
         업데이트된 배포 상태 정보
     """
     try:
         user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
-        
+
         # DeployMeta 조회
         deploy_data = app_db.find_by_condition(
             DeployMeta,
@@ -2009,40 +2010,40 @@ async def toggle_deploy_status(request: Request, workflow_name: str, enable: boo
             },
             limit=1
         )
-        
+
         if not deploy_data:
             raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
-        
+
         deploy_meta = deploy_data[0]
-        
+
         # 배포 상태 업데이트
         deploy_meta.is_deployed = enable
-        
+
         if enable:
             # 배포 활성화 시 새로운 deploy_key 생성
             import secrets
             import string
-            
+
             # 32자리 랜덤 키 생성 (영문자 + 숫자)
             alphabet = string.ascii_letters + string.digits
             deploy_key = ''.join(secrets.choice(alphabet) for _ in range(32))
             deploy_meta.deploy_key = deploy_key
-            
+
             logger.info(f"Generated new deploy key for workflow: {workflow_name}")
         else:
             # 배포 비활성화 시 deploy_key 초기화
             deploy_meta.deploy_key = ""
             logger.info(f"Cleared deploy key for workflow: {workflow_name}")
-        
+
         # DB 업데이트
         update_result = app_db.update(deploy_meta)
-        
+
         if not update_result or update_result.get("result") != "success":
             raise HTTPException(
                 status_code=500,
                 detail=f"배포 상태 업데이트 실패: {update_result.get('error', 'Unknown error')}"
             )
-        
+
         response_data = {
             "workflow_name": workflow_name,
             "workflow_id": deploy_meta.workflow_id,
@@ -2051,10 +2052,10 @@ async def toggle_deploy_status(request: Request, workflow_name: str, enable: boo
             "message": f"배포가 {'활성화' if enable else '비활성화'}되었습니다",
             "updated_at": deploy_meta.updated_at.isoformat() if hasattr(deploy_meta, 'updated_at') and deploy_meta.updated_at else None
         }
-        
+
         logger.info(f"Deploy status {'enabled' if enable else 'disabled'} for workflow: {workflow_name}")
         return JSONResponse(content=response_data)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2065,17 +2066,17 @@ async def toggle_deploy_status(request: Request, workflow_name: str, enable: boo
 async def get_deploy_key(request: Request, workflow_name: str):
     """
     특정 워크플로우의 배포 키값을 조회합니다.
-    
+
     Args:
         workflow_name: 워크플로우 이름
-    
+
     Returns:
         배포 키값 (배포가 활성화된 경우에만)
     """
     try:
         user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
-        
+
         # DeployMeta 조회
         deploy_data = app_db.find_by_condition(
             DeployMeta,
@@ -2085,20 +2086,20 @@ async def get_deploy_key(request: Request, workflow_name: str):
             },
             limit=1
         )
-        
+
         if not deploy_data:
             raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
-        
+
         deploy_meta = deploy_data[0]
-        
+
         # 배포가 비활성화된 경우 키값을 제공하지 않음
         if not deploy_meta.is_deployed:
             raise HTTPException(status_code=403, detail="배포가 비활성화된 워크플로우입니다")
-        
+
         # 배포 키가 없는 경우 (예외적인 상황)
         if not deploy_meta.deploy_key:
             raise HTTPException(status_code=500, detail="배포 키가 생성되지 않았습니다")
-        
+
         response_data = {
             "workflow_name": workflow_name,
             "workflow_id": deploy_meta.workflow_id,
@@ -2106,10 +2107,10 @@ async def get_deploy_key(request: Request, workflow_name: str):
             "is_deployed": deploy_meta.is_deployed,
             "message": "배포 키 조회 성공"
         }
-        
+
         logger.info(f"Deploy key retrieved for workflow: {workflow_name}")
         return JSONResponse(content=response_data)
-        
+
     except HTTPException:
         raise
     except Exception as e:
