@@ -4,8 +4,8 @@ from typing import Any, Literal, Iterable
 import torch
 import torch.nn as nn
 
-from zonos.config import PrefixConditionerConfig
-from zonos.utils import DEFAULT_DEVICE
+from service.tts.zonos.config import PrefixConditionerConfig
+from service.tts.zonos.utils import DEFAULT_DEVICE
 
 
 class Conditioner(nn.Module):
@@ -337,7 +337,7 @@ def make_cond_dict(
     #                     VQScore and DNSMOS because they favor neutral speech
     #
     #                       Happiness, Sadness, Disgust, Fear, Surprise, Anger, Other, Neutral
-    emotion: list[float] = [0.7777, 0.0256, 0.0256, 0.0256, 0.0256, 0.0256, 0.2564, 0.3077],
+    emotion: list[float] = [0.3077, 0.0256, 0.0256, 0.0256, 0.0256, 0.0256, 0.2564, 0.3077],
 
     # Maximum frequency (0 to 24000), should be 22050 or 24000 for 44.1 or 48 kHz audio
     # For voice cloning use 22050

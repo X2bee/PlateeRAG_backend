@@ -7,14 +7,14 @@ import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from tqdm import tqdm
 
-from zonos.autoencoder import DACAutoencoder
-from zonos.backbone import BACKBONES
-from zonos.codebook_pattern import apply_delay_pattern, revert_delay_pattern
-from zonos.conditioning import PrefixConditioner
-from zonos.config import InferenceParams, ZonosConfig
-from zonos.sampling import sample_from_logits
-from zonos.speaker_cloning import SpeakerEmbeddingLDA
-from zonos.utils import DEFAULT_DEVICE, find_multiple, pad_weight_
+from service.tts.zonos.autoencoder import DACAutoencoder
+from service.tts.zonos.backbone import BACKBONES
+from service.tts.zonos.codebook_pattern import apply_delay_pattern, revert_delay_pattern
+from service.tts.zonos.conditioning import PrefixConditioner
+from service.tts.zonos.config import InferenceParams, ZonosConfig
+from service.tts.zonos.sampling import sample_from_logits
+from service.tts.zonos.speaker_cloning import SpeakerEmbeddingLDA
+from service.tts.zonos.utils import DEFAULT_DEVICE, find_multiple, pad_weight_
 
 DEFAULT_BACKBONE_CLS = next(iter(BACKBONES.values()))
 
