@@ -67,6 +67,13 @@ def get_stt_service(request: Request) -> HuggingFaceSTT:
     else:
         raise HTTPException(status_code=500, detail="STT service not available")
 
+def get_tts_service(request: Request):
+    """TTS 서비스 의존성 주입"""
+    if hasattr(request.app.state, 'tts_service') and request.app.state.tts_service:
+        return request.app.state.tts_service
+    else:
+        raise HTTPException(status_code=500, detail="TTS service not available")
+
 def get_performance_controller(request: Request) -> PerformanceControllerHelper:
     app_db = get_db_manager(request)
     return PerformanceControllerHelper(app_db)
