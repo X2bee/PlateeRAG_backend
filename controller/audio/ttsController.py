@@ -9,8 +9,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from service.tts.tts_factory import TTSFactory
-from controller.helper.singletonHelper import get_tts_service
+from controller.helper.singletonHelper import get_tts_service, get_config_composer
 import io
+from service.tts.tts_factory import TTSFactory
 
 logger = logging.getLogger("controller.tts")
 
@@ -31,7 +32,7 @@ class TTSRequest(BaseModel):
     neutral: float = 0.3077
 
 router = APIRouter(
-    prefix="/api/tts",
+    prefix="/tts",
     tags=["TTS (Text-to-Speech)"],
     responses={
         500: {"description": "Internal server error"},
@@ -223,3 +224,32 @@ async def get_provider_info(request: Request):
     except Exception as e:
         logger.error("Error retrieving TTS info: %s", e)
         raise HTTPException(status_code=500, detail="Failed to retrieve TTS service information") from e
+
+@router.post("/refresh")
+async def refresh_tts_factory(request: Request):
+    try:
+        config_composer = get_config_composer(request)
+        if config_composer.get_config_by_name("IS_AVAILABLE_TTS").value:
+            tts_client = TTSFactory.create_tts_client(config_composer)
+            request.app.state.tts_service = tts_client
+            return {
+                "message": "TTS configuration refreshed successfully"
+            }
+        else:
+            if hasattr(request.app.state, 'tts_service') and request.app.state.tts_service is not None:
+                try:
+                    await request.app.state.tts_service.cleanup()
+                except Exception as cleanup_e:
+                    logger.warning(f"Error during existing TTS service cleanup: {cleanup_e}")
+
+                request.app.state.tts_service = None
+                import gc
+                gc.collect()
+            else:
+                request.app.state.tts_service = None
+            return {
+                "message": "TTS service is disabled in configuration"
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh TTS config: {str(e)}")

@@ -358,14 +358,32 @@ class ConfigComposer:
             config_obj = self.get_config_by_name(config_name)
             old_value = config_obj.value
 
-            # 값 타입에 따라 적절히 변환
+            # 타입별로 적절하게 변환 처리
             if isinstance(config_obj.env_value, bool):
-                config_obj.value = bool(new_value)
+                # boolean 타입 처리
+                if isinstance(new_value, str):
+                    # 문자열 형태의 boolean 처리
+                    new_value_lower = new_value.lower().strip()
+                    if new_value_lower in ['true', '1', 'yes', 'on']:
+                        config_obj.value = True
+                    elif new_value_lower in ['false', '0', 'no', 'off']:
+                        config_obj.value = False
+                    else:
+                        raise ValueError(f"Cannot convert '{new_value}' to boolean")
+                else:
+                    config_obj.value = bool(new_value)
             elif isinstance(config_obj.env_value, int):
+                # integer 타입 처리
+                if isinstance(new_value, str):
+                    new_value = new_value.strip()
                 config_obj.value = int(new_value)
             elif isinstance(config_obj.env_value, float):
+                # float 타입 처리
+                if isinstance(new_value, str):
+                    new_value = new_value.strip()
                 config_obj.value = float(new_value)
             else:
+                # 기본적으로 문자열로 처리
                 config_obj.value = str(new_value)
 
             # 1. DB에 저장
