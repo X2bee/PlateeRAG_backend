@@ -8,6 +8,12 @@ from config.base_config import BaseConfig, PersistentConfig, convert_to_bool, co
 class STTConfig(BaseConfig):
     """STT 설정 관리"""
     def initialize(self) -> Dict[str, PersistentConfig]:
+        self.IS_AVAILABLE_STT = self.create_persistent_config(
+            env_name="IS_AVAILABLE_STT",
+            config_path="stt.is_available_stt",
+            default_value=False,
+            type_converter=convert_to_bool
+        )
         self.AVAILABLE_STT_LIST = self.create_persistent_config(
             env_name="AVAILABLE_STT_LIST",
             config_path="stt.available_stt_list",
