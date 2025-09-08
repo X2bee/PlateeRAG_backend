@@ -134,27 +134,35 @@ async def lifespan(app: FastAPI):
             app.state.document_processor = None
 
         # 5. STT 서비스 초기화
-        print_step_banner(5, "STT SERVICE SETUP", "Setting up Speech-to-Text services")
-        try:
-            logger.info("⚙️  Step 5: STT service initialization starting...")
-            stt_client = STTFactory.create_stt_client(config_composer)
-            app.state.stt_service = stt_client
-            logger.info("✅ Step 5: STT service initialized successfully!")
-        except Exception as e:
-            logger.error(f"❌ Step 5: Failed to initialize STT service: {e}")
-            # STT 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
+        if config_composer.get_config_by_name("IS_AVAILABLE_STT").value:
+            print_step_banner(5, "STT SERVICE SETUP", "Setting up Speech-to-Text services")
+            try:
+                logger.info("⚙️  Step 5: STT service initialization starting...")
+                stt_client = STTFactory.create_stt_client(config_composer)
+                app.state.stt_service = stt_client
+                logger.info("✅ Step 5: STT service initialized successfully!")
+            except Exception as e:
+                logger.error(f"❌ Step 5: Failed to initialize STT service: {e}")
+                # STT 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
+                app.state.stt_service = None
+        else:
+            print_step_banner(5, "STT SERVICE SETUP", "STT service is disabled in configuration")
             app.state.stt_service = None
 
         # 5.5. TTS 서비스 초기화
-        print_step_banner(5.5, "TTS SERVICE SETUP", "Setting up Text-to-Speech services")
-        try:
-            logger.info("⚙️  Step 5.5: TTS service initialization starting...")
-            tts_client = TTSFactory.create_tts_client(config_composer)
-            app.state.tts_service = tts_client
-            logger.info("✅ Step 5.5: TTS service initialized successfully!")
-        except Exception as e:
-            logger.error(f"❌ Step 5.5: Failed to initialize TTS service: {e}")
-            # TTS 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
+        if config_composer.get_config_by_name("IS_AVAILABLE_TTS").value:
+            print_step_banner(5.5, "TTS SERVICE SETUP", "Setting up Text-to-Speech services")
+            try:
+                logger.info("⚙️  Step 5.5: TTS service initialization starting...")
+                tts_client = TTSFactory.create_tts_client(config_composer)
+                app.state.tts_service = tts_client
+                logger.info("✅ Step 5.5: TTS service initialized successfully!")
+            except Exception as e:
+                logger.error(f"❌ Step 5.5: Failed to initialize TTS service: {e}")
+                # TTS 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
+                app.state.tts_service = None
+        else:
+            print_step_banner(5.5, "TTS SERVICE SETUP", "TTS service is disabled in configuration")
             app.state.tts_service = None
 
         # 6. vast_service Instance 생성

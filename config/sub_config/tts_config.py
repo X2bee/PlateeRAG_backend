@@ -2,11 +2,17 @@
 TTS 설정 관리
 """
 from typing import Dict
-from config.base_config import BaseConfig, PersistentConfig
+from config.base_config import BaseConfig, PersistentConfig, convert_to_bool
 
 class TTSConfig(BaseConfig):
     """TTS 설정 관리"""
     def initialize(self) -> Dict[str, PersistentConfig]:
+        self.IS_AVAILABLE_TTS = self.create_persistent_config(
+            env_name="IS_AVAILABLE_TTS",
+            config_path="tts.is_available_tts",
+            default_value=False,
+            type_converter=convert_to_bool
+        )
         self.AVAILABLE_TTS_LIST = self.create_persistent_config(
             env_name="AVAILABLE_TTS_LIST",
             config_path="tts.available_tts_list",
