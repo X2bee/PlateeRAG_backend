@@ -4,6 +4,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
+    rustc cargo espeak-ng ffmpeg \
     build-essential \
     libpq-dev \
     curl \
@@ -16,5 +17,7 @@ COPY ./pyproject.toml .
 RUN uv sync
 
 RUN uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('Qwen/Qwen3-Embedding-0.6B')"
+RUN uv run python -c "from transformers import WhisperProcessor; WhisperProcessor.from_pretrained('openai/whisper-small')"
+RUN uv run python -c "from transformers import WhisperForConditionalGeneration; WhisperForConditionalGeneration.from_pretrained('openai/whisper-small')"
 
 COPY . .

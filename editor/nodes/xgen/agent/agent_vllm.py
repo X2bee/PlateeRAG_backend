@@ -4,17 +4,13 @@ from pydantic import BaseModel
 from editor.node_composer import Node
 from langchain.schema.output_parser import StrOutputParser
 from langchain_core.output_parsers import JsonOutputParser
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from editor.utils.helper.service_helper import AppServiceManager
-from editor.utils.helper.async_helper import sync_run_async
 from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput
 from editor.utils.prefix_prompt import prefix_prompt
-from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from fastapi import Request
 from controller.helper.singletonHelper import get_config_composer
-
+from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
@@ -72,199 +68,37 @@ class AgentVLLMNode(Node):
         return_intermediate_steps: bool = False,
         default_prompt: str = default_prompt,
     ) -> str:
-        """
-        RAG 컨텍스트를 사용하여 사용자 입력에 대한 채팅 응답을 생성합니다.
-
-        Args:
-            text: 사용자 입력
-            tools: 사용할 도구 목록
-            model: 사용할 언어 모델
-            temperature: 생성 온도
-            max_tokens: 최대 토큰 수
-
-        Returns:
-            Agent 응답
-        """
         try:
-            if self.llm_provider != "vllm":
-                logger.warning(f"현재 설정된 LLM 제공자가 vLLM가 아닙니다: {self.llm_provider}. vLLM를 사용하려면 설정을 확인하세요.")
+            default_prompt = prefix_prompt + default_prompt
+            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages, streaming=True)
 
-            if not model or model.strip() == "":
-                model = self.vllm_model_name if model.strip() == "" else model
-            if not base_url or base_url.strip() == "":
-                base_url = self.vllm_api_base_url if base_url.strip() == "" else base_url
-            if temperature is None or temperature < 0.0:
-                temperature = self.vllm_temperature_default if temperature is None else temperature
-            if max_tokens is None or max_tokens <= 0:
-                max_tokens = self.vllm_max_tokens_default if max_tokens is None else max_tokens
-
-            logger.info(f"Chat Agent 실행: text='{text[:50]}...', model={model}")
-
-            # tools 처리 로직
-            if tools is None:
-                tools = None
-            elif isinstance(tools, list):
-                if len(tools) == 0:
-                    tools = None
-            else:
-                # 단일 StructuredTool인 경우 리스트로 감싸기
-                tools = [tools]
-
-            additional_rag_context = None
+            additional_rag_context = ""
             if rag_context:
-                if rag_context['search_params']['use_model_prompt']:
-                    query = rag_context['search_params']['embedding_model_prompt'] + text
-                else:
-                    query = text
-                search_result = sync_run_async(rag_context['rag_service'].search_documents(
-                    collection_name=rag_context['search_params']['collection_name'],
-                    query_text=query,
-                    limit=rag_context['search_params']['top_k'],
-                    score_threshold=rag_context['search_params']['score_threshold']
-                ))
-                results = search_result.get("results", [])
-                if results:
-                    context_parts = []
-                    for i, item in enumerate(results, 1):
-                        if "chunk_text" in item and item["chunk_text"]:
-                            item_file_name = item.get("file_name", "Unknown")
-                            item_file_path = item.get("file_path", "Unknown")
-                            item_page_number = item.get("page_number", 0)
-                            item_line_start = item.get("line_start", 0)
-                            item_line_end = item.get("line_end", 0)
-
-                            score = item.get("score", 0.0)
-                            chunk_text = item["chunk_text"]
-                            context_parts.append(f"[문서 {i}](관련도: {score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
-                    if context_parts:
-                        context_parts.append(f"{citation_prompt}")
-                        context_text = "\n".join(context_parts)
-                        additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
-{context_text}"""
-            prompt = prefix_prompt+default_prompt
-
-            # OpenAI API를 사용하여 응답 생성
-            response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context, args_schema, return_intermediate_steps)
-
-            logger.info(f"Chat Agent 응답 생성 완료: {len(response)}자")
-            return response
-
-        except Exception as e:
-            logger.error(f"Chat Agent 실행 중 오류 발생: {str(e)}")
-            return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
-
-
-    def _generate_chat_response(self, text: str, prompt: str, model: str, tools: Optional[Any], memory: Optional[Any], temperature: float, max_tokens: int, n_messages: int, base_url: str, strict_citation:Optional[bool], additional_rag_context: Optional[str], args_schema, return_intermediate_steps: bool = False) -> str:
-        """OpenAI API를 사용하여 채팅 응답 생성"""
-        try:
-            config_composer = AppServiceManager.get_config_composer()
-            if not config_composer:
-                return "Config Composer가 설정되지 않았습니다."
-
-            # OpenAI API 키 설정
-            llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
-            if llm_provider == "openai":
-                api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
-                if not api_key:
-                    return "OpenAI API 키가 설정되지 않았습니다."
-
-            elif llm_provider == "vllm":
-                print("vLLM API를 사용합니다.")
-                api_key = None # 현재 vLLM API 키는 별도로 설정하지 않음
-
-                # TODO: vLLM API 키 설정 로직 추가
-                # api_key = config_composer.get_config_by_name("VLLM_API_KEY").value
-                # if not api_key:
-                #     return "vLLM API 키가 설정되지 않았습니다."
-
-            from langchain_openai import ChatOpenAI
-
-            llm = ChatOpenAI(
-                api_key=api_key,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                base_url=base_url
-            )
-
-            chat_history = []
-            if memory:
-                try:
-                    memory_vars = memory.load_memory_variables({})
-                    chat_history = memory_vars.get("chat_history", [])
-                except Exception as e:
-                    chat_history = []
-            else:
-                logger.info(f"[CHAT_RESPONSE] 메모리가 없어 빈 채팅 히스토리 사용")
-
-            inputs = {
-                "chat_history": chat_history,
-                "input": text,
-                "additional_rag_context": additional_rag_context if additional_rag_context else ""
-            }
+                additional_rag_context = rag_context_builder(text, rag_context, strict_citation)
+            inputs = {"input": text, "chat_history": chat_history, "additional_rag_context": additional_rag_context}
 
             if args_schema:
-                parser = JsonOutputParser(pydantic_object=args_schema)
-                format_instructions = parser.get_format_instructions()
-                escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
-                prompt = f"{prompt}\n\n{escaped_instructions}"
-
-            if tools is not None:
-                if additional_rag_context and additional_rag_context.strip():
-                    final_prompt = ChatPromptTemplate.from_messages([
-                        ("system", prompt),
-                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                        ("user", "{input}"),
-                        ("user", "{additional_rag_context}"),
-                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
-                    ])
-                else:
-                    final_prompt = ChatPromptTemplate.from_messages([
-                        ("system", prompt),
-                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                        ("user", "{input}"),
-                        MessagesPlaceholder(variable_name="agent_scratchpad", n_messages=2)
-                    ])
-
-                agent = create_tool_calling_agent(llm, tools, final_prompt)
-
-                # return_intermediate_steps에 따라 핸들러 선택
-                if return_intermediate_steps:
-                    handler = NonStreamingAgentHandlerWithToolOutput()
-                else:
-                    handler = NonStreamingAgentHandler()
-
+                default_prompt = create_json_output_prompt(args_schema, default_prompt)
+            if tools_list and len(tools_list) > 0:
+                final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt, n_messages)
+                agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(
                     agent=agent,
-                    tools=tools,
+                    tools=tools_list,
                     verbose=True,
                     handle_parsing_errors=True,
                     max_iterations=3,
                 )
+                if return_intermediate_steps:
+                    handler = NonStreamingAgentHandlerWithToolOutput()
+                else:
+                    handler = NonStreamingAgentHandler()
                 response = agent_executor.invoke(inputs, {"callbacks": [handler]})
                 output = response["output"]
-
-                # handler를 통해 가공된 출력 반환
                 return handler.get_formatted_output(output)
 
             else:
-
-                if additional_rag_context and additional_rag_context.strip():
-                    if strict_citation:
-                        prompt = prompt + citation_prompt
-                    final_prompt = ChatPromptTemplate.from_messages([
-                        ("system", prompt),
-                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                        ("user", "{input}"),
-                        ("user", "{additional_rag_context}"),
-                    ])
-                else:
-                    final_prompt = ChatPromptTemplate.from_messages([
-                        ("system", prompt),
-                        MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-                        ("user", "{input}")
-                    ])
-
+                final_prompt = create_context_prompt(additional_rag_context, default_prompt, n_messages, strict_citation)
                 if args_schema:
                     parser = JsonOutputParser()
                 else:
@@ -275,5 +109,5 @@ class AgentVLLMNode(Node):
                 return response
 
         except Exception as e:
-            logger.error(f"OpenAI 응답 생성 중 오류: {e}")
-            return f"응답 생성 중 오류가 발생했습니다: {str(e)}"
+            logger.error(f"Chat Agent 실행 중 오류 발생: {str(e)}")
+            return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"

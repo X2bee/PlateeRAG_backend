@@ -15,7 +15,7 @@ try:
 except ImportError:
     GPU_AVAILABLE = False
 
-logger = logging.getLogger("admin-controller")
+logger = logging.getLogger("admin-system-controller")
 router = APIRouter(prefix="/system", tags=["Admin"])
 
 # Response Models
@@ -115,7 +115,13 @@ def get_gpu_info() -> List[GPUInfo]:
         for i in range(device_count):
             try:
                 handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                name = pynvml.nvmlDeviceGetName(handle).decode('utf-8')
+
+                # Get device name (handle both string and bytes return types)
+                raw_name = pynvml.nvmlDeviceGetName(handle)
+                if isinstance(raw_name, bytes):
+                    name = raw_name.decode('utf-8')
+                else:
+                    name = str(raw_name)
 
                 # Memory info
                 memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)

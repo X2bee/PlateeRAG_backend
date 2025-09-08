@@ -344,3 +344,110 @@ class AppDatabaseManager:
         except (AttributeError, ValueError) as e:
             self.logger.error("Failed to run migrations: %s", e)
             return False
+
+    def get_table_list(self) -> List[Dict[str, Any]]:
+        """데이터베이스의 모든 테이블 목록 조회"""
+        try:
+            db_type = self.config_db_manager.db_type
+
+            if db_type == "postgresql":
+                query = """
+                    SELECT
+                        schemaname as schema_name,
+                        tablename as table_name,
+                        tableowner as table_owner
+                    FROM pg_tables
+                    WHERE schemaname = 'public'
+                    ORDER BY tablename
+                """
+                results = self.config_db_manager.execute_query(query)
+            else:  # SQLite
+                query = """
+                    SELECT
+                        name as table_name,
+                        type as table_type,
+                        sql as create_sql
+                    FROM sqlite_master
+                    WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                    ORDER BY name
+                """
+                results = self.config_db_manager.execute_query(query)
+
+            return results if results else []
+
+        except (AttributeError, ValueError) as e:
+            self.logger.error("Failed to get table list: %s", e)
+            return []
+
+    def execute_raw_query(self, query: str, params: tuple = None) -> Dict[str, Any]:
+        """임의의 SQL 쿼리 실행"""
+        try:
+            # 쿼리 정규화 (앞뒤 공백 제거, 세미콜론 제거)
+            query = query.strip().rstrip(';')
+
+            # 위험한 키워드 체크 (기본적인 보안)
+            dangerous_keywords = [
+                'DROP', 'DELETE', 'TRUNCATE', 'INSERT', 'UPDATE',
+                'CREATE', 'ALTER', 'GRANT', 'REVOKE'
+            ]
+
+            query_upper = query.upper().strip()
+
+            # SELECT 쿼리만 허용하는 기본 보안 체크
+            if not query_upper.startswith('SELECT'):
+                return {
+                    "success": False,
+                    "error": "Only SELECT queries are allowed",
+                    "data": []
+                }
+
+            # 위험한 키워드가 포함되어 있는지 체크
+            for keyword in dangerous_keywords:
+                if keyword in query_upper:
+                    return {
+                        "success": False,
+                        "error": f"Query contains forbidden keyword: {keyword}",
+                        "data": []
+                    }
+
+            # 쿼리 길이 제한 (너무 긴 쿼리 방지)
+            if len(query) > 1000:
+                return {
+                    "success": False,
+                    "error": "Query too long (maximum 1000 characters)",
+                    "data": []
+                }
+
+            results = self.config_db_manager.execute_query(query, params)
+
+            if results is not None:
+                if len(results) > 1000:
+                    return {
+                        "success": True,
+                        "error": "Result truncated (showing first 1000 rows)",
+                        "data": results[:1000],
+                        "row_count": len(results),
+                        "truncated": True
+                    }
+
+                return {
+                    "success": True,
+                    "error": None,
+                    "data": results,
+                    "row_count": len(results),
+                    "truncated": False
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Query execution failed",
+                    "data": []
+                }
+
+        except Exception as e:
+            self.logger.error("Failed to execute raw query: %s", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "data": []
+            }

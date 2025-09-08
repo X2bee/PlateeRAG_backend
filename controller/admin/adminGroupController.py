@@ -8,7 +8,7 @@ from controller.admin.adminBaseController import validate_superuser
 from service.database.models.group import GroupMeta
 from service.database.models.user import User
 
-logger = logging.getLogger("admin-controller")
+logger = logging.getLogger("admin-group-controller")
 router = APIRouter(prefix="/group", tags=["Admin"])
 
 class GroupData(BaseModel):

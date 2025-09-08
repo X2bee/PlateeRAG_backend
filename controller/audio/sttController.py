@@ -6,11 +6,13 @@ from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 import logging
 from typing import Optional
-from controller.helper.singletonHelper import get_stt_service
+from controller.helper.singletonHelper import get_stt_service, get_config_composer
+from service.stt.stt_factory import STTFactory
+from controller.admin.adminBaseController import validate_superuser
 
 logger = logging.getLogger("controller.stt")
 
-router = APIRouter(prefix="/api/stt", tags=["STT"])
+router = APIRouter(prefix="/stt", tags=["STT"])
 
 @router.post("/transcribe")
 async def transcribe_audio(
@@ -99,3 +101,70 @@ async def get_stt_status(request: Request):
             "model": None,
             "error": str(e)
         })
+
+@router.get("/simple-status")
+async def get_stt_simple_status(request: Request):
+    """
+    STT 서비스 상태 확인
+
+    Returns:
+        STT 서비스 상태 정보
+    """
+    try:
+        config_composer = get_config_composer(request)
+        stt_service = get_stt_service(request)
+        provider_info = stt_service.get_provider_info()
+        is_available = config_composer.get_config_by_name("IS_AVAILABLE_STT").value
+
+        return JSONResponse(content={
+            "available": is_available,
+            "provider": provider_info.get("provider"),
+            "model": provider_info.get("model"),
+            "api_key_configured": provider_info.get("api_key_configured", False)
+        })
+
+    except Exception as e:
+        logger.error("Error getting STT status: %s", e)
+        return JSONResponse(content={
+            "available": False,
+            "provider": None,
+            "model": None,
+            "error": str(e)
+        })
+
+@router.post("/refresh")
+async def refresh_stt_factory(request: Request):
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
+    try:
+        config_composer = get_config_composer(request)
+        if config_composer.get_config_by_name("IS_AVAILABLE_STT").value:
+            stt_client = STTFactory.create_stt_client(config_composer)
+            request.app.state.stt_service = stt_client
+
+            return {
+                "message": "STT configuration refreshed successfully"
+            }
+        else:
+            if hasattr(request.app.state, 'stt_service') and request.app.state.stt_service is not None:
+                try:
+                    await request.app.state.stt_service.cleanup()
+                except Exception as cleanup_e:
+                    logger.warning(f"Error during existing STT service cleanup: {cleanup_e}")
+
+                request.app.state.stt_service = None
+                import gc
+                gc.collect()
+            else:
+                request.app.state.stt_service = None
+            return {
+                "message": "STT service is disabled in configuration"
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh STT config: {str(e)}")

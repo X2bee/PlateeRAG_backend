@@ -6,7 +6,7 @@ from controller.admin.adminBaseController import validate_superuser
 
 from service.database.models.executor import ExecutionIO
 
-logger = logging.getLogger("admin-controller")
+logger = logging.getLogger("admin-workflow-controller")
 router = APIRouter(prefix="/workflow", tags=["Admin"])
 
 def extract_result_from_json(json_string):
