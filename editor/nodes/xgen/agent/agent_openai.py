@@ -72,7 +72,7 @@ class AgentOpenAINode(Node):
     ) -> str:
         try:
             default_prompt  = prefix_prompt+default_prompt
-            llm, tools_list, chat_history = prepare_llm_components(tools, memory, model, temperature, max_tokens, base_url, streaming=False)
+            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages, streaming=False)
 
             additional_rag_context = None
             if rag_context:

@@ -46,7 +46,7 @@ def rag_context_builder(text, rag_context, strict_citation=True):
     return additional_rag_context
 
 
-def prepare_llm_components(tools, memory, model, temperature, max_tokens, base_url, streaming=True):
+def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages, streaming=True):
     from langchain_openai import ChatOpenAI
     from editor.utils.helper.service_helper import AppServiceManager
 
@@ -83,9 +83,11 @@ def prepare_llm_components(tools, memory, model, temperature, max_tokens, base_u
     chat_history = []
     if memory:
         try:
-            memory_vars = memory.load_memory_variables({})
-            chat_history = memory_vars.get("chat_history", [])
+            optimized_chat_history = prepare_optimized_chat_history(memory, text, n_messages, llm)
+            chat_history = optimized_chat_history
+            logger.info(f"Using optimized multiturn memory with {len(chat_history)} messages")
         except Exception:
+            logger.warning(f"Failed to use optimized memory, using standard: {e}")
             chat_history = []
 
     return llm, tools_list, chat_history
