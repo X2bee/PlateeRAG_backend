@@ -19,6 +19,7 @@ from controller.huggingface.huggingfaceController import router as huggingfaceRo
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
+from controller.gaudiController import router as gaudiRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
@@ -241,6 +242,7 @@ app.include_router(trainRouter)
 app.include_router(interactionRouter)
 app.include_router(appRouter)
 app.include_router(vastRouter)
+app.include_router(gaudiRouter)
 app.include_router(huggingfaceRouter)
 
 if __name__ == "__main__":
