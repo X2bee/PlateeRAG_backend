@@ -292,12 +292,19 @@ class DBMemoryNode(Node):
                     conversation_text += "\n"
                 
                 logger.info(f"Generated conversation text ({len(conversation_text)} characters)")
-                logger.info(f"Conversation text preview:\n{conversation_text[:500]}{'...' if len(conversation_text) > 500 else ''}")
                 
+                # conversation_text가 비어있다면 간단한 방식으로 재시도
                 if not conversation_text.strip():
-                    logger.warning("Conversation text is empty! Falling back to simple summary")
+                    logger.warning("Conversation text is empty! Trying simple message concatenation")
+                    conversation_text = ""
+                    for i, msg in enumerate(meaningful_messages, 1):
+                        role = "사용자" if msg['role'] == "user" else "AI"
+                        conversation_text += f"[메시지 {i}] {role}: {msg['content']}\n\n"
+                
+                # 여전히 비어있다면 simple summary로 완전 fallback
+                if not conversation_text.strip():
+                    logger.warning("All conversation text generation failed! Using simple summary")
                     fallback_summary = self._simple_message_summary(meaningful_messages)
-                    logger.info(f"Fallback summary: {fallback_summary}")
                     return fallback_summary
                 
                 summary_prompt = f"""다음은 이전 대화 내용입니다. 현재 사용자의 질문과 관련된 핵심 내용만 간결하게 요약해주세요.
