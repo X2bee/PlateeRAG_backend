@@ -5,6 +5,7 @@ TTS API 라우터 및 컨트롤러 통합
 
 import logging
 from typing import Optional
+from fastapi.responses import JSONResponse
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ from service.tts.tts_factory import TTSFactory
 from controller.helper.singletonHelper import get_tts_service, get_config_composer
 import io
 from service.tts.tts_factory import TTSFactory
+from controller.admin.adminBaseController import validate_superuser
 
 logger = logging.getLogger("controller.tts")
 
@@ -225,8 +227,44 @@ async def get_provider_info(request: Request):
         logger.error("Error retrieving TTS info: %s", e)
         raise HTTPException(status_code=500, detail="Failed to retrieve TTS service information") from e
 
+@router.get("/simple-status")
+async def get_tts_simple_status(request: Request):
+    """
+    TTS 서비스 상태 확인
+
+    Returns:
+        TTS 서비스 상태 정보
+    """
+    try:
+        config_composer = get_config_composer(request)
+        tts_service = get_tts_service(request)
+        provider_info = tts_service.get_provider_info()
+        is_available = config_composer.get_config_by_name("IS_AVAILABLE_TTS").value
+
+        return JSONResponse(content={
+            "available": is_available,
+            "provider": provider_info.get("provider"),
+            "model": provider_info.get("model"),
+            "api_key_configured": provider_info.get("api_key_configured", False)
+        })
+
+    except Exception as e:
+        logger.error("Error getting TTS status: %s", e)
+        return JSONResponse(content={
+            "available": False,
+            "provider": None,
+            "model": None,
+            "error": str(e)
+        })
+
 @router.post("/refresh")
 async def refresh_tts_factory(request: Request):
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
     try:
         config_composer = get_config_composer(request)
         if config_composer.get_config_by_name("IS_AVAILABLE_TTS").value:

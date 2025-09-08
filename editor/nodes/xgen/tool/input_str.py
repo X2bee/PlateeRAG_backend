@@ -21,6 +21,7 @@ class InputStringNode(Node):
     ]
     parameters = [
         {"id": "input_str", "name": "INPUT", "type": "STR", "value": "", "required": False},
+        {"id": "use_stt", "name": "Use STT", "type": "BOOL", "value": False, "required": False, "optional": True},
     ]
 
     def execute(self, input_str: str, args_schema: Optional[BaseModel] = None, **kwargs) -> str:

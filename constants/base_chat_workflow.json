@@ -113,6 +113,14 @@
             "name": "String",
             "type": "STR",
             "value": ""
+          },
+          {
+            "id": "use_stt",
+            "name": "Use STT",
+            "type": "BOOL",
+            "value": true,
+            "required": false,
+            "optional": true
           }
         ]
       },
