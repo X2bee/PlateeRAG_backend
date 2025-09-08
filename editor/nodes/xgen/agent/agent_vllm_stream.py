@@ -2,7 +2,7 @@ import logging
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, Generator
 from editor.node_composer import Node
-from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
+from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt, prepare_optimized_chat_history
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
 from editor.utils.prefix_prompt import prefix_prompt
 from langchain.agents import create_tool_calling_agent
@@ -70,7 +70,7 @@ class AgentVLLMStreamNode(Node):
 
         try:
             default_prompt = prefix_prompt + default_prompt
-            llm, tools_list, chat_history = prepare_llm_components(tools, memory, model, temperature, max_tokens, base_url, streaming=True)
+            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages, streaming=True)
 
             additional_rag_context = ""
             if rag_context:
