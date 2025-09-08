@@ -24,7 +24,13 @@ class InputStringNode(Node):
         {"id": "use_stt", "name": "Use STT", "type": "BOOL", "value": False, "required": False, "optional": True},
     ]
 
-    def execute(self, input_str: str, args_schema: Optional[BaseModel] = None, **kwargs) -> str:
+    def execute(self, input_str: str, args_schema: Optional[BaseModel] = None, use_stt: bool = False, **kwargs) -> str:
+        #TODO STT 관련 Node 레벨에서 처리할 것이 있으면 구현.
+        if use_stt:
+            pass
+        else:
+            pass
+
         kwargs_result = {}
         if args_schema is not None:
             # args_schema에 정의된 필드명들 가져오기
