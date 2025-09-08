@@ -113,7 +113,17 @@ async def refresh_stt_factory(request: Request):
                 "message": "STT configuration refreshed successfully"
             }
         else:
-            request.app.state.stt_service = None
+            if hasattr(request.app.state, 'stt_service') and request.app.state.stt_service is not None:
+                try:
+                    await request.app.state.stt_service.cleanup()
+                except Exception as cleanup_e:
+                    logger.warning(f"Error during existing STT service cleanup: {cleanup_e}")
+
+                request.app.state.stt_service = None
+                import gc
+                gc.collect()
+            else:
+                request.app.state.stt_service = None
             return {
                 "message": "STT service is disabled in configuration"
             }

@@ -236,11 +236,20 @@ async def refresh_tts_factory(request: Request):
                 "message": "TTS configuration refreshed successfully"
             }
         else:
-            request.app.state.tts_service = None
+            if hasattr(request.app.state, 'tts_service') and request.app.state.tts_service is not None:
+                try:
+                    await request.app.state.tts_service.cleanup()
+                except Exception as cleanup_e:
+                    logger.warning(f"Error during existing TTS service cleanup: {cleanup_e}")
+
+                request.app.state.tts_service = None
+                import gc
+                gc.collect()
+            else:
+                request.app.state.tts_service = None
             return {
                 "message": "TTS service is disabled in configuration"
             }
-
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to refresh TTS config: {str(e)}")
