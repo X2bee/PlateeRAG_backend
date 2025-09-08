@@ -171,7 +171,10 @@ def prepare_optimized_chat_history(memory, current_input, n_messages, llm):
         historical_messages = _group_messages_into_pairs(full_chat_history)
         
         if not historical_messages:
+            logger.info("No grouped messages found, using original chat history")
             return full_chat_history[-n_messages:] if n_messages > 0 else []
+        
+        logger.info(f"Grouped {len(full_chat_history)} raw messages into {len(historical_messages)} processed messages")
         
         # DBMemoryNode 인스턴스 생성하여 최적화된 요약 생성
         db_memory_node = DBMemoryNode()

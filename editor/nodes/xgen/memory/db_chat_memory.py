@@ -240,20 +240,43 @@ class DBMemoryNode(Node):
         # agent에서 전달받은 LLM을 사용하여 요약
         if llm:
             try:
-                # 요약할 메시지들 구성
-                conversation_text = ""
+                # 요약할 메시지들 구성 (user-ai 쌍으로 그룹화)
+                conversation_pairs = []
+                current_pair = {}
+                
                 for msg in meaningful_messages:
-                    role = "사용자" if msg['role'] == "user" else "AI"
-                    conversation_text += f"{role}: {msg['content']}\n\n"
-                logger.info(f"Conversation text for summarization:\n{conversation_text}")
+                    if msg['role'] == "user":
+                        # 이전 쌍이 완성되었다면 저장
+                        if current_pair:
+                            conversation_pairs.append(current_pair)
+                        current_pair = {"user": msg['content'], "ai": ""}
+                    elif msg['role'] == "ai" and current_pair:
+                        current_pair["ai"] = msg['content']
+                
+                # 마지막 쌍 저장
+                if current_pair:
+                    conversation_pairs.append(current_pair)
+                
+                # 대화 쌍을 텍스트로 변환
+                conversation_text = ""
+                for i, pair in enumerate(conversation_pairs, 1):
+                    conversation_text += f"[대화 {i}]\n"
+                    conversation_text += f"사용자: {pair.get('user', '')}\n"
+                    if pair.get('ai'):
+                        conversation_text += f"AI: {pair['ai']}\n"
+                    conversation_text += "\n"
+                
+                logger.info(f"Grouped conversation pairs for summarization:\n{conversation_text}")
+                
                 summary_prompt = f"""다음은 이전 대화 내용입니다. 현재 사용자의 질문과 관련된 핵심 내용만 간결하게 요약해주세요.
 
 {conversation_text}
 
 요약 조건:
 1. 현재 질문과 관련된 중요한 정보만 포함
-2. 3-4문장으로 간결하게 작성
-3. 핵심 컨텍스트와 결론을 우선적으로 포함
+2. 각 대화 쌍의 핵심 내용을 간결하게 정리
+3. 3-4문장으로 전체를 요약
+4. 질문-답변의 맥락을 유지하면서 요약
 
 요약:"""
                 
