@@ -384,7 +384,7 @@ class AsyncWorkflowExecutor:
             "start_time": self._start_time.isoformat() if self._start_time else None,
             "end_time": self._end_time.isoformat() if self._end_time else None,
             "execution_time": execution_time,
-            "current_timezone": str(TIMEZONE)  # 디버깅을 위해 타임존 정보 추가
+            "current_timezone": str(TIMEZONE)
         }
 
     def _save_execution_io(self, input_data: Dict[str, Any], output_data: Dict[str, Any]) -> None:
