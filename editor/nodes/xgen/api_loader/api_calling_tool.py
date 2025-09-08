@@ -35,9 +35,69 @@ class APICallingTool(Node):
             {"value": "PATCH", "label": "PATCH"}
         ]},
         {"id": "timeout", "name": "Timeout (seconds)", "type": "INT", "value": 30, "min": 1, "max": 300},
+        {"id": "enable_response_filtering", "name": "Enable Response Filtering", "type": "BOOL", "value": False, "description": "JSON 응답에서 특정 데이터만 추출하여 반환할지 여부를 설정합니다."},
+        {"id": "response_filter_path", "name": "Response Filter Path", "type": "STR", "value": "", "description": "JSON 응답에서 추출할 데이터의 경로를 설정합니다. (예: 'payload.searchDataList')"},
+        {"id": "response_filter_fields", "name": "Response Filter Fields", "type": "STR", "value": "", "description": "각 객체에서 추출할 필드들을 콤마로 구분하여 입력합니다. (예: 'goodsNm,salePrc')"},
     ]
 
-    def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30, args_schema: BaseModel=None, *args, **kwargs):
+    @staticmethod
+    def get_nested_value(data, path):
+        """JSON 경로를 따라가서 중첩된 값을 추출합니다."""
+        if not path:
+            return data
+        
+        keys = path.split('.')
+        current = data
+        
+        try:
+            for key in keys:
+                if isinstance(current, dict):
+                    current = current[key]
+                else:
+                    return None
+            return current
+        except (KeyError, TypeError):
+            return None
+
+    @staticmethod
+    def filter_response_data(response_data, filter_path, filter_fields):
+        """응답 데이터에서 지정된 경로와 필드만 추출합니다."""
+        if not filter_path or not filter_fields:
+            return response_data
+        
+        # 필터 경로로 데이터 추출
+        extracted_data = APICallingTool.get_nested_value(response_data, filter_path)
+        if extracted_data is None:
+            logger.warning(f"Filter path '{filter_path}' not found in response")
+            return response_data
+        
+        # 필터 필드 파싱 (콤마로 구분)
+        fields = [field.strip() for field in filter_fields.split(',') if field.strip()]
+        if not fields:
+            return extracted_data
+        
+        # 배열인 경우 각 객체에서 지정된 필드만 추출
+        if isinstance(extracted_data, list):
+            filtered_list = []
+            for item in extracted_data:
+                if isinstance(item, dict):
+                    filtered_item = {field: item.get(field) for field in fields if field in item}
+                    filtered_list.append(filtered_item)
+                else:
+                    # 객체가 아닌 경우 그대로 추가
+                    filtered_list.append(item)
+            return filtered_list
+        
+        # 단일 객체인 경우
+        elif isinstance(extracted_data, dict):
+            return {field: extracted_data.get(field) for field in fields if field in extracted_data}
+        
+        # 배열도 객체도 아닌 경우 그대로 반환
+        return extracted_data
+
+    def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30, 
+                enable_response_filtering=False, response_filter_path="", response_filter_fields="",
+                args_schema: BaseModel=None, *args, **kwargs):
         description = description + "\n명시적인 요청이 없다면, return_dict를 False로 하여 STR 형태의 응답을 받으려고 시도하십시오."
         additional_params = kwargs.get("additional_params", {})
         def create_api_tool():
@@ -114,6 +174,16 @@ class APICallingTool(Node):
                         try:
                             result = response.json()
                             logger.info(f"API call successful: {result}")
+                            
+                            # 응답 필터링 적용
+                            if enable_response_filtering and response_filter_path:
+                                logger.info(f"Applying response filtering with path: {response_filter_path}, fields: {response_filter_fields}")
+                                filtered_result = APICallingTool.filter_response_data(
+                                    result, response_filter_path, response_filter_fields
+                                )
+                                logger.info(f"Filtered result: {filtered_result}")
+                                result = filtered_result
+                            
                             if return_dict:
                                 return result
                             else:
