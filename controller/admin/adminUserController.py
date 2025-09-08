@@ -15,7 +15,7 @@ from service.database.models.workflow import WorkflowMeta
 from service.database.models.performance import WorkflowExecution, NodePerformance
 from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
 
-logger = logging.getLogger("admin-controller")
+logger = logging.getLogger("admin-user-controller")
 router = APIRouter(prefix="/user", tags=["Admin"])
 
 @router.post("/superuser-login", response_model=LoginResponse)
