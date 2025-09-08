@@ -309,7 +309,7 @@ class DBMemoryNode(Node):
                     fallback_summary = self._simple_message_summary(meaningful_messages)
                     return fallback_summary
                 
-                summary_prompt = f"""다음은 이전 대화 내용입니다. 현재 사용자의 질문에 답변하기 위해 필요한 핵심 내용을 중심으로 요약해주세요.
+                summary_prompt = f"""/no_think 다음은 이전 대화 내용입니다. 현재 사용자의 질문에 답변하기 위해 필요한 핵심 내용을 중심으로 요약해주세요.
 
 {conversation_text}
 
