@@ -251,15 +251,12 @@ class DBMemoryNode(Node):
                 current_pair = {}
                 
                 for msg in meaningful_messages:
-                    logger.debug(f"Processing message: role={msg['role']}, content length={len(msg['content'])}")
-                    
                     if msg['role'] == "user":
                         # 이전 쌍이 완성되었다면 저장
                         if current_pair:
                             logger.debug(f"Completing previous pair: {current_pair}")
                             conversation_pairs.append(current_pair)
                         current_pair = {"user": msg['content'], "ai": ""}
-                        logger.debug(f"Started new pair with user message")
                         
                     elif msg['role'] == "ai":
                         if current_pair:  # current_pair 체크 제거하여 AI 메시지만 있어도 처리
@@ -268,7 +265,6 @@ class DBMemoryNode(Node):
                         else:
                             # AI 메시지만 있는 경우 새로운 쌍 시작
                             current_pair = {"user": "", "ai": msg['content']}
-                            logger.debug(f"Started new pair with AI message only")
                 
                 # 마지막 쌍 저장
                 if current_pair:
