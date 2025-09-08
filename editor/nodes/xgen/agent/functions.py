@@ -90,6 +90,68 @@ def prepare_llm_components(tools, memory, model, temperature, max_tokens, base_u
 
     return llm, tools_list, chat_history
 
+def _group_messages_into_pairs(chat_history):
+    """연속된 메시지들을 user-ai 쌍으로 그룹핑"""
+    if not chat_history:
+        return []
+    
+    grouped_messages = []
+    current_user_messages = []
+    current_ai_messages = []
+    
+    for msg in chat_history:
+        if not hasattr(msg, 'type') or not hasattr(msg, 'content'):
+            continue
+            
+        msg_type = msg.type
+        content = msg.content.strip()
+        
+        if not content:
+            continue
+            
+        if msg_type == "human":  # 사용자 메시지
+            # AI 메시지가 쌓여있다면 이전 쌍을 완성
+            if current_ai_messages:
+                if current_user_messages:  # 이전 사용자 메시지가 있었다면
+                    user_content = " ".join(current_user_messages)
+                    ai_content = " ".join(current_ai_messages)
+                    grouped_messages.append({
+                        'role': 'user',
+                        'content': user_content
+                    })
+                    grouped_messages.append({
+                        'role': 'ai', 
+                        'content': ai_content
+                    })
+                    current_user_messages = []
+                    current_ai_messages = []
+            
+            current_user_messages.append(content)
+            
+        elif msg_type == "ai":  # AI 메시지
+            current_ai_messages.append(content)
+    
+    # 마지막 메시지들 처리
+    if current_user_messages and current_ai_messages:
+        user_content = " ".join(current_user_messages)
+        ai_content = " ".join(current_ai_messages)
+        grouped_messages.append({
+            'role': 'user',
+            'content': user_content
+        })
+        grouped_messages.append({
+            'role': 'ai',
+            'content': ai_content
+        })
+    elif current_user_messages:  # AI 답변이 없는 사용자 메시지만 있는 경우
+        user_content = " ".join(current_user_messages)
+        grouped_messages.append({
+            'role': 'user',
+            'content': user_content
+        })
+    
+    return grouped_messages
+
 def prepare_optimized_chat_history(memory, current_input, n_messages, llm):
     """최적화된 chat_history 생성 - 기존 inputs 구조와 호환"""
     if not memory:
@@ -106,7 +168,7 @@ def prepare_optimized_chat_history(memory, current_input, n_messages, llm):
             return []
         
         # 메시지를 user-ai 쌍으로 그룹핑
-        historical_messages = self._group_messages_into_pairs(full_chat_history)
+        historical_messages = _group_messages_into_pairs(full_chat_history)
         
         if not historical_messages:
             return full_chat_history[-n_messages:] if n_messages > 0 else []
