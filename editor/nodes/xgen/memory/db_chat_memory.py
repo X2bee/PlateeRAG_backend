@@ -240,33 +240,65 @@ class DBMemoryNode(Node):
         # agent에서 전달받은 LLM을 사용하여 요약
         if llm:
             try:
+                # 디버깅: meaningful_messages 내용 확인
+                logger.info(f"Processing {len(meaningful_messages)} meaningful messages for conversation pairing:")
+                for i, msg in enumerate(meaningful_messages):
+                    content_preview = msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
+                    logger.info(f"  Message {i+1}: role={msg['role']}, content='{content_preview}'")
+                
                 # 요약할 메시지들 구성 (user-ai 쌍으로 그룹화)
                 conversation_pairs = []
                 current_pair = {}
                 
                 for msg in meaningful_messages:
+                    logger.debug(f"Processing message: role={msg['role']}, content length={len(msg['content'])}")
+                    
                     if msg['role'] == "user":
                         # 이전 쌍이 완성되었다면 저장
                         if current_pair:
+                            logger.debug(f"Completing previous pair: {current_pair}")
                             conversation_pairs.append(current_pair)
                         current_pair = {"user": msg['content'], "ai": ""}
-                    elif msg['role'] == "ai" and current_pair:
-                        current_pair["ai"] = msg['content']
+                        logger.debug(f"Started new pair with user message")
+                        
+                    elif msg['role'] == "ai":
+                        if current_pair:  # current_pair 체크 제거하여 AI 메시지만 있어도 처리
+                            current_pair["ai"] = msg['content']
+                            logger.debug(f"Added AI response to current pair")
+                        else:
+                            # AI 메시지만 있는 경우 새로운 쌍 시작
+                            current_pair = {"user": "", "ai": msg['content']}
+                            logger.debug(f"Started new pair with AI message only")
                 
                 # 마지막 쌍 저장
                 if current_pair:
+                    logger.debug(f"Saving final pair: {current_pair}")
                     conversation_pairs.append(current_pair)
+                
+                logger.info(f"Created {len(conversation_pairs)} conversation pairs")
                 
                 # 대화 쌍을 텍스트로 변환
                 conversation_text = ""
                 for i, pair in enumerate(conversation_pairs, 1):
                     conversation_text += f"[대화 {i}]\n"
-                    conversation_text += f"사용자: {pair.get('user', '')}\n"
-                    if pair.get('ai'):
-                        conversation_text += f"AI: {pair['ai']}\n"
+                    
+                    user_content = pair.get('user', '').strip()
+                    ai_content = pair.get('ai', '').strip()
+                    
+                    if user_content:
+                        conversation_text += f"사용자: {user_content}\n"
+                    if ai_content:
+                        conversation_text += f"AI: {ai_content}\n"
                     conversation_text += "\n"
                 
-                logger.info(f"Grouped conversation pairs for summarization:\n{conversation_text}")
+                logger.info(f"Generated conversation text ({len(conversation_text)} characters)")
+                logger.info(f"Conversation text preview:\n{conversation_text[:500]}{'...' if len(conversation_text) > 500 else ''}")
+                
+                if not conversation_text.strip():
+                    logger.warning("Conversation text is empty! Falling back to simple summary")
+                    fallback_summary = self._simple_message_summary(meaningful_messages)
+                    logger.info(f"Fallback summary: {fallback_summary}")
+                    return fallback_summary
                 
                 summary_prompt = f"""다음은 이전 대화 내용입니다. 현재 사용자의 질문과 관련된 핵심 내용만 간결하게 요약해주세요.
 
