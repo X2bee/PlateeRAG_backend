@@ -223,7 +223,19 @@ class DBMemoryNode(Node):
         meaningful_messages = [msg for msg in top_relevant_messages if msg['relevance_score'] > 0]
         
         if not meaningful_messages:
+            logger.info("No relevant messages found for current input")
             return ""
+        
+        # 선택된 메시지들에 대한 상세 로그
+        for i, msg in enumerate(meaningful_messages, 1):
+            role = msg['role']
+            content = msg['content']
+            score = msg['relevance_score']
+            # 긴 메시지는 앞부분만 로그에 출력
+            content_preview = content[:100] + "..." if len(content) > 100 else content
+            logger.info(f"  [{i}] {role} (score: {score:.4f}): {content_preview}")
+        
+        logger.info(f"Current input for comparison: {current_input}")
         
         # agent에서 전달받은 LLM을 사용하여 요약
         if llm:
@@ -248,14 +260,18 @@ class DBMemoryNode(Node):
                 response = llm.invoke(summary_prompt)
                 summary = response.content.strip()
                 
+                logger.info(f"Generated summary: {summary}")
                 return summary
                 
             except Exception as e:
                 logger.warning(f"LLM summarization failed: {e}. Using simple concatenation.")
-                return self._simple_message_summary(meaningful_messages)
+                fallback_summary = self._simple_message_summary(meaningful_messages)
+                return fallback_summary
         else:
             # LLM이 전달되지 않은 경우 간단한 요약 사용
-            return self._simple_message_summary(meaningful_messages)
+            logger.info("No LLM provided, using simple message summary")
+            simple_summary = self._simple_message_summary(meaningful_messages)
+            return simple_summary
 
     def load_memory_from_db(self, db_messages: List[Dict[str, str]]):
         """
