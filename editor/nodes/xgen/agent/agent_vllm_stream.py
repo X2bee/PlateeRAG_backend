@@ -2,7 +2,7 @@ import logging
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, Generator
 from editor.node_composer import Node
-from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
+from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt, prepare_optimized_chat_history
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
 from editor.utils.prefix_prompt import prefix_prompt
 from langchain.agents import create_tool_calling_agent
@@ -71,6 +71,16 @@ class AgentVLLMStreamNode(Node):
         try:
             default_prompt = prefix_prompt + default_prompt
             llm, tools_list, chat_history = prepare_llm_components(tools, memory, model, temperature, max_tokens, base_url, streaming=True)
+
+            # 메모리가 연결되었을 때만 최적화된 chat_history 사용
+            if memory:
+                try:
+                    optimized_chat_history = prepare_optimized_chat_history(memory, text, n_messages, llm)
+                    chat_history = optimized_chat_history
+                    logger.info(f"Using optimized multiturn memory with {len(chat_history)} messages")
+                except Exception as e:
+                    logger.warning(f"Failed to use optimized memory, using standard: {e}")
+                    # chat_history는 이미 prepare_llm_components에서 설정됨
 
             additional_rag_context = ""
             if rag_context:
