@@ -19,6 +19,8 @@ from controller.huggingface.huggingfaceController import router as huggingfaceRo
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
+from controller.sttController import router as sttRouter
+from controller.ttsController import router as ttsRouter
 from controller.gaudiController import router as gaudiRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
@@ -27,6 +29,8 @@ from service.database.models import APPLICATION_MODELS
 
 from service.database import AppDatabaseManager
 from service.embedding.embedding_factory import EmbeddingFactory
+from service.stt.stt_factory import STTFactory
+from service.tts.tts_factory import TTSFactory
 from service.vast.vast_service import VastService
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
@@ -130,20 +134,44 @@ async def lifespan(app: FastAPI):
             app.state.embedding_client = None
             app.state.document_processor = None
 
-        # 5. vast_service Instance 생성
-        print_step_banner(5, "VAST SERVICE SETUP", "Initializing cloud compute management")
-        logger.info("⚙️  Step 5: VAST service initialization starting...")
+        # 5. STT 서비스 초기화
+        print_step_banner(5, "STT SERVICE SETUP", "Setting up Speech-to-Text services")
+        try:
+            logger.info("⚙️  Step 5: STT service initialization starting...")
+            stt_client = STTFactory.create_stt_client(config_composer)
+            app.state.stt_service = stt_client
+            logger.info("✅ Step 5: STT service initialized successfully!")
+        except Exception as e:
+            logger.error(f"❌ Step 5: Failed to initialize STT service: {e}")
+            # STT 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
+            app.state.stt_service = None
+
+        # 5.5. TTS 서비스 초기화
+        print_step_banner(5.5, "TTS SERVICE SETUP", "Setting up Text-to-Speech services")
+        try:
+            logger.info("⚙️  Step 5.5: TTS service initialization starting...")
+            tts_client = TTSFactory.create_tts_client(config_composer)
+            app.state.tts_service = tts_client
+            logger.info("✅ Step 5.5: TTS service initialized successfully!")
+        except Exception as e:
+            logger.error(f"❌ Step 5.5: Failed to initialize TTS service: {e}")
+            # TTS 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
+            app.state.tts_service = None
+
+        # 6. vast_service Instance 생성
+        print_step_banner(6, "VAST SERVICE SETUP", "Initializing cloud compute management")
+        logger.info("⚙️  Step 6: VAST service initialization starting...")
         app.state.vast_service = VastService(app_db, config_composer)
-        logger.info("✅ Step 5: VAST service initialized successfully!")
+        logger.info("✅ Step 6: VAST service initialized successfully!")
 
-        # 6. 워크플로우 실행 매니저 초기화
-        print_step_banner(6, "WORKFLOW MANAGER SETUP", "Setting up workflow execution engine")
-        logger.info("⚙️  Step 6: Workflow execution manager initialization starting...")
+        # 7. 워크플로우 실행 매니저 초기화
+        print_step_banner(7, "WORKFLOW MANAGER SETUP", "Setting up workflow execution engine")
+        logger.info("⚙️  Step 7: Workflow execution manager initialization starting...")
         app.state.execution_manager = execution_manager
-        logger.info("✅ Step 6: Workflow execution manager initialized successfully!")
+        logger.info("✅ Step 7: Workflow execution manager initialized successfully!")
 
-        print_step_banner(7, "SYSTEM VALIDATION", "Validating configurations and directories")
-        logger.info("⚙️  Step 7: System validation starting...")
+        print_step_banner(8, "SYSTEM VALIDATION", "Validating configurations and directories")
+        logger.info("⚙️  Step 8: System validation starting...")
 
         config_composer.ensure_directories()
         validation_result = config_composer.validate_critical_configs()
@@ -152,11 +180,11 @@ async def lifespan(app: FastAPI):
                 logger.error(f"❌ Configuration error: {error}")
         for warning in validation_result["warnings"]:
             logger.warning(f"⚠️  Configuration warning: {warning}")
-        logger.info("✅ Step 7: System validation completed!")
+        logger.info("✅ Step 8: System validation completed!")
 
 
-        print_step_banner(8, "NODE DISCOVERY", "Discovering and registering XGEN nodes")
-        logger.info("⚙️  Step 8: Node discovery starting...")
+        print_step_banner(9, "NODE DISCOVERY", "Discovering and registering XGEN nodes")
+        logger.info("⚙️  Step 9: Node discovery starting...")
 
         run_discovery()
         registry_path = configs["node"].REGISTRY_FILE_PATH.value
@@ -169,7 +197,7 @@ async def lifespan(app: FastAPI):
         register_node_api_routes()
         logger.info("✅ Node API routes registered successfully!")
 
-        logger.info(f"✅ Step 8: Node discovery completed! Registered {app.state.node_count} nodes")
+        logger.info(f"✅ Step 9: Node discovery completed! Registered {app.state.node_count} nodes")
 
 
         print_step_banner("FINAL", "XGEN STARTUP COMPLETE", "All systems operational! 🎉")
@@ -194,6 +222,18 @@ async def lifespan(app: FastAPI):
             logger.info("🔄 Shutting down workflow execution manager...")
             app.state.execution_manager.shutdown()
             logger.info("✅ Workflow execution manager shutdown complete")
+
+        # STT 서비스 정리
+        if hasattr(app.state, 'stt_service') and app.state.stt_service:
+            logger.info("🔄 Cleaning up STT service...")
+            await app.state.stt_service.cleanup()
+            logger.info("✅ STT service cleanup complete")
+
+        # TTS 서비스 정리
+        if hasattr(app.state, 'tts_service') and app.state.tts_service:
+            logger.info("🔄 Cleaning up TTS service...")
+            await app.state.tts_service.cleanup()
+            logger.info("✅ TTS service cleanup complete")
 
         # 애플리케이션 데이터베이스 정리
         if hasattr(app.state, 'app_db') and app.state.app_db:
@@ -244,6 +284,8 @@ app.include_router(appRouter)
 app.include_router(vastRouter)
 app.include_router(gaudiRouter)
 app.include_router(huggingfaceRouter)
+app.include_router(sttRouter)
+app.include_router(ttsRouter)
 
 if __name__ == "__main__":
     try:

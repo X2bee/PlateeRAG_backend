@@ -151,7 +151,6 @@ class DBMemoryNode(Node):
                 # 빈 메모리 객체 반환
                 return self.load_memory_from_db([])
 
-            # ConversationBufferMemory 객체 생성
             memory = self.load_memory_from_db(db_messages)
 
             if memory is None:

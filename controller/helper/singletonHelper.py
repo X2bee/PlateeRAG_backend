@@ -7,6 +7,7 @@ from service.retrieval.document_processor.document_processor import DocumentProc
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 from service.retrieval.rag_service import RAGService
 from service.database.performance_controller_helper import PerformanceControllerHelper
+from service.stt.huggingface_stt import HuggingFaceSTT
 
 
 def get_db_manager(request: Request) -> AppDatabaseManager:
@@ -58,6 +59,20 @@ def get_vast_service(request: Request) -> VastService:
         return request.app.state.vast_service
     else:
         raise HTTPException(status_code=500, detail="VAST service not available")
+
+def get_stt_service(request: Request) -> HuggingFaceSTT:
+    """STT 서비스 의존성 주입"""
+    if hasattr(request.app.state, 'stt_service') and request.app.state.stt_service:
+        return request.app.state.stt_service
+    else:
+        raise HTTPException(status_code=500, detail="STT service not available")
+
+def get_tts_service(request: Request):
+    """TTS 서비스 의존성 주입"""
+    if hasattr(request.app.state, 'tts_service') and request.app.state.tts_service:
+        return request.app.state.tts_service
+    else:
+        raise HTTPException(status_code=500, detail="TTS service not available")
 
 def get_performance_controller(request: Request) -> PerformanceControllerHelper:
     app_db = get_db_manager(request)

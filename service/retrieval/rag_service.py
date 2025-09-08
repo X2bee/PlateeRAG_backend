@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 from fastapi import HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-from service.database.models.vectordb import VectorDBChunkEdge, VectorDBChunkMeta
+from service.database.models.vectordb import VectorDB, VectorDBChunkEdge, VectorDBChunkMeta
 
 logger = logging.getLogger("rag-service")
 
@@ -410,6 +410,7 @@ class RAGService:
                     topics=safe_list_to_string(payload.get("topics")),
                     entities=safe_list_to_string(payload.get("entities")),
                     sentiment=payload.get("sentiment"),
+                    document_id=document_id,
                     document_type=payload.get("document_type"),
                     language=payload.get("language"),
                     complexity_level=payload.get("complexity_level"),
@@ -468,6 +469,11 @@ class RAGService:
                         source=point['id'],
                         relation_type="main_concept"
                     ))
+
+            vector_db_collection_meta = app_db.find_by_condition(VectorDB, {'collection_name': collection_name})[0]
+            if vector_db_collection_meta.init_embedding_model == None:
+                vector_db_collection_meta.init_embedding_model = embedding_model_name
+                app_db.update(vector_db_collection_meta)
 
             llm_enabled = use_llm_metadata and await self.metadata_generator.is_enabled()
             logger.info(f"use_llm_metadata: {use_llm_metadata}, LLM metadata enabled: {await self.metadata_generator.is_enabled()}")
@@ -829,7 +835,6 @@ class RAGService:
             if not points:
                 raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found")
 
-            # 문서 기본 정보 추출
             first_point = points[0]
             payload = first_point.payload
 
@@ -924,11 +929,8 @@ class RAGService:
                 raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found")
 
             point_ids = [str(point.id) for point in points]
-
             operation_info = self.vector_manager.delete_points(collection_name, point_ids)
-
             self.vector_manager.update_collection_document_count(collection_name, -1)
-
             logger.info(f"Deleted document '{document_id}' from collection '{collection_name}': {len(point_ids)} chunks removed")
 
             return {
@@ -972,3 +974,266 @@ class RAGService:
                 "error": str(e),
                 "available": False
             }
+
+    async def remake_collection(self, user_id: int, app_db, collection_name: str, new_embedding_model: str = None) -> Dict[str, Any]:
+        """기존 컬렉션을 새로운 임베딩 모델로 재생성
+
+        기존 컬렉션의 모든 문서를 보존하면서 새로운 임베딩 차원으로 컬렉션을 재생성합니다.
+
+        Args:
+            user_id: 사용자 ID
+            app_db: 데이터베이스 매니저
+            collection_name: 재생성할 컬렉션 이름
+            new_embedding_model: 새로운 임베딩 모델명 (None이면 현재 설정 사용)
+
+        Returns:
+            리메이크 결과 정보
+
+        Raises:
+            HTTPException: 리메이크 실패
+        """
+        if not self.vector_manager.is_connected():
+            raise HTTPException(status_code=500, detail="Vector database not connected")
+
+        new_collection_name = None
+
+        try:
+            # 1. 기존 컬렉션 정보 조회
+            logger.info(f"Starting remake for collection '{collection_name}'")
+
+            # 데이터베이스에서 컬렉션 메타데이터 조회
+            vector_db_meta = app_db.find_by_condition(VectorDB, {
+                'user_id': user_id,
+                'collection_name': collection_name
+            })
+
+            if not vector_db_meta:
+                raise HTTPException(status_code=404, detail="Collection not found or not owned by user")
+
+            vector_db_meta = vector_db_meta[0]
+
+            # Qdrant에서 컬렉션 정보 확인
+            try:
+                collection_info = self.vector_manager.get_collection_info(collection_name)
+            except Exception as e:
+                raise HTTPException(status_code=404, detail=f"Collection not found in vector database: {e}")
+
+            # 2. 기존 컬렉션의 모든 문서 청크 메타데이터 조회
+            chunk_metas = app_db.find_by_condition(VectorDBChunkMeta, {
+                'user_id': user_id,
+                'collection_name': collection_name
+            }, limit=10000, return_list=True)
+
+            if not chunk_metas:
+                logger.warning(f"No document chunks found in collection '{collection_name}'")
+
+            # 3. 기존 컬렉션의 모든 실제 데이터 포인트 조회 (메타데이터 포인트 제외)
+            logger.info(f"Retrieving all document chunks from collection '{collection_name}'")
+
+            # 메타데이터 포인트 제외 필터
+            search_filter = Filter(
+                must_not=[
+                    FieldCondition(
+                        key="type",
+                        match=MatchValue(value="collection_metadata")
+                    )
+                ]
+            )
+
+            all_points = []
+            offset = None
+
+            while True:
+                response = self.vector_manager.client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=search_filter,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False  # 벡터는 나중에 새로 생성
+                )
+
+                if not response[0]:
+                    break
+
+                all_points.extend(response[0])
+                offset = response[1]
+
+                if offset is None:
+                    break
+
+            logger.info(f"Retrieved {len(all_points)} document chunks from collection")
+
+            # 4. 새로운 임베딩 설정 확인
+            provider_info = self.embeddings_client.get_provider_info()
+            embedding_provider = provider_info.get("provider", "unknown")
+            if embedding_provider == 'openai':
+                new_embedding_model = self.config_composer.get_config_by_name('OPENAI_EMBEDDING_MODEL_NAME').value
+            elif embedding_provider == 'huggingface':
+                new_embedding_model = self.config_composer.get_config_by_name('HUGGINGFACE_EMBEDDING_MODEL_NAME').value
+            elif embedding_provider == 'custom_http':
+                new_embedding_model = self.config_composer.get_config_by_name('CUSTOM_EMBEDDING_MODEL_NAME').value
+            else:
+                new_embedding_model = provider_info.get("model_name", "unknown")
+
+            logger.info(f"New embedding model: {new_embedding_model}")
+
+            # 5. 새로운 컬렉션 이름 생성 및 차원 감지
+            new_collection_name = f"{vector_db_meta.collection_make_name}_{uuid.uuid4().hex}"
+            logger.info(f"Creating new collection '{new_collection_name}'")
+
+            # 새로운 임베딩 차원 감지
+            try:
+                sample_text = "sample text for dimension detection"
+                sample_embedding = await self.generate_embeddings([sample_text])
+                current_vector_size = len(sample_embedding[0])
+                logger.info(f"Detected new vector dimension: {current_vector_size}")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to detect new embedding dimension: {e}")
+
+            # 기존 distance metric 가져오기
+            old_distance = collection_info.get("config", {}).get("distance", "Cosine")
+            # Qdrant의 대소문자 형식을 VectorManager 형식으로 변환
+            distance_mapping = {
+                "COSINE": "Cosine",
+                "EUCLID": "Euclid",
+                "DOT": "Dot"
+            }
+            distance_metric = distance_mapping.get(old_distance.upper(), "Cosine")
+
+            # 새로운 컬렉션 생성
+            self.vector_manager.create_collection(
+                collection_name=new_collection_name,
+                vector_size=current_vector_size,
+                distance=distance_metric
+            )
+
+            # 6. 모든 문서 청크를 새로운 임베딩으로 다시 생성하여 새 컬렉션에 저장
+            logger.info("Re-embedding all document chunks with new model")
+
+            from qdrant_client.models import PointStruct
+
+            batch_size = 50
+            total_processed = 0
+
+            for i in range(0, len(all_points), batch_size):
+                batch_points = all_points[i:i + batch_size]
+                batch_texts = [point.payload.get('chunk_text', '') for point in batch_points]
+
+                # 새 임베딩 생성
+                try:
+                    new_embeddings = await self.generate_embeddings(batch_texts)
+                except Exception as e:
+                    logger.error(f"Failed to generate embeddings for batch {i//batch_size + 1}: {e}")
+                    # 새 컬렉션 정리
+                    try:
+                        self.vector_manager.delete_collection(new_collection_name)
+                    except:
+                        pass
+                    raise HTTPException(status_code=500, detail=f"Failed to generate new embeddings: {e}")
+
+                # 새로운 포인트 생성 (딕셔너리 형태로)
+                new_points = []
+                for j, point in enumerate(batch_points):
+                    new_point = {
+                        "id": point.id,
+                        "vector": new_embeddings[j],
+                        "payload": point.payload
+                    }
+                    new_points.append(new_point)
+
+                # 새 컬렉션에 삽입
+                try:
+                    self.vector_manager.insert_points(new_collection_name, new_points)
+                    total_processed += len(new_points)
+
+                    if (i // batch_size + 1) % 10 == 0:
+                        logger.info(f"Processed {total_processed}/{len(all_points)} chunks")
+                except Exception as e:
+                    logger.error(f"Failed to insert batch {i//batch_size + 1} into new collection: {e}")
+                    # 새 컬렉션 정리
+                    try:
+                        self.vector_manager.delete_collection(new_collection_name)
+                    except:
+                        pass
+                    raise HTTPException(status_code=500, detail=f"Failed to insert points into new collection: {e}")
+
+            logger.info(f"Successfully re-embedded all {total_processed} chunks")
+
+            # 7. 원본 컬렉션 삭제 (새 컬렉션 생성이 성공한 후)
+            logger.info(f"Deleting original collection '{collection_name}'")
+            try:
+                self.vector_manager.delete_collection(collection_name)
+            except Exception as e:
+                logger.error(f"Failed to delete original collection: {e}")
+                # 원본 삭제 실패 시 새 컬렉션 유지하고 경고만 출력
+                logger.warning(f"Original collection '{collection_name}' could not be deleted, but new collection '{new_collection_name}' is ready")
+
+            final_collection_name = new_collection_name
+
+            # 8. 데이터베이스 메타데이터 업데이트
+            logger.info("Updating database metadata")
+
+            # VectorDB 메타데이터 업데이트
+            vector_db_meta.collection_name = final_collection_name
+            vector_db_meta.vector_size = current_vector_size
+            vector_db_meta.init_embedding_model = new_embedding_model
+            vector_db_meta.updated_at = datetime.now(TIMEZONE)
+            app_db.update(vector_db_meta)
+
+            # VectorDBChunkMeta 업데이트 (update_list_columns 사용)
+            embedding_provider = provider_info.get("provider", "unknown")
+            embedding_dimension = provider_info.get("dimension", current_vector_size)
+
+            # 청크 메타데이터 업데이트
+            updates = {
+                'collection_name': final_collection_name,
+                'embedding_provider': embedding_provider,
+                'embedding_model_name': new_embedding_model,
+                'embedding_dimension': embedding_dimension
+            }
+            conditions = {
+                'user_id': user_id,
+                'collection_name': collection_name  # 원본 컬렉션 이름으로 조건 설정
+            }
+
+            app_db.update_list_columns(VectorDBChunkMeta, updates, conditions)
+
+            # VectorDBChunkEdge도 업데이트 (존재하는 경우)
+            edge_updates = {
+                'collection_name': final_collection_name
+            }
+            app_db.update_list_columns(VectorDBChunkEdge, edge_updates, conditions)
+
+            # 9. 처리된 고유 문서 수 계산
+            unique_document_ids = set()
+            for point in all_points:
+                if 'document_id' in point.payload:
+                    unique_document_ids.add(point.payload['document_id'])
+
+            logger.info(f"Collection '{collection_name}' remade successfully as '{final_collection_name}'")
+
+            return {
+                "message": f"Collection remade successfully",
+                "old_collection_name": collection_name,
+                "new_collection_name": final_collection_name,
+                "chunks_processed": total_processed,
+                "documents_count": len(unique_document_ids),
+                "old_vector_size": collection_info.get("config", {}).get("vector_size", "unknown"),
+                "new_vector_size": current_vector_size,
+                "old_embedding_model": vector_db_meta.init_embedding_model or "unknown",
+                "new_embedding_model": new_embedding_model,
+                "remake_timestamp": datetime.now(TIMEZONE).isoformat()
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to remake collection '{collection_name}': {e}")
+            # 에러 발생 시 새 컬렉션 정리
+            if new_collection_name:
+                try:
+                    self.vector_manager.delete_collection(new_collection_name)
+                except:
+                    pass
+            raise HTTPException(status_code=500, detail=f"Failed to remake collection: {str(e)}")

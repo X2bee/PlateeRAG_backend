@@ -58,49 +58,12 @@ class HuggingFaceEmbedding(BaseEmbedding):
                 logger.info(f"Model dimension: {self._dimension}")
 
             except Exception as model_error:
-                logger.warning(f"Failed to load model {self.model_name}: {model_error}")
-
-                # 대체 모델 시도
-                fallback_models = [
-                    "Qwen/Qwen3-Embedding-0.6B",
-                    "sentence-transformers/all-MiniLM-L6-v2",
-                    "sentence-transformers/paraphrase-MiniLM-L6-v2",
-                    "sentence-transformers/all-mpnet-base-v2",
-                    "BAAI/bge-small-en-v1.5",
-                    "BAAI/bge-base-en-v1.5"
-                ]
-
-                for fallback_model in fallback_models:
-                    if fallback_model != self.model_name:
-                        try:
-                            is_gpu_device = (
-                                self.model_device == 'gpu' or
-                                self.model_device == 'cuda'
-                            )
-                            logger.info(f"Using device: {self.model_device} (GPU: {is_gpu_device})")
-                            device = 'cuda' if is_gpu_device else 'cpu'
-                            logger.info(f"Model loaded on ==={device}=== device")
-                            logger.info(f"Trying fallback model: {fallback_model}")
-                            self.model = SentenceTransformer(fallback_model, device=device)
-                            self.model_name = fallback_model  # 성공한 모델명으로 업데이트
-
-                            # 차원 수 확인
-                            test_embedding = self.model.encode(["test"], convert_to_numpy=True, show_progress_bar=False)
-                            self._dimension = test_embedding.shape[1]
-
-                            logger.info(f"Fallback model loaded successfully: {fallback_model}, dimension: {self._dimension}")
-                            return
-
-                        except Exception as fallback_error:
-                            logger.warning(f"Fallback model {fallback_model} also failed: {fallback_error}")
-                            continue
-
-                # 모든 모델이 실패한 경우
-                raise Exception(f"All HuggingFace models failed to load")
+                logger.error("Failed to load model %s: %s", self.model_name, model_error)
+                raise Exception("All HuggingFace models failed to load")
 
         except ImportError as import_error:
             logger.error("sentence_transformers package not installed. Run: pip install sentence-transformers")
-            logger.error(f"Import error details: {import_error}")
+            logger.error("Import error details: %s", import_error)
             self.model = None
         except Exception as e:
             logger.error(f"Failed to initialize any HuggingFace model: {e}")
