@@ -62,7 +62,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
         workflow_data = workflow_request.content.dict()
-        
+
         if not os.path.exists(download_path_id):
             os.makedirs(download_path_id)
 
@@ -215,7 +215,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
         copy_workflow_name = f"{workflow_name}_copy"
         copy_file_name = f"{copy_workflow_name}.json"
         target_path = os.path.join(target_path_id, filename)
-        
+
         if os.path.exists(target_path):
             logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
             counter = 1
@@ -389,7 +389,7 @@ async def list_workflows_detail(request: Request):
     except Exception as e:
         logger.error(f"Error listing workflow details: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
-    
+
 @router.get("/io_logs")
 async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = 'default'):
     """
@@ -428,6 +428,7 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
 
             log_entry = {
                 "log_id": idx + 1,
+                "io_id": row['id'],
                 "interaction_id": row['interaction_id'],
                 "workflow_name": row['workflow_name'],
                 "workflow_id": row['workflow_id'],
@@ -450,6 +451,45 @@ async def get_workflow_io_logs(request: Request, workflow_name: str, workflow_id
     except Exception as e:
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
+
+@router.post("/io_log/rating")
+async def rate_workflow_io_log(request: Request, io_id: int, workflow_name: str, workflow_id: str, interaction_id: str = 'default', rating: int = 3):
+    """
+    특정 워크플로우의 ExecutionIO 로그에 대한 평가를 저장합니다.
+    """
+    try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+        io_log = app_db.find_by_condition(
+            ExecutionIO,
+            {
+                "id": io_id,
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id
+            },
+            limit=1,
+        )
+
+        if not io_log:
+            logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
+            raise HTTPException(status_code=404, detail="ExecutionIO log not found")
+
+        io_log = io_log[0]
+        io_log.user_score = rating
+
+        app_db.update(io_log)
+        logger.info(f"Rating updated for ExecutionIO log ID {io_id} in workflow: {workflow_name} ({workflow_id})")
+        return JSONResponse(content={
+            "workflow_name": workflow_name,
+            "workflow_id": workflow_id,
+            "io_id": io_id,
+            "new_rating": rating,
+            "message": "Rating updated successfully"
+        })
+    except Exception as e:
+        logger.error(f"Error updating rating for workflow log: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update rating: {str(e)}")
 
 @router.delete("/io_logs")
 async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow_id: str, interaction_id: str = "default"):

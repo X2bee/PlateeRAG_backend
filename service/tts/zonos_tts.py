@@ -148,7 +148,7 @@ class ZonosTTS(BaseTTS):
 
             # 오디오 코드 생성
             try:
-                codes = self.model.generate(conditioning)
+                codes = self.model.generate(conditioning, progress_bar=False)
                 logger.info("Audio codes generated successfully")
             except Exception as e:
                 logger.error("Error generating audio codes: %s", e)
