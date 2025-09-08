@@ -6,11 +6,12 @@ from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 import logging
 from typing import Optional
-from controller.helper.singletonHelper import get_stt_service
+from controller.helper.singletonHelper import get_stt_service, get_config_composer
+from service.stt.stt_factory import STTFactory
 
 logger = logging.getLogger("controller.stt")
 
-router = APIRouter(prefix="/api/stt", tags=["STT"])
+router = APIRouter(prefix="/stt", tags=["STT"])
 
 @router.post("/transcribe")
 async def transcribe_audio(
@@ -99,3 +100,23 @@ async def get_stt_status(request: Request):
             "model": None,
             "error": str(e)
         })
+
+@router.post("/refresh")
+async def refresh_stt_factory(request: Request):
+    try:
+        config_composer = get_config_composer(request)
+        if config_composer.get_config_by_name("IS_AVAILABLE_STT").value:
+            stt_client = STTFactory.create_stt_client(config_composer)
+            request.app.state.stt_service = stt_client
+
+            return {
+                "message": "STT configuration refreshed successfully"
+            }
+        else:
+            request.app.state.stt_service = None
+            return {
+                "message": "STT service is disabled in configuration"
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh STT config: {str(e)}")
