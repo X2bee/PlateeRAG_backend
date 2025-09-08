@@ -24,7 +24,8 @@ class DBMemoryNode(Node):
     parameters = [
         {"id": "interaction_id", "name": "Interaction ID", "type": "STR", "value": ""},
         {"id": "include_thinking", "name": "Include Thinking", "type": "BOOL", "value": False, "required": False, "optional": True},
-
+        {"id": "top_n_messages", "name": "Top N Messages", "type": "INT", "value": 10, "required": False, "optional": True},
+        {"id": "enable_similarity_filter", "name": "Enable Similarity Filter", "type": "BOOL", "value": False, "required": False, "optional": True},
     ]
 
     def _load_messages_from_db(self, interaction_id: str, include_thinking: bool = False) -> List[Dict[str, str]]:
@@ -208,19 +209,24 @@ class DBMemoryNode(Node):
         
         return "\n".join(summary_parts)
 
-    def _select_and_summarize_relevant_messages(self, current_input: str, historical_messages: List[Dict[str, str]], n_messages: int = 5, llm=None) -> str:
+    def _select_and_summarize_relevant_messages(self, current_input: str, historical_messages: List[Dict[str, str]], n_messages: int = 5, llm=None, use_similarity_filter: bool = True) -> str:
         """현재 입력과 관련된 메시지들을 선택하고 요약 (연결된 agent 모델 사용)"""
         if not historical_messages:
             return ""
         
-        # 관련도 계산
-        messages_with_relevance = self._calculate_message_relevance(current_input, historical_messages)
-        
-        # 상위 n개 메시지 선택
-        top_relevant_messages = messages_with_relevance[:n_messages]
-        
-        # 관련도가 0인 메시지들은 제외
-        meaningful_messages = [msg for msg in top_relevant_messages if msg['relevance_score'] > 0]
+        # 유사도 필터링 사용 여부에 따라 메시지 선택
+        if use_similarity_filter:
+            # 관련도 계산
+            messages_with_relevance = self._calculate_message_relevance(current_input, historical_messages)
+            
+            # 상위 n개 메시지 선택
+            top_relevant_messages = messages_with_relevance[:n_messages]
+            
+            # 관련도가 0인 메시지들은 제외
+            meaningful_messages = [msg for msg in top_relevant_messages if msg['relevance_score'] > 0]
+        else:
+            # 유사도 필터링 없이 모든 메시지 사용
+            meaningful_messages = [{'role': msg['role'], 'content': msg['content'], 'relevance_score': 1.0} for msg in historical_messages]
         
         if not meaningful_messages:
             logger.info("No relevant messages found for current input")
@@ -367,12 +373,40 @@ class DBMemoryNode(Node):
             logger.error(f"Error creating memory object: {e}")
             return None
 
-    def execute(self, interaction_id: str, include_thinking: bool = False):
+    def _filter_messages_by_similarity(self, messages: List[Dict[str, str]], current_input: str, top_n: int) -> List[Dict[str, str]]:
+        """현재 입력과 유사도가 높은 상위 n개 메시지만 필터링"""
+        if not current_input or not messages or top_n <= 0:
+            return messages
+        
+        messages_with_relevance = self._calculate_message_relevance(current_input, messages)
+        
+        # 관련도가 0보다 큰 메시지들만 선택
+        meaningful_messages = [msg for msg in messages_with_relevance if msg['relevance_score'] > 0]
+        
+        # 상위 n개 메시지 선택
+        top_messages = meaningful_messages[:top_n]
+        
+        # 원본 형태로 변환 (relevance_score 제거)
+        filtered_messages = []
+        for msg in top_messages:
+            filtered_messages.append({
+                'role': msg['role'],
+                'content': msg['content']
+            })
+        
+        logger.info(f"Filtered {len(messages)} messages to top {len(filtered_messages)} most relevant messages")
+        return filtered_messages
+
+    def execute(self, interaction_id: str, include_thinking: bool = False, top_n_messages: int = 10, enable_similarity_filter: bool = False, current_input: str = ""):
         """
         DB에서 대화 기록을 로드하여 ConversationBufferMemory 객체를 반환합니다.
 
         Args:
             interaction_id: 상호작용 ID
+            include_thinking: thinking 태그 포함 여부
+            top_n_messages: 유사도 필터링 시 선택할 메시지 수
+            enable_similarity_filter: 유사도 기반 필터링 활성화 여부
+            current_input: 현재 사용자 입력 (유사도 계산 기준)
 
         Returns:
             ConversationBufferMemory 객체 또는 오류 메시지
@@ -385,6 +419,11 @@ class DBMemoryNode(Node):
                 logger.info(f"No chat history found for interaction_id: {interaction_id}")
                 # 빈 메모리 객체 반환
                 return self.load_memory_from_db([])
+
+            # 유사도 필터링 적용 (활성화된 경우)
+            if enable_similarity_filter and current_input:
+                db_messages = self._filter_messages_by_similarity(db_messages, current_input, top_n_messages)
+                logger.info(f"Applied similarity filtering with top {top_n_messages} messages")
 
             memory = self.load_memory_from_db(db_messages)
 
