@@ -245,7 +245,7 @@ class DBMemoryNode(Node):
                 for msg in meaningful_messages:
                     role = "사용자" if msg['role'] == "user" else "AI"
                     conversation_text += f"{role}: {msg['content']}\n\n"
-                
+                logger.info(f"Conversation text for summarization:\n{conversation_text}")
                 summary_prompt = f"""다음은 이전 대화 내용입니다. 현재 사용자의 질문과 관련된 핵심 내용만 간결하게 요약해주세요.
 
 {conversation_text}

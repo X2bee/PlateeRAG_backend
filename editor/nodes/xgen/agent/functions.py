@@ -105,15 +105,8 @@ def prepare_optimized_chat_history(memory, current_input, n_messages, llm):
         if not full_chat_history:
             return []
         
-        # 메시지를 dict 형태로 변환
-        historical_messages = []
-        for msg in full_chat_history:
-            if hasattr(msg, 'type') and hasattr(msg, 'content'):
-                role = "user" if msg.type == "human" else "ai"
-                historical_messages.append({
-                    'role': role,
-                    'content': msg.content
-                })
+        # 메시지를 user-ai 쌍으로 그룹핑
+        historical_messages = self._group_messages_into_pairs(full_chat_history)
         
         if not historical_messages:
             return full_chat_history[-n_messages:] if n_messages > 0 else []
