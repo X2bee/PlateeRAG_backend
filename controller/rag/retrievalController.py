@@ -221,9 +221,10 @@ async def delete_collection(request: Request, collection_request: CollectionDele
     """컬렉션 삭제"""
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
-
     existing_collection = app_db.find_by_condition(VectorDB, {'user_id': user_id, 'collection_name': collection_request.collection_name})
 
+    app_db.delete_by_condition(VectorDBChunkMeta, {'collection_name': collection_request.collection_name, 'user_id': user_id})
+    app_db.delete_by_condition(VectorDBChunkEdge, {'collection_name': collection_request.collection_name, 'user_id': user_id})
     if existing_collection:
         try:
             vector_manager = get_vector_manager(request)
@@ -235,7 +236,8 @@ async def delete_collection(request: Request, collection_request: CollectionDele
                 vector_manager = rag_service.vector_manager
 
                 app_db.delete_by_condition(VectorDB, {
-                    "collection_name": collection_request.collection_name
+                    "collection_name": collection_request.collection_name,
+                    'user_id': user_id
                 })
 
             return {"message": "Collection deleted"}
@@ -538,7 +540,11 @@ async def get_all_document_detail_edges(request: Request):
 async def delete_document_from_collection(request: Request, collection_name: str, document_id: str):
     """컬렉션에서 특정 문서 삭제"""
     try:
+        user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
         rag_service = get_rag_service(request)
+        app_db.delete_by_condition(VectorDBChunkMeta, {'document_id': document_id, 'collection_name': collection_name, 'user_id': user_id})
+        app_db.delete_by_condition(VectorDBChunkEdge, {'document_id': document_id, 'collection_name': collection_name, 'user_id': user_id})
         return rag_service.delete_document_from_collection(collection_name, document_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
