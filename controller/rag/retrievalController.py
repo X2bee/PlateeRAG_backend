@@ -271,8 +271,6 @@ async def upload_document(
     try:
         rag_service = get_rag_service(request)
         app_db = get_db_manager(request)
-
-        # 파일 확장자 확인
         file_extension = Path(file.filename).suffix[1:].lower() if file.filename else ""
 
         # 파일 유형에 따른 process_type 검증

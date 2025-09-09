@@ -282,6 +282,7 @@ class RAGService:
                 final_metadata = dict(metadata)  # copy incoming metadata
             else:
                 final_metadata = {}
+
             # 공통 메타데이터 보강
             final_metadata.update({
                 "user_id": user_id,
@@ -752,7 +753,7 @@ class RAGService:
                     system_fields = {
                         "document_id", "chunk_index", "chunk_text", "file_name",
                         "file_path", "file_type", "processed_at", "chunk_size", "total_chunks",
-                        "line_start", "line_end", "page_number", "directory_full_path"
+                        "line_start", "line_end", "page_number"
                     }
                     for key, value in payload.items():
                         if key not in system_fields:

@@ -16,11 +16,15 @@ class CreateFolderRequest(BaseModel):
     parent_folder_id: Optional[int] = None
     parent_folder_name: Optional[str] = None
 
+class DeleteFolderRequest(BaseModel):
+    folder_path: str
+    collection_id: int
+
 @router.post("/create")
 async def create_folder(request: Request, create_folder_request: CreateFolderRequest):
     """Create a new folder"""
     user_id = extract_user_id_from_request(request)
-    
+
     app_db = get_db_manager(request)
     try:
         collection = app_db.find_by_condition(VectorDB, {'id': create_folder_request.parent_collection_id, 'user_id': user_id})
@@ -87,3 +91,15 @@ async def create_folder(request: Request, create_folder_request: CreateFolderReq
     except Exception as e:
         logger.error("Error creating folder: %s", e)
         raise HTTPException(status_code=500, detail="Failed to create folder") from e
+
+@router.delete("/delete")
+async def delete_folder(request: Request, delete_folder_request: DeleteFolderRequest):
+    """Delete a folder"""
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    try:
+        app_db.delete_by_condition(VectorDBFolders, {'full_path__like__': delete_folder_request.folder_path, 'collection_id': delete_folder_request.collection_id, 'user_id': user_id})
+        return {"success": True, "message": "Folder deleted successfully"}
+    except Exception as e:
+        logger.error("Error deleting folder: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to delete folder") from e
