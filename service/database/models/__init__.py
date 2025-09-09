@@ -9,7 +9,7 @@ from service.database.models.persistent_config import PersistentConfigModel
 from service.database.models.executor import ExecutionIO, ExecutionMeta
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.deploy import DeployMeta
-from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
+from service.database.models.vectordb import VectorDB, VectorDBFolders, VectorDBChunkMeta, VectorDBChunkEdge
 from service.database.models.vast import VastInstance, VastExecutionLog
 from service.database.models.train import TrainMeta
 from service.database.models.group import GroupMeta
@@ -21,7 +21,7 @@ __all__ = [
     'WorkflowExecution', 'NodePerformance',
     'PersistentConfigModel',
     'ExecutionIO', 'ExecutionMeta', 'WorkflowMeta', 'DeployMeta',
-    'VectorDB', 'VectorDBChunkMeta', 'VectorDBChunkEdge',
+    'VectorDB', 'VectorDBFolders', 'VectorDBChunkMeta', 'VectorDBChunkEdge',
     'VastInstance', 'VastExecutionLog',
     'TrainMeta',
     'GroupMeta'
@@ -38,6 +38,7 @@ APPLICATION_MODELS = [
     WorkflowMeta,
     DeployMeta,
     VectorDB,
+    VectorDBFolders,
     VectorDBChunkMeta,
     VectorDBChunkEdge,
     VastInstance,

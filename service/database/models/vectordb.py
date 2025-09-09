@@ -36,6 +36,37 @@ class VectorDB(BaseModel):
             'share_permissions': 'VARCHAR(50)'
         }
 
+class VectorDBFolders(BaseModel):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.user_id: Optional[int] = kwargs.get('user_id')
+        self.collection_name: str = kwargs.get('collection_name', '')
+        self.collection_make_name: str = kwargs.get('collection_make_name', '')
+        self.collection_id: int = kwargs.get('collection_id', None)
+        self.folder_name: str = kwargs.get('folder_name', '')
+        self.parent_folder_name: Optional[str] = kwargs.get('parent_folder_name', None)
+        self.parent_folder_id: Optional[int] = kwargs.get('parent_folder_id', None)
+        self.is_root: bool = kwargs.get('is_root', False)
+        self.full_path: str = kwargs.get('full_path', '')
+        self.order_index: int = kwargs.get('order_index', 0)
+
+    def get_table_name(self) -> str:
+        return "vector_db_folders"
+
+    def get_schema(self) -> Dict[str, str]:
+        return {
+            'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
+            'collection_make_name': 'VARCHAR(500) NOT NULL',
+            'collection_name': 'VARCHAR(500) NOT NULL',
+            'collection_id': 'INTEGER REFERENCES vector_db(id) ON DELETE CASCADE',
+            'folder_name': 'VARCHAR(500) NOT NULL',
+            'parent_folder_name': 'VARCHAR(500)',
+            'parent_folder_id': 'INTEGER',
+            'is_root': 'BOOLEAN DEFAULT FALSE',
+            'full_path': 'VARCHAR(1000) NOT NULL',
+            'order_index': 'INTEGER DEFAULT 0'
+        }
+
 class VectorDBChunkMeta(BaseModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
