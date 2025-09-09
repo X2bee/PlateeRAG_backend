@@ -16,7 +16,7 @@ from pathlib import Path
 import datetime
 import uuid
 from zoneinfo import ZoneInfo
-from service.database.models.vectordb import VectorDB, VectorDBChunkMeta, VectorDBChunkEdge
+from service.database.models.vectordb import VectorDB, VectorDBFolders, VectorDBChunkMeta, VectorDBChunkEdge
 from service.database.models.user import User
 
 from controller.helper.controllerHelper import extract_user_id_from_request
@@ -422,8 +422,18 @@ async def hybrid_search(request: Request, collection_name: str = Form(...), quer
 async def list_documents_in_collection(request: Request, collection_name: str):
     """컬렉션 내 모든 문서 목록 조회"""
     try:
+        app_db = get_db_manager(request)
+        try:
+            directory_info = app_db.find_by_condition(VectorDBFolders, {'collection_name': collection_name})
+        except Exception as e:
+            directory_info = []
+            logger.warning(f"Failed to fetch directory info: {e}")
+
         rag_service = get_rag_service(request)
-        return await rag_service.list_documents_in_collection(collection_name)
+        contents = await rag_service.list_documents_in_collection(collection_name)
+        contents['directory_info'] = directory_info
+
+        return contents
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
 

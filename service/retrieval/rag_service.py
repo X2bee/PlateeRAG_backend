@@ -752,7 +752,7 @@ class RAGService:
                     system_fields = {
                         "document_id", "chunk_index", "chunk_text", "file_name",
                         "file_path", "file_type", "processed_at", "chunk_size", "total_chunks",
-                        "line_start", "line_end", "page_number"
+                        "line_start", "line_end", "page_number", "directory_full_path"
                     }
                     for key, value in payload.items():
                         if key not in system_fields:
