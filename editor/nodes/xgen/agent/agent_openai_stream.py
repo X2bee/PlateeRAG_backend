@@ -71,7 +71,7 @@ class AgentOpenAIStreamNode(Node):
 
         try:
             default_prompt= prefix_prompt+default_prompt
-            llm, tools_list, chat_history = prepare_llm_components(tools, memory, model, temperature, max_tokens, base_url, streaming=True)
+            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages, streaming=True)
             additional_rag_context = ""
             if rag_context:
                 additional_rag_context = rag_context_builder(text, rag_context, strict_citation)

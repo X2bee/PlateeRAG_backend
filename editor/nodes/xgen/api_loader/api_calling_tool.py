@@ -6,6 +6,7 @@ from editor.node_composer import Node
 from editor.utils.helper.parse_helper import parse_param_value
 from langchain.agents import tool
 import json
+import re
 logger = logging.getLogger(__name__)
 
 class APICallingTool(Node):
@@ -45,10 +46,10 @@ class APICallingTool(Node):
         """JSON 경로를 따라가서 중첩된 값을 추출합니다."""
         if not path:
             return data
-        
+
         keys = path.split('.')
         current = data
-        
+
         try:
             for key in keys:
                 if isinstance(current, dict):
@@ -64,18 +65,18 @@ class APICallingTool(Node):
         """응답 데이터에서 지정된 경로와 필드만 추출합니다."""
         if not filter_path or not filter_fields:
             return response_data
-        
+
         # 필터 경로로 데이터 추출
         extracted_data = APICallingTool.get_nested_value(response_data, filter_path)
         if extracted_data is None:
             logger.warning(f"Filter path '{filter_path}' not found in response")
             return response_data
-        
+
         # 필터 필드 파싱 (콤마로 구분)
         fields = [field.strip() for field in filter_fields.split(',') if field.strip()]
         if not fields:
             return extracted_data
-        
+
         # 배열인 경우 각 객체에서 지정된 필드만 추출
         if isinstance(extracted_data, list):
             filtered_list = []
@@ -87,15 +88,15 @@ class APICallingTool(Node):
                     # 객체가 아닌 경우 그대로 추가
                     filtered_list.append(item)
             return filtered_list
-        
+
         # 단일 객체인 경우
         elif isinstance(extracted_data, dict):
             return {field: extracted_data.get(field) for field in fields if field in extracted_data}
-        
+
         # 배열도 객체도 아닌 경우 그대로 반환
         return extracted_data
 
-    def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30, 
+    def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30,
                 enable_response_filtering=False, response_filter_path="", response_filter_fields="",
                 args_schema: BaseModel=None, *args, **kwargs):
         description = description + "\n명시적인 요청이 없다면, return_dict를 False로 하여 STR 형태의 응답을 받으려고 시도하십시오."
@@ -123,8 +124,16 @@ class APICallingTool(Node):
                     for key, value in additional_params.items():
                         parsed_additional_params[key] = parse_param_value(value)
                     request_data.update(parsed_additional_params)
-                    logger.info(f"Additional parameters provided: {additional_params}")
-                    logger.info(f"Request data after merging additional parameters: {request_data}")
+                    
+                endpoint = api_endpoint
+                if request_data:
+                    placeholder_pattern = r'\{([^}]+)\}'
+                    placeholders = re.findall(placeholder_pattern, endpoint)
+
+                    for placeholder in placeholders:
+                        if placeholder in request_data:
+                            value = request_data.pop(placeholder)
+                            endpoint = endpoint.replace(f'{{{placeholder}}}', str(value))
 
                 try:
                     # HTTP 메서드에 따라 요청 방식 결정
@@ -139,29 +148,29 @@ class APICallingTool(Node):
                     # API 호출
                     if method_upper == "GET":
                         params = request_data if request_data else None
-                        logger.info(f"Making GET request to {api_endpoint} with params: {params}")
+                        logger.info(f"Making GET request to {endpoint} with params: {params}")
                         response = requests.get(
-                            api_endpoint,
+                            endpoint,
                             params=params,
                             headers=headers,
                             timeout=timeout
                         )
-                        logger.info(f"GET request to {api_endpoint} completed with status code: {response}")
+                        logger.info(f"GET request to {endpoint} completed with status code: {response}")
                     elif method_upper in ["POST", "PUT", "PATCH"]:
                         json_data = request_data if request_data else None
-                        logger.info(f"Making {method_upper} request to {api_endpoint} with data: {json_data}")
+                        logger.info(f"Making {method_upper} request to {endpoint} with data: {json_data}")
                         response = requests.request(
                             method_upper,
-                            api_endpoint,
+                            endpoint,
                             json=json_data,
                             headers=headers,
                             timeout=timeout
                         )
                     elif method_upper == "DELETE":
                         params = request_data if request_data else None
-                        logger.info(f"Making DELETE request to {api_endpoint} with params: {params}")
+                        logger.info(f"Making DELETE request to {endpoint} with params: {params}")
                         response = requests.delete(
-                            api_endpoint,
+                            endpoint,
                             params=params,
                             headers=headers,
                             timeout=timeout
@@ -174,7 +183,7 @@ class APICallingTool(Node):
                         try:
                             result = response.json()
                             logger.info(f"API call successful: {result}")
-                            
+
                             # 응답 필터링 적용
                             if enable_response_filtering and response_filter_path:
                                 logger.info(f"Applying response filtering with path: {response_filter_path}, fields: {response_filter_fields}")
@@ -183,7 +192,7 @@ class APICallingTool(Node):
                                 )
                                 logger.info(f"Filtered result: {filtered_result}")
                                 result = filtered_result
-                            
+
                             if return_dict:
                                 return result
                             else:
@@ -198,7 +207,7 @@ class APICallingTool(Node):
                 except requests.exceptions.Timeout:
                     return f"API call timed out after {timeout} seconds"
                 except requests.exceptions.ConnectionError:
-                    return f"Failed to connect to API endpoint: {api_endpoint}"
+                    return f"Failed to connect to API endpoint: {endpoint}"
                 except requests.exceptions.RequestException as e:
                     return f"Request failed: {str(e)}"
                 except (ValueError, TypeError) as e:
