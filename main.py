@@ -33,6 +33,7 @@ from service.vast.vast_service import VastService
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
+from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
 
 def print_xgen_logo():
     logo = """
@@ -188,6 +189,21 @@ async def lifespan(app: FastAPI):
             logger.warning(f"⚠️  Configuration warning: {warning}")
         logger.info("✅ Step 8: System validation completed!")
 
+        # 8.5. 워크플로우-배포 메타데이터 동기화
+        print_step_banner(8.5, "WORKFLOW-DEPLOY SYNC", "Synchronizing workflow and deploy metadata")
+        logger.info("⚙️  Step 8.5: Workflow-deploy metadata synchronization starting...")
+        
+        try:
+            sync_result = sync_workflow_deploy_meta(app.state.app_db)
+            if sync_result["success"]:
+                logger.info(f"✅ Step 8.5: Workflow-deploy sync completed successfully! "
+                           f"Created {sync_result['created_deploys']} new deploy entries from "
+                           f"{sync_result['total_workflows']} total workflows")
+            else:
+                logger.warning(f"⚠️  Step 8.5: Workflow-deploy sync completed with issues. "
+                             f"Errors: {sync_result.get('errors', [])}")
+        except Exception as e:
+            logger.error(f"❌ Step 8.5: Failed to sync workflow-deploy metadata: {e}")
 
         print_step_banner(9, "NODE DISCOVERY", "Discovering and registering XGEN nodes")
         logger.info("⚙️  Step 9: Node discovery starting...")

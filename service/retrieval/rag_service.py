@@ -282,6 +282,7 @@ class RAGService:
                 final_metadata = dict(metadata)  # copy incoming metadata
             else:
                 final_metadata = {}
+
             # 공통 메타데이터 보강
             final_metadata.update({
                 "user_id": user_id,
@@ -423,6 +424,7 @@ class RAGService:
                 app_db.insert(VectorDBChunkEdge(
                     user_id=user_id,
                     collection_name=collection_name,
+                    document_id=document_id,
                     target=point['id'],
                     source=collection_name,
                     relation_type="chunk",
@@ -433,6 +435,7 @@ class RAGService:
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
                         collection_name=collection_name,
+                        document_id=document_id,
                         target=doc_type_val,
                         source=point['id'],
                         relation_type="document_type"
@@ -441,6 +444,7 @@ class RAGService:
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
                         collection_name=collection_name,
+                        document_id=document_id,
                         target=keyword,
                         source=point['id'],
                         relation_type="keyword"
@@ -449,6 +453,7 @@ class RAGService:
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
                         collection_name=collection_name,
+                        document_id=document_id,
                         target=topic,
                         source=point['id'],
                         relation_type="topic"
@@ -457,6 +462,7 @@ class RAGService:
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
                         collection_name=collection_name,
+                        document_id=document_id,
                         target=entity,
                         source=point['id'],
                         relation_type="entity"
@@ -465,6 +471,7 @@ class RAGService:
                     app_db.insert(VectorDBChunkEdge(
                         user_id=user_id,
                         collection_name=collection_name,
+                        document_id=document_id,
                         target=main_concept,
                         source=point['id'],
                         relation_type="main_concept"
