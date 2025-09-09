@@ -180,8 +180,7 @@ async def test_connection(request: Request, category: str):
                 'api_key': config_composer.get_config_by_name("GEMINI_API_KEY").value,
                 'model_name': config_composer.get_config_by_name("GEMINI_MODEL_DEFAULT").value
             }
-            #TODO: Implement Google LLM connection test
-            return None
+            return await llm_service.test_gemini_connection(config_data)
 
         elif category == "anthropic":
             config_data = {
@@ -189,8 +188,7 @@ async def test_connection(request: Request, category: str):
                 'api_key': config_composer.get_config_by_name("ANTHROPIC_API_KEY").value,
                 'model_name': config_composer.get_config_by_name("ANTHROPIC_MODEL_DEFAULT").value
             }
-            #TODO: Implement Anthropic LLM connection test
-            return None
+            return await llm_service.test_anthropic_connection(config_data)
 
         elif category == "llm":
             current_provider = config_composer.get_config_by_name('DEFAULT_LLM_PROVIDER').value
@@ -225,8 +223,7 @@ async def test_connection(request: Request, category: str):
                     'api_key': config_composer.get_config_by_name("GEMINI_API_KEY").value,
                     'model_name': config_composer.get_config_by_name("GEMINI_MODEL_DEFAULT").value
                 }
-                #TODO: Implement Google LLM connection test
-                return None
+                return await llm_service.test_gemini_connection(config_data)
 
             elif current_provider == "anthropic":
                 config_data = {
@@ -234,8 +231,7 @@ async def test_connection(request: Request, category: str):
                     'api_key': config_composer.get_config_by_name("ANTHROPIC_API_KEY").value,
                     'model_name': config_composer.get_config_by_name("ANTHROPIC_MODEL_DEFAULT").value
                 }
-                #TODO: Implement Anthropic LLM connection test
-                return None
+                return await llm_service.test_anthropic_connection(config_data)
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported LLM provider: {current_provider}")
 
