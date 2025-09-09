@@ -28,7 +28,7 @@ class WorkflowDeploySync:
             ORDER BY created_at DESC
             """
             
-            result = self.app_db_manager.execute_query(query)
+            result = self.app_db_manager.config_db_manager.execute_query(query)
             return result if result else []
             
         except Exception as e:
@@ -44,7 +44,7 @@ class WorkflowDeploySync:
             ORDER BY created_at DESC
             """
             
-            result = self.app_db_manager.execute_query(query)
+            result = self.app_db_manager.config_db_manager.execute_query(query)
             return result if result else []
             
         except Exception as e:
@@ -93,7 +93,7 @@ class WorkflowDeploySync:
             )
             
             # 데이터베이스에 삽입
-            success = self.app_db_manager.insert_data(deploy_meta)
+            success = self.app_db_manager.insert(deploy_meta)
             
             if success:
                 logger.info(f"Created deploy meta for workflow: {workflow_meta['workflow_id']} "
