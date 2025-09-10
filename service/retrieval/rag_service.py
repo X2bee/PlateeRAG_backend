@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 from fastapi import HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-from service.database.models.vectordb import VectorDB, VectorDBChunkEdge, VectorDBChunkMeta
+from service.database.models.vectordb import VectorDB, VectorDBChunkEdge, VectorDBChunkMeta, VectorDBFolders
 
 logger = logging.getLogger("rag-service")
 
@@ -1118,9 +1118,6 @@ class RAGService:
 
             # 6. 모든 문서 청크를 새로운 임베딩으로 다시 생성하여 새 컬렉션에 저장
             logger.info("Re-embedding all document chunks with new model")
-
-            from qdrant_client.models import PointStruct
-
             batch_size = 50
             total_processed = 0
 
@@ -1212,6 +1209,7 @@ class RAGService:
                 'collection_name': final_collection_name
             }
             app_db.update_list_columns(VectorDBChunkEdge, edge_updates, conditions)
+            app_db.update_list_columns(VectorDBFolders, edge_updates, conditions)
 
             # 9. 처리된 고유 문서 수 계산
             unique_document_ids = set()
