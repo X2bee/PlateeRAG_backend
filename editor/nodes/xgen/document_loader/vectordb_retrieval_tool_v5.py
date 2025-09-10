@@ -44,12 +44,13 @@ class QdrantRetrievalToolV5(Node):
         {"id": "collection_name", "name": "Collection Name", "type": "STR", "value": "Select Collection", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
         {"id": "use_model_prompt", "name": "Use Model Prompt", "type": "BOOL", "value": True, "optional": True},
         {"id": "top_k", "name": "Top K Results", "type": "INT", "value": 5, "required": False, "optional": True, "min": 1, "max": 20, "step": 1},
-        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.1, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.05},
+        {"id": "score_threshold", "name": "Score Threshold", "type": "FLOAT", "value": 0.05, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.05},
         {"id": "search_multiplier", "name": "Search Multiplier", "type": "INT", "value": 5, "required": False, "optional": True, "min": 2, "max": 10, "step": 1, "description": "검색 결과를 top_k의 몇 배로 가져올지 결정"},
         {"id": "alpha", "name": "Alpha (Original Score Weight)", "type": "FLOAT", "value": 0.6, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
         {"id": "beta", "name": "Beta (Tree Structure Weight)", "type": "FLOAT", "value": 0.3, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
         {"id": "gamma", "name": "Gamma (Diversity Weight)", "type": "FLOAT", "value": 0.1, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
-        {"id": "diversity_threshold", "name": "Diversity Threshold", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
+        {"id": "diversity_threshold", "name": "Diversity Threshold", "type": "FLOAT", "value": 0.5, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.1},
+        {"id": "min_quality_score", "name": "Min Quality Score", "type": "FLOAT", "value": 0.15, "required": False, "optional": True, "min": 0.0, "max": 1.0, "step": 0.05, "description": "최소 품질 기준 점수"},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "enhance_prompt", "name": "Enhance Prompt", "type": "STR", "value": enhance_prompt, "required": False, "optional": True, "expandable": True},
     ]
@@ -59,9 +60,9 @@ class QdrantRetrievalToolV5(Node):
         return [{"value": collection.get("collection_name"), "label": collection.get("collection_make_name")} for collection in collections]
 
     def execute(self, tool_name: str, description: str, collection_name: str, top_k: int = 5,
-                use_model_prompt: bool = True, score_threshold: float = 0.1, search_multiplier: int = 5,
-                alpha: float = 0.6, beta: float = 0.3, gamma: float = 0.1, diversity_threshold: float = 0.7,
-                strict_citation: bool = True, enhance_prompt: str = enhance_prompt):
+                use_model_prompt: bool = True, score_threshold: float = 0.05, search_multiplier: int = 5,
+                alpha: float = 0.6, beta: float = 0.3, gamma: float = 0.1, diversity_threshold: float = 0.5,
+                min_quality_score: float = 0.15, strict_citation: bool = True, enhance_prompt: str = enhance_prompt):
 
         def create_advanced_vectordb_tool():
             @tool(tool_name, description=description)
@@ -99,13 +100,44 @@ class QdrantRetrievalToolV5(Node):
                         diversity_threshold=diversity_threshold
                     )
 
-                    optimized_results = algorithm.monte_carlo_tree_search(results, top_k)
+                    # 기본 MCTS 실행
+                    mcts_results = algorithm.monte_carlo_tree_search(results, top_k * 2)  # 더 많이 가져와서 필터링
 
-                    # 품질 분석
+                    # 동적 Top-K 선택 (품질 기준 적용)
+                    optimized_results, selection_info = algorithm.dynamic_top_k_selection(
+                        mcts_results, top_k, min_quality_score=min_quality_score
+                    )
+
+                    # 선택 전략 로그
+                    logger.info("선택 전략: %s - %s", selection_info.get("strategy"), selection_info.get("message"))
+                    if "warning" in selection_info:
+                        logger.warning("품질 경고: %s", selection_info["warning"])
+
+                    # 품질 분석 및 적응적 조정
                     quality_analysis = algorithm.analyze_selection_quality(optimized_results)
                     logger.info("선택 품질 분석: %s", quality_analysis)
 
-                    # 결과 생성
+                    # 품질이 낮으면 적응적 파라미터 조정 후 재실행
+                    quality_grade = quality_analysis.get("quality_grade", "F")
+                    if quality_grade in ["D", "F"] and len(results) > top_k:
+                        logger.info("품질 등급 %s로 인한 적응적 재조정 실행", quality_grade)
+
+                        # 파라미터 조정
+                        current_params = {"alpha": alpha, "beta": beta, "gamma": gamma}
+                        adjusted_params = algorithm.adaptive_parameter_adjustment(quality_analysis, current_params)
+
+                        # 조정된 파라미터로 알고리즘 재생성 및 재실행
+                        if adjusted_params != current_params:
+                            algorithm_adjusted = AdvancedTreeSearchAlgorithm(
+                                alpha=adjusted_params["alpha"],
+                                beta=adjusted_params["beta"],
+                                gamma=adjusted_params["gamma"],
+                                diversity_threshold=diversity_threshold
+                            )
+                            optimized_results = algorithm_adjusted.monte_carlo_tree_search(results, top_k)
+                            quality_analysis = algorithm_adjusted.analyze_selection_quality(optimized_results)
+                            logger.info("재조정 후 품질 분석: %s", quality_analysis)
+
                     context_parts = []
                     for i, item in enumerate(optimized_results, 1):
                         if "chunk_text" in item and item["chunk_text"]:
@@ -114,39 +146,16 @@ class QdrantRetrievalToolV5(Node):
                             item_page_number = item.get("page_number", 0)
                             item_line_start = item.get("line_start", 0)
                             item_line_end = item.get("line_end", 0)
-                            directory_path = item.get("directory_full_path", "Unknown")
 
                             final_score = item.get("final_score", 0.0)
-                            original_score = item.get("score", 0.0)
-                            tree_score = item.get("tree_score", 0.0)
-
                             chunk_text = item["chunk_text"]
-
-                            context_parts.append(
-                                f"[문서 {i}](최종점수: {final_score:.3f}, 원본점수: {original_score:.3f}, 트리점수: {tree_score:.3f})\n"
-                                f"[파일명] {item_file_name}\n"
-                                f"[파일경로] {item_file_path}\n"
-                                f"[디렉토리경로] {directory_path}\n"
-                                f"[페이지번호] {item_page_number}\n"
-                                f"[문장시작줄] {item_line_start}\n"
-                                f"[문장종료줄] {item_line_end}\n\n"
-                                f"[내용]\n{chunk_text}"
-                            )
+                            context_parts.append(f"[문서 {i}](관련도: {final_score:.3f})\n[파일명] {item_file_name}\n[파일경로] {item_file_path}\n[페이지번호] {item_page_number}\n[문장시작줄] {item_line_start}\n[문장종료줄] {item_line_end}\n\n[내용]\n{chunk_text}")
 
                     if context_parts:
                         context_text = "\n".join(context_parts)
-                        enhanced_prompt_final = f"""{enhance_prompt}
-
-=== 고도화된 트리 서치로 선별된 최적 문서들 ===
-다양성 점수: {quality_analysis.get('diversity_score', 0):.3f}
-고유 경로 수: {quality_analysis.get('unique_paths', 0)}개
-
-{context_text}
-
-{citation_prompt if strict_citation else ""}"""
-
-                        logger.info("=== Advanced Tree Search V5 완료 ===")
-                        return enhanced_prompt_final
+                        enhanced_prompt = f"""{enhance_prompt}
+{context_text}\n{citation_prompt if strict_citation else ""}"""
+                        return enhanced_prompt
 
                 except Exception as e:
                     logger.error("Advanced Tree Search 수행 중 오류: %s", e, exc_info=True)

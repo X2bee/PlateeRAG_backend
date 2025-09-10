@@ -604,6 +604,7 @@ class RAGService:
                     "line_start": payload.get("line_start"),
                     "line_end": payload.get("line_end"),
                     "page_number": payload.get("page_number"),
+                    "directory_full_path": payload.get("directory_full_path"),
                     "metadata": {k: v for k, v in payload.items()
                                if k not in ["chunk_text", "document_id", "chunk_index", "file_name", "file_type", "file_path", "line_start", "line_end", "page_number"]}
                 }
