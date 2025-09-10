@@ -351,45 +351,58 @@ async def list_workflows_detail(request: Request):
         groups = user.groups
         user_name = user.username if user else "Unknown User"
 
-        existing_data = app_db.find_by_condition(
-            WorkflowMeta,
-            {
-                "user_id": user_id,
-            },
-            limit=10000,
-            orderby="updated_at",
-            ignore_columns=['workflow_data']
-        )
+        # 직접 SQL 쿼리로 워크플로우와 사용자 정보 조인
+        # 자신의 워크플로우
+        own_workflows_query = """
+            SELECT
+                wm.id, wm.created_at, wm.updated_at,
+                wm.user_id, wm.workflow_id, wm.workflow_name,
+                wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
+                wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
+                u.username, u.full_name
+            FROM workflow_meta wm
+            LEFT JOIN users u ON wm.user_id = u.id
+            WHERE wm.user_id = %s
+            ORDER BY wm.updated_at DESC
+            LIMIT 10000
+        """
+        existing_data = app_db.config_db_manager.execute_query(own_workflows_query, (user_id,))
+
+        # 그룹 공유 워크플로우 추가
         if groups and groups != None and groups != [] and len(groups) > 0:
             for group_name in groups:
-                shared_data = app_db.find_by_condition(
-                    WorkflowMeta,
-                    {
-                        "share_group": group_name,
-                        "is_shared": True,
-                    },
-                    limit=10000,
-                    orderby="updated_at",
-                    ignore_columns=['workflow_data']
-                )
-                existing_data.extend(shared_data)
+                shared_workflows_query = """
+                    SELECT
+                        wm.id, wm.created_at, wm.updated_at,
+                        wm.user_id, wm.workflow_id, wm.workflow_name,
+                        wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
+                        wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
+                        u.username, u.full_name
+                    FROM workflow_meta wm
+                    LEFT JOIN users u ON wm.user_id = u.id
+                    WHERE wm.share_group = %s AND wm.is_shared = true
+                    ORDER BY wm.updated_at DESC
+                    LIMIT 10000
+                """
+                shared_data = app_db.config_db_manager.execute_query(shared_workflows_query, (group_name,))
+                if shared_data:
+                    existing_data.extend(shared_data)
 
         seen_ids = set()
         unique_data = []
         for item in existing_data:
-            if item.id not in seen_ids:
-                seen_ids.add(item.id)
-                unique_data.append(item)
+            if item.get("id") not in seen_ids:
+                seen_ids.add(item.get("id"))
+                item_dict = dict(item)
+                if 'created_at' in item_dict and item_dict['created_at']:
+                    item_dict['created_at'] = item_dict['created_at'].isoformat() if hasattr(item_dict['created_at'], 'isoformat') else str(item_dict['created_at'])
+                if 'updated_at' in item_dict and item_dict['updated_at']:
+                    item_dict['updated_at'] = item_dict['updated_at'].isoformat() if hasattr(item_dict['updated_at'], 'isoformat') else str(item_dict['updated_at'])
+                unique_data.append(item_dict)
 
-        response_data = []
-        for data in unique_data:
-            data_dict = data.to_dict()
-            data_dict['user_name'] = user_name
-            response_data.append(data_dict)
+        logger.info(f"Found {len(unique_data)} workflow files with detailed information")
 
-        logger.info(f"Found {len(existing_data)} workflow files with detailed information")
-
-        return JSONResponse(content={"workflows": response_data})
+        return JSONResponse(content={"workflows": unique_data})
 
     except Exception as e:
         logger.error(f"Error listing workflow details: {str(e)}")
