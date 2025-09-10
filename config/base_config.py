@@ -53,10 +53,10 @@ class BaseConfig(ABC):
             try:
                 if type_converter:
                     converted_value = type_converter(env_value)
-                    self.logger.info("'%s' loaded from environment: %s", env_name, converted_value)
+                    self.logger.debug("'%s' loaded from environment: %s", env_name, converted_value)
                     return converted_value
                 else:
-                    self.logger.info("'%s' loaded from environment: %s", env_name, env_value)
+                    self.logger.debug("'%s' loaded from environment: %s", env_name, env_value)
                     return env_value
             except (ValueError, TypeError) as e:
                 self.logger.warning("Failed to convert environment value for '%s': %s", env_name, e)
@@ -69,11 +69,11 @@ class BaseConfig(ABC):
                     if file_value:
                         if type_converter:
                             converted_value = type_converter(file_value)
-                            self.logger.info("'%s' loaded from file %s: %s", env_name, file_path, converted_value)
+                            self.logger.debug("'%s' loaded from file %s: %s", env_name, file_path, converted_value)
                             return converted_value
                         else:
                             os.environ[env_name] = file_value  # 환경변수에도 설정
-                            self.logger.info("'%s' loaded from file %s: %s", env_name, file_path, file_value)
+                            self.logger.debug("'%s' loaded from file %s: %s", env_name, file_path, file_value)
                             return file_value
             except (IOError, OSError) as e:
                 self.logger.warning("Failed to read %s for '%s': %s", file_path, env_name, e)

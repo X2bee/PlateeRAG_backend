@@ -19,6 +19,7 @@ class WorkflowMeta(BaseModel):
         self.is_shared: bool = kwargs.get('is_shared', False)
         self.share_group: Optional[str] = kwargs.get('share_group', None)
         self.share_permissions: Optional[str] = kwargs.get('share_permissions', 'read')
+        self.workflow_data: Optional[Dict] = kwargs.get('workflow_data', {})
 
     def get_table_name(self) -> str:
         return "workflow_meta"
@@ -36,5 +37,6 @@ class WorkflowMeta(BaseModel):
             'metadata': 'TEXT',
             'is_shared': 'BOOLEAN DEFAULT FALSE',
             'share_group': 'VARCHAR(50)',
-            'share_permissions': 'VARCHAR(50)'
+            'share_permissions': 'VARCHAR(50)',
+            'workflow_data': 'TEXT'
         }

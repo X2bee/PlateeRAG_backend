@@ -123,7 +123,7 @@ class ConfigComposer:
                     try:
                         category_configs = config_instance.initialize()
                         self.all_configs.update(category_configs)
-                        self.logger.info("Initialized %s config: %d settings", category_name, len(category_configs))
+                        self.logger.debug("Initialized %s config: %d settings", category_name, len(category_configs))
                     except AttributeError as e:
                         self.logger.error("Failed to initialize %s config: %s", category_name, e)
 
@@ -326,8 +326,7 @@ class ConfigComposer:
                         try:
                             config_obj.save()
                             saved_count += 1
-                            self.logger.debug("Saved initial value for %s: %s",
-                                            config_obj.env_name, config_obj.value)
+                            # Suppress successful save logs for initial values
                         except (ImportError, AttributeError, ValueError) as e:
                             self.logger.warning("Failed to save initial value for %s: %s",
                                               config_obj.env_name, e)

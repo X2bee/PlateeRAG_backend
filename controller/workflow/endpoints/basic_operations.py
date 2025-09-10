@@ -97,6 +97,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             has_startnode=has_startnode,
             has_endnode=has_endnode,
             is_completed=(has_startnode and has_endnode),
+            workflow_data=workflow_data,
         )
 
         existing_data = app_db.find_by_condition(
@@ -105,7 +106,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
                 "user_id": user_id,
                 "workflow_name": workflow_request.workflow_name,
             },
-            limit=1
+            limit=1,
         )
         if existing_data:
             existing_data_id = existing_data[0].id
@@ -246,6 +247,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
             has_startnode=has_startnode,
             has_endnode=has_endnode,
             is_completed=(has_startnode and has_endnode),
+            workflow_data=workflow_data,
         )
 
         app_db.insert(workflow_meta)
@@ -308,6 +310,7 @@ async def delete_workflow(request: Request, workflow_name: str):
                 "user_id": user_id,
                 "workflow_name": workflow_name,
             },
+            ignore_columns=['workflow_data'],
             limit=1
         )
 
@@ -355,6 +358,7 @@ async def list_workflows_detail(request: Request):
             },
             limit=10000,
             orderby="updated_at",
+            ignore_columns=['workflow_data']
         )
         if groups and groups != None and groups != [] and len(groups) > 0:
             for group_name in groups:
@@ -366,6 +370,7 @@ async def list_workflows_detail(request: Request):
                     },
                     limit=10000,
                     orderby="updated_at",
+                    ignore_columns=['workflow_data']
                 )
                 existing_data.extend(shared_data)
 

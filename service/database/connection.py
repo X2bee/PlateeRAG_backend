@@ -165,16 +165,26 @@ class AppDatabaseManager:
             self.logger.error("Failed to delete %s by condition: %s", model_class.__name__, e)
             return False
 
-    def find_by_id(self, model_class: Type[BaseModel], record_id: int) -> Optional[BaseModel]:
+    def find_by_id(self, model_class: Type[BaseModel], record_id: int, select_columns: List[str] = None, ignore_columns: List[str] = None) -> Optional[BaseModel]:
         """ID로 레코드 조회"""
         try:
             table_name = model_class().get_table_name()
             db_type = self.config_db_manager.db_type
 
-            if db_type == "postgresql":
-                query = f"SELECT * FROM {table_name} WHERE id = %s"
+            # SELECT 컬럼 설정
+            if select_columns:
+                columns_str = ", ".join(select_columns)
+            elif ignore_columns:
+                all_columns = ['id'] + list(model_class().get_schema().keys())
+                filtered_columns = [col for col in all_columns if col not in ignore_columns]
+                columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
             else:
-                query = f"SELECT * FROM {table_name} WHERE id = ?"
+                columns_str = "*"
+
+            if db_type == "postgresql":
+                query = f"SELECT {columns_str} FROM {table_name} WHERE id = %s"
+            else:
+                query = f"SELECT {columns_str} FROM {table_name} WHERE id = ?"
 
             result = self.config_db_manager.execute_query_one(query, (record_id,))
 
@@ -187,16 +197,26 @@ class AppDatabaseManager:
                             model_class.__name__, record_id, e)
             return None
 
-    def find_all(self, model_class: Type[BaseModel], limit: int = 500, offset: int = 0) -> List[BaseModel]:
+    def find_all(self, model_class: Type[BaseModel], limit: int = 500, offset: int = 0, select_columns: List[str] = None, ignore_columns: List[str] = None) -> List[BaseModel]:
         """모든 레코드 조회 (페이징 지원)"""
         try:
             table_name = model_class().get_table_name()
             db_type = self.config_db_manager.db_type
 
-            if db_type == "postgresql":
-                query = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT %s OFFSET %s"
+            # SELECT 컬럼 설정
+            if select_columns:
+                columns_str = ", ".join(select_columns)
+            elif ignore_columns:
+                all_columns = ['id'] + list(model_class().get_schema().keys())
+                filtered_columns = [col for col in all_columns if col not in ignore_columns]
+                columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
             else:
-                query = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT ? OFFSET ?"
+                columns_str = "*"
+
+            if db_type == "postgresql":
+                query = f"SELECT {columns_str} FROM {table_name} ORDER BY id DESC LIMIT %s OFFSET %s"
+            else:
+                query = f"SELECT {columns_str} FROM {table_name} ORDER BY id DESC LIMIT ? OFFSET ?"
 
             results = self.config_db_manager.execute_query(query, (limit, offset))
 
@@ -212,7 +232,9 @@ class AppDatabaseManager:
                          offset: int = 0,
                          orderby: str = "id",
                          orderby_asc: bool = False,
-                         return_list: bool = False) -> List[BaseModel]:
+                         return_list: bool = False,
+                         select_columns: List[str] = None,
+                         ignore_columns: List[str] = None) -> List[BaseModel]:
         """조건으로 레코드 조회"""
         try:
             table_name = model_class().get_table_name()
@@ -254,7 +276,18 @@ class AppDatabaseManager:
 
             values.extend([limit, offset])
             orderby_type = "ASC" if orderby_asc else "DESC"
-            query = f"SELECT * FROM {table_name} WHERE {where_clause} ORDER BY {orderby} {orderby_type} {limit_clause}"
+
+            # SELECT 컬럼 설정
+            if select_columns:
+                columns_str = ", ".join(select_columns)
+            elif ignore_columns:
+                all_columns = ['id'] + list(model_class().get_schema().keys())
+                filtered_columns = [col for col in all_columns if col not in ignore_columns]
+                columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
+            else:
+                columns_str = "*"
+
+            query = f"SELECT {columns_str} FROM {table_name} WHERE {where_clause} ORDER BY {orderby} {orderby_type} {limit_clause}"
 
             results = self.config_db_manager.execute_query(query, tuple(values))
 
