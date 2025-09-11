@@ -195,9 +195,11 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
                     wm.user_id, wm.workflow_id, wm.workflow_name,
                     wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                     wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                    u.full_name
+                    u.full_name, u.username,
+                    dm.is_deployed, dm.deploy_key
                 FROM workflow_meta wm
                 LEFT JOIN users u ON wm.user_id = u.id
+                LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
                 WHERE wm.user_id = %s
                 ORDER BY wm.created_at DESC
                 LIMIT %s OFFSET %s
@@ -210,9 +212,11 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
                     wm.user_id, wm.workflow_id, wm.workflow_name,
                     wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                     wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                    u.full_name, u.username
+                    u.full_name, u.username,
+                    dm.is_deployed, dm.deploy_key
                 FROM workflow_meta wm
                 LEFT JOIN users u ON wm.user_id = u.id
+                LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
                 ORDER BY wm.created_at DESC
                 LIMIT %s OFFSET %s
             """
