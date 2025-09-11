@@ -34,6 +34,7 @@ from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
+from controller.workflow.utils.workflow_helpers import workflow_data_synchronizer
 
 def print_xgen_logo():
     logo = """
@@ -189,24 +190,42 @@ async def lifespan(app: FastAPI):
             logger.warning(f"⚠️  Configuration warning: {warning}")
         logger.info("✅ Step 8: System validation completed!")
 
-        # 8.5. 워크플로우-배포 메타데이터 동기화
-        print_step_banner(8.5, "WORKFLOW-DEPLOY SYNC", "Synchronizing workflow and deploy metadata")
-        logger.info("⚙️  Step 8.5: Workflow-deploy metadata synchronization starting...")
-        
+        # 9. 워크플로우 데이터 동기화
+        print_step_banner(9, "WORKFLOW DATA SYNC", "Synchronizing workflow filesystem and database")
+        logger.info("⚙️  Step 9: Workflow data synchronization starting...")
+
+        try:
+            sync_result = await workflow_data_synchronizer(app.state.app_db)
+            if sync_result["success"]:
+                logger.info(f"✅ Step 9: Workflow data sync completed successfully! "
+                           f"Added {sync_result['files_added_to_db']} to DB, "
+                           f"Created {sync_result['files_created_from_db']} files, "
+                           f"Removed {sync_result['orphaned_db_entries_removed']} orphaned entries, "
+                           f"Processed {sync_result['users_processed']} users")
+            else:
+                logger.warning(f"⚠️  Step 9: Workflow data sync completed with issues. "
+                             f"Errors: {sync_result.get('errors', [])}")
+        except Exception as e:
+            logger.error(f"❌ Step 9: Failed to sync workflow data: {e}")
+
+        # 9.5. 워크플로우-배포 메타데이터 동기화
+        print_step_banner(9.5, "WORKFLOW-DEPLOY SYNC", "Synchronizing workflow and deploy metadata")
+        logger.info("⚙️  Step 9.5: Workflow-deploy metadata synchronization starting...")
+
         try:
             sync_result = sync_workflow_deploy_meta(app.state.app_db)
             if sync_result["success"]:
-                logger.info(f"✅ Step 8.5: Workflow-deploy sync completed successfully! "
+                logger.info(f"✅ Step 9.5: Workflow-deploy sync completed successfully! "
                            f"Created {sync_result['created_deploys']} new deploy entries from "
                            f"{sync_result['total_workflows']} total workflows")
             else:
-                logger.warning(f"⚠️  Step 8.5: Workflow-deploy sync completed with issues. "
+                logger.warning(f"⚠️  Step 9.5: Workflow-deploy sync completed with issues. "
                              f"Errors: {sync_result.get('errors', [])}")
         except Exception as e:
-            logger.error(f"❌ Step 8.5: Failed to sync workflow-deploy metadata: {e}")
+            logger.error(f"❌ Step 9.5: Failed to sync workflow-deploy metadata: {e}")
 
-        print_step_banner(9, "NODE DISCOVERY", "Discovering and registering XGEN nodes")
-        logger.info("⚙️  Step 9: Node discovery starting...")
+        print_step_banner(10, "NODE DISCOVERY", "Discovering and registering XGEN nodes")
+        logger.info("⚙️  Step 10: Node discovery starting...")
 
         run_discovery()
         registry_path = configs["node"].REGISTRY_FILE_PATH.value
@@ -219,7 +238,7 @@ async def lifespan(app: FastAPI):
         register_node_api_routes()
         logger.info("✅ Node API routes registered successfully!")
 
-        logger.info(f"✅ Step 9: Node discovery completed! Registered {app.state.node_count} nodes")
+        logger.info(f"✅ Step 10: Node discovery completed! Registered {app.state.node_count} nodes")
 
 
         print_step_banner("FINAL", "XGEN STARTUP COMPLETE", "All systems operational! 🎉")

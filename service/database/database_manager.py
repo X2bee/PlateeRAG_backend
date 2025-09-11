@@ -316,18 +316,18 @@ class DatabaseManager:
         """스키마 변경 감지 및 마이그레이션 실행"""
         try:
             self.logger.info("Running schema migrations...")
-            self.logger.info(f"Registered models: {[model.__name__ for model in models_registry]}")
+            self.logger.debug(f"Registered models: {[model.__name__ for model in models_registry]}")
 
             for model_class in models_registry:
                 table_name = model_class().get_table_name()
                 expected_schema = model_class().get_schema()
 
-                self.logger.info(f"Checking schema for table: {table_name}")
-                self.logger.info(f"Expected schema: {expected_schema}")
+                self.logger.debug(f"Checking schema for table: {table_name}")
+                self.logger.debug(f"Expected schema: {expected_schema}")
 
                 # Get current table structure
                 current_columns = self._get_table_columns(table_name)
-                self.logger.info(f"Current columns: {current_columns}")
+                self.logger.debug(f"Current columns: {current_columns}")
 
                 if not current_columns:
                     self.logger.warning(f"Table {table_name} does not exist or has no columns")

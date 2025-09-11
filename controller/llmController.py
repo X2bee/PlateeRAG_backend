@@ -66,7 +66,32 @@ async def get_llm_status(request: Request):
             "warnings": sgl_validation.get("warnings")
         }
 
-        # 사용 가능한 제공자 목록
+        gemini_config = {}
+        gemini_config['base_url'] = config_composer.get_config_by_name("GEMINI_API_BASE_URL").value
+        gemini_config['api_key'] = config_composer.get_config_by_name("GEMINI_API_KEY").value
+        gemini_config['model_name'] = config_composer.get_config_by_name("GEMINI_MODEL_DEFAULT").value
+
+        gemini_validation = llm_service.validate_provider_config("gemini", gemini_config)
+        providers_status["gemini"] = {
+            "configured": gemini_validation["valid"],
+            "available": gemini_validation["valid"],
+            "error": gemini_validation.get("error", gemini_validation.get("errors")),
+            "warnings": gemini_validation.get("warnings")
+        }
+
+        anthropic_config = {}
+        anthropic_config['base_url'] = config_composer.get_config_by_name("ANTHROPIC_API_BASE_URL").value
+        anthropic_config['api_key'] = config_composer.get_config_by_name("ANTHROPIC_API_KEY").value
+        anthropic_config['model_name'] = config_composer.get_config_by_name("ANTHROPIC_MODEL_DEFAULT").value
+
+        anthropic_validation = llm_service.validate_provider_config("anthropic", anthropic_config)
+        providers_status["anthropic"] = {
+            "configured": anthropic_validation["valid"],
+            "available": anthropic_validation["valid"],
+            "error": anthropic_validation.get("error", anthropic_validation.get("errors")),
+            "warnings": anthropic_validation.get("warnings")
+        }
+
         available_providers = [provider for provider, status in providers_status.items() if status["available"]]
 
         return {
@@ -87,8 +112,8 @@ async def switch_llm_provider(request: Request, request_context: dict):
         if not provider:
             raise HTTPException(status_code=400, detail="Provider is required")
 
-        if provider not in ["openai", "vllm", "sgl"]:
-            raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai', 'vllm', or 'sgl'")
+        if provider not in ["openai", "vllm", "sgl", "gemini", "anthropic"]:
+            raise HTTPException(status_code=400, detail="Invalid provider. Must be 'openai', 'vllm', 'sgl', 'gemini', or 'anthropic'")
 
         config_composer = get_config_composer(request)
         default_provider_config = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER")
@@ -149,6 +174,22 @@ async def test_connection(request: Request, category: str):
             }
             return await llm_service.test_sgl_connection(config_data)
 
+        elif category == "gemini":
+            config_data = {
+                'base_url': config_composer.get_config_by_name("GEMINI_API_BASE_URL").value,
+                'api_key': config_composer.get_config_by_name("GEMINI_API_KEY").value,
+                'model_name': config_composer.get_config_by_name("GEMINI_MODEL_DEFAULT").value
+            }
+            return await llm_service.test_gemini_connection(config_data)
+
+        elif category == "anthropic":
+            config_data = {
+                'base_url': config_composer.get_config_by_name("ANTHROPIC_API_BASE_URL").value,
+                'api_key': config_composer.get_config_by_name("ANTHROPIC_API_KEY").value,
+                'model_name': config_composer.get_config_by_name("ANTHROPIC_MODEL_DEFAULT").value
+            }
+            return await llm_service.test_anthropic_connection(config_data)
+
         elif category == "llm":
             current_provider = config_composer.get_config_by_name('DEFAULT_LLM_PROVIDER').value
 
@@ -176,6 +217,21 @@ async def test_connection(request: Request, category: str):
                 }
                 return await llm_service.test_sgl_connection(config_data)
 
+            elif current_provider == "gemini":
+                config_data = {
+                    'base_url': config_composer.get_config_by_name("GEMINI_API_BASE_URL").value,
+                    'api_key': config_composer.get_config_by_name("GEMINI_API_KEY").value,
+                    'model_name': config_composer.get_config_by_name("GEMINI_MODEL_DEFAULT").value
+                }
+                return await llm_service.test_gemini_connection(config_data)
+
+            elif current_provider == "anthropic":
+                config_data = {
+                    'base_url': config_composer.get_config_by_name("ANTHROPIC_API_BASE_URL").value,
+                    'api_key': config_composer.get_config_by_name("ANTHROPIC_API_KEY").value,
+                    'model_name': config_composer.get_config_by_name("ANTHROPIC_MODEL_DEFAULT").value
+                }
+                return await llm_service.test_anthropic_connection(config_data)
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported LLM provider: {current_provider}")
 

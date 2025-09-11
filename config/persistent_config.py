@@ -30,7 +30,7 @@ def load_config_data() -> Dict[str, Any]:
     ensure_config_directory()
 
     if not os.path.exists(CONFIG_DB_PATH):
-        logger.info("Config file not found at %s, creating new one", CONFIG_DB_PATH)
+        logger.debug("Config file not found at %s, creating new one", CONFIG_DB_PATH)
         return {}
 
     try:
@@ -66,7 +66,7 @@ def get_config_value_from_db(config_path: str) -> Optional[Any]:
                 logger.error("Database connection failed and JSON fallback is disabled (DISABLE_JSON_FALLBACK=true)")
                 raise ConnectionError("Database connection failed and JSON fallback is disabled")
 
-            logger.info("Database connection unavailable, using JSON fallback for config: %s", config_path)
+            logger.debug("Database connection unavailable, using JSON fallback for config: %s", config_path)
             return get_config_value_from_json(config_path)
 
         logger.debug("Fetching config from database: %s", config_path)
@@ -157,7 +157,7 @@ def set_config_value_to_db(config_path: str, value: Any):
             """
 
         db_manager.execute_query(query, (config_path, config_value, data_type))
-        logger.info("Config successfully saved to database: %s = %s", config_path, value)
+        logger.debug("Config successfully saved to database: %s = %s", config_path, value)
 
     except Exception as e:
         if not JSON_FALLBACK_ENABLED:
@@ -218,7 +218,7 @@ class PersistentConfig(Generic[T]):
         self.config_value = get_config_value(config_path)
 
         if self.config_value is not None:
-            logger.info("'%s' loaded from database: %s (overrides default: %s)",
+            logger.debug("'%s' loaded from database: %s (overrides default: %s)",
                        env_name, self.config_value, env_value)
             # type_converter가 있고 config_value가 문자열인 경우 변환 적용
             if self.type_converter and isinstance(self.config_value, str):
@@ -232,7 +232,7 @@ class PersistentConfig(Generic[T]):
             else:
                 self.value = self.config_value
         else:
-            logger.info("'%s' using default value: %s (no database value found)", env_name, env_value)
+            logger.debug("'%s' using default value: %s (no database value found)", env_name, env_value)
             self.value = env_value
 
         # 전역 레지스트리에 중복 확인 후 등록
@@ -292,10 +292,10 @@ class PersistentConfig(Generic[T]):
 
     def save(self):
         """현재 값을 데이터베이스에 저장"""
-        logger.info("Saving config '%s' to database: %s", self.env_name, self.value)
+        logger.debug("Saving config '%s' to database: %s", self.env_name, self.value)
         set_config_value(self.config_path, self.value)
         self.config_value = self.value
-        logger.info("Config '%s' successfully saved to database", self.env_name)
+        logger.debug("Config '%s' successfully saved to database", self.env_name)
 
     def reset_to_default(self):
         """기본값으로 재설정"""
