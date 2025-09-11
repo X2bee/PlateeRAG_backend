@@ -1,0 +1,51 @@
+FROM vault.habana.ai/gaudi-docker/1.22.0/ubuntu24.04/habanalabs/pytorch-installer-2.7.1:latest
+
+WORKDIR /app
+
+# 필수 빌드 도구 설치
+RUN apt-get update && apt-get install -y \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Habana VLLM fork 클론 및 체크아웃
+RUN git clone https://github.com/HabanaAI/vllm-fork.git /workspace/vllm && \
+    cd /workspace/vllm && \
+    git checkout v0.9.0.1+Gaudi-1.22.0
+
+# VLLM HPU 의존성 설치
+WORKDIR /workspace/vllm
+RUN pip install -v -r requirements-hpu.txt
+
+# VLLM 설치 (HPU 타겟으로)
+RUN VLLM_TARGET_DEVICE=hpu python setup.py install
+
+# Gaudi 서비스에 필요한 의존성들 설치
+RUN pip install \
+    fastapi \
+    uvicorn \
+    pydantic \
+    psutil \
+    qdrant-client \
+    sentence-transformers \
+    sqlalchemy \
+    psycopg2-binary
+
+# 개발 의존성 설치 (테스트 유틸리티)
+RUN pip install -e tests/vllm_test_utils
+
+# 작업 디렉토리를 다시 /app으로 변경
+WORKDIR /app
+
+# 우리 서비스 코드 복사
+COPY gaudi_service.py .
+COPY controller/gaudiController_original.py controller/gaudiController_original.py
+COPY controller/helper/ controller/helper/
+
+# 환경 변수 설정
+ENV PYTHONPATH="/workspace/vllm:$PYTHONPATH"
+ENV VLLM_TARGET_DEVICE=hpu
+
+EXPOSE 8080
+
+CMD ["python", "-m", "uvicorn", "gaudi_service:app", "--host", "0.0.0.0", "--port", "8080"]
