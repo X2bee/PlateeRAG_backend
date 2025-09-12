@@ -6,7 +6,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_db_manager
-from controller.workflow.utils.data_parsers import safe_round_float
+from controller.helper.utils.data_parsers import safe_round_float
+from service.database.logger_helper import create_logger
 
 from service.database.models.performance import NodePerformance
 
@@ -19,9 +20,16 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
     특정 워크플로우의 성능 통계를 반환합니다.
     node_id와 node_name별로 평균 성능 지표를 계산합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        user_id = extract_user_id_from_request(request)
-        app_db = get_db_manager(request)
+        backend_log.info("Retrieving workflow performance statistics",
+                        metadata={"workflow_name": workflow_name, "workflow_id": workflow_id})
 
         # SQL 쿼리 작성
         query = """
@@ -49,6 +57,8 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
         result = app_db.config_db_manager.execute_query(query, (workflow_name, workflow_id, user_id))
 
         if not result:
+            backend_log.info("No performance data found",
+                           metadata={"workflow_name": workflow_name, "workflow_id": workflow_id})
             logger.info(f"No performance data found for workflow: {workflow_name} ({workflow_id})")
             return JSONResponse(content={
                 "workflow_name": workflow_name,
@@ -105,10 +115,20 @@ async def get_workflow_performance(request: Request, workflow_name: str, workflo
             "performance_stats": performance_stats
         }
 
+        backend_log.success("Successfully retrieved workflow performance statistics",
+                          metadata={"workflow_name": workflow_name,
+                                  "workflow_id": workflow_id,
+                                  "total_executions": total_executions,
+                                  "nodes_analyzed": len(performance_stats),
+                                  "gpu_executions": total_gpu_executions,
+                                  "avg_processing_time": round(float(avg_total_processing_time), 2)})
+
         logger.info(f"Performance stats retrieved for workflow: {workflow_name} ({workflow_id})")
         return JSONResponse(content=response_data)
 
     except Exception as e:
+        backend_log.error("Failed to retrieve workflow performance statistics", exception=e,
+                         metadata={"workflow_name": workflow_name, "workflow_id": workflow_id})
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
 
@@ -117,9 +137,17 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
     """
     특정 워크플로우의 성능 데이터를 삭제합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        user_id = extract_user_id_from_request(request)
-        app_db = get_db_manager(request)
+        backend_log.info("Starting workflow performance data deletion",
+                        metadata={"workflow_name": workflow_name, "workflow_id": workflow_id})
+
         existing_data = app_db.find_by_condition(
             NodePerformance,
             {
@@ -133,6 +161,8 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
         delete_count = len(existing_data) if existing_data else 0
 
         if delete_count == 0:
+            backend_log.info("No performance data found to delete",
+                           metadata={"workflow_name": workflow_name, "workflow_id": workflow_id})
             logger.info(f"No performance data found to delete for workflow: {workflow_name} ({workflow_id})")
             return JSONResponse(content={
                 "workflow_name": workflow_name,
@@ -158,9 +188,18 @@ async def delete_workflow_performance(request: Request, workflow_name: str, work
             "message": f"Successfully deleted {delete_count} performance records"
         }
 
+        backend_log.success("Successfully deleted workflow performance data",
+                          metadata={"workflow_name": workflow_name,
+                                  "workflow_id": workflow_id,
+                                  "deleted_count": delete_count})
+
         logger.info(f"Deleted {delete_count} performance records for workflow: {workflow_name} ({workflow_id})")
         return JSONResponse(content=response_data)
 
     except Exception as e:
+        backend_log.error("Failed to delete workflow performance data", exception=e,
+                         metadata={"workflow_name": workflow_name,
+                                 "workflow_id": workflow_id,
+                                 "expected_delete_count": delete_count if 'delete_count' in locals() else 0})
         logger.error(f"Error deleting performance data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete performance data: {str(e)}")

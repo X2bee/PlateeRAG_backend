@@ -9,7 +9,6 @@ from service.retrieval.rag_service import RAGService
 from service.database.performance_controller_helper import PerformanceControllerHelper
 from service.stt.huggingface_stt import HuggingFaceSTT
 
-
 def get_db_manager(request: Request) -> AppDatabaseManager:
     """데이터베이스 매니저 의존성 주입"""
     if hasattr(request.app.state, 'app_db') and request.app.state.app_db:
