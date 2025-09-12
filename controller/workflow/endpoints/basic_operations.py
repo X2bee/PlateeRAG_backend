@@ -387,8 +387,6 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
             raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
         if not deploy_data[0].is_accepted:
             raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
-        if deploy_data[0].is_deployed:
-            raise HTTPException(status_code=400, detail="배포된 워크플로우는 삭제할 수 없습니다. 배포를 해제한 후 다시 시도하세요.")
 
         deploy_meta = deploy_data[0]
 
