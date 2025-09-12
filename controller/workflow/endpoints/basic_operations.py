@@ -6,6 +6,8 @@ import json
 import copy
 from datetime import datetime
 import logging
+import secrets
+import string
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
@@ -275,20 +277,48 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
                 "user_id": user_id,
                 "workflow_name": workflow_name
             },
+            limit=1
         )
 
         if not existing_data:
             raise HTTPException(status_code=404, detail="Workflow not found")
         existing_data = existing_data[0]
 
+        deploy_data = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+        if not deploy_data:
+            raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
+        deploy_meta = deploy_data[0]
+
         existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
         existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
 
+        deploy_enabled = update_dict.get("enable_deploy", deploy_meta.is_deployed)
+        deploy_meta.is_deployed = deploy_enabled
+
+        if deploy_enabled:
+            alphabet = string.ascii_letters + string.digits
+            deploy_key = ''.join(secrets.choice(alphabet) for _ in range(32))
+            deploy_meta.deploy_key = deploy_key
+
+            logger.info(f"Generated new deploy key for workflow: {workflow_name}")
+        else:
+            deploy_meta.deploy_key = ""
+            logger.info(f"Cleared deploy key for workflow: {workflow_name}")
+
         app_db.update(existing_data)
+        app_db.update(deploy_meta)
 
         return {
             "message": "Workflow updated successfully",
-            "workflow_name": existing_data.workflow_name
+            "workflow_name": existing_data.workflow_name,
+            "deploy_key": deploy_meta.deploy_key if deploy_meta.is_deployed else None,
         }
 
     except Exception as e:
@@ -315,6 +345,11 @@ async def delete_workflow(request: Request, workflow_name: str):
         )
 
         app_db.delete(WorkflowMeta, existing_data[0].id if existing_data else None)
+        app_db.delete_by_condition(DeployMeta, {
+            "user_id": user_id,
+            "workflow_id": existing_data[0].workflow_id,
+            "workflow_name": workflow_name,
+        })
 
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)

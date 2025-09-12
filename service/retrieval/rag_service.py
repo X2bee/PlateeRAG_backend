@@ -1121,6 +1121,7 @@ class RAGService:
             batch_size = 50
             total_processed = 0
 
+            new_points = []
             for i in range(0, len(all_points), batch_size):
                 batch_points = all_points[i:i + batch_size]
                 batch_texts = [point.payload.get('chunk_text', '') for point in batch_points]
@@ -1138,7 +1139,7 @@ class RAGService:
                     raise HTTPException(status_code=500, detail=f"Failed to generate new embeddings: {e}")
 
                 # 새로운 포인트 생성 (딕셔너리 형태로)
-                new_points = []
+
                 for j, point in enumerate(batch_points):
                     new_point = {
                         "id": point.id,
@@ -1147,21 +1148,20 @@ class RAGService:
                     }
                     new_points.append(new_point)
 
-                # 새 컬렉션에 삽입
-                try:
-                    self.vector_manager.insert_points(new_collection_name, new_points)
-                    total_processed += len(new_points)
+            try:
+                self.vector_manager.insert_points(new_collection_name, new_points)
+                total_processed += len(new_points)
 
-                    if (i // batch_size + 1) % 10 == 0:
-                        logger.info(f"Processed {total_processed}/{len(all_points)} chunks")
-                except Exception as e:
-                    logger.error(f"Failed to insert batch {i//batch_size + 1} into new collection: {e}")
-                    # 새 컬렉션 정리
-                    try:
-                        self.vector_manager.delete_collection(new_collection_name)
-                    except:
-                        pass
-                    raise HTTPException(status_code=500, detail=f"Failed to insert points into new collection: {e}")
+                if (i // batch_size + 1) % 10 == 0:
+                    logger.info(f"Processed {total_processed}/{len(all_points)} chunks")
+            except Exception as e:
+                logger.error(f"Failed to insert batch {i//batch_size + 1} into new collection: {e}")
+                # 새 컬렉션 정리
+                try:
+                    self.vector_manager.delete_collection(new_collection_name)
+                except:
+                    pass
+                raise HTTPException(status_code=500, detail=f"Failed to insert points into new collection: {e}")
 
             logger.info(f"Successfully re-embedded all {total_processed} chunks")
 
@@ -1174,9 +1174,33 @@ class RAGService:
                 # 원본 삭제 실패 시 새 컬렉션 유지하고 경고만 출력
                 logger.warning(f"Original collection '{collection_name}' could not be deleted, but new collection '{new_collection_name}' is ready")
 
-            final_collection_name = new_collection_name
 
-            # 8. 데이터베이스 메타데이터 업데이트
+            # 8. 다시 원본 컬렉션 이름으로 생성 후 성공시 새 컬렉션 삭제
+            try:
+                #원본 이름으로 컬렉션 생성
+                self.vector_manager.create_collection(
+                    collection_name=collection_name,
+                    vector_size=current_vector_size,
+                    distance=distance_metric
+                )
+                #새 컬렉션의 모든 포인트를 원본 이름 컬렉션에 삽입
+                self.vector_manager.insert_points(collection_name, new_points)
+                total_processed += len(new_points)
+
+                if (i // batch_size + 1) % 10 == 0:
+                    logger.info(f"Processed {total_processed}/{len(all_points)} chunks")
+
+                self.vector_manager.delete_collection(new_collection_name)
+                logger.info(f"Deleted temporary collection '{new_collection_name}' after successful remake")
+                final_collection_name = collection_name
+
+            except Exception as e:
+                logger.error(f"Failed to recreate original collection '{collection_name}': {e}")
+                logger.info(f"Keeping temporary collection '{new_collection_name}' for inspection")
+                self.vector_manager.delete_collection(collection_name)
+                final_collection_name = new_collection_name
+
+            # 9. 데이터베이스 메타데이터 업데이트
             logger.info("Updating database metadata")
 
             # VectorDB 메타데이터 업데이트
@@ -1210,8 +1234,6 @@ class RAGService:
             }
             app_db.update_list_columns(VectorDBChunkEdge, edge_updates, conditions)
             app_db.update_list_columns(VectorDBFolders, edge_updates, conditions)
-
-            # 9. 처리된 고유 문서 수 계산
             unique_document_ids = set()
             for point in all_points:
                 if 'document_id' in point.payload:

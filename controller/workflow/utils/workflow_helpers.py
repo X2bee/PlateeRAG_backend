@@ -7,6 +7,7 @@ import logging
 from typing import Dict, Any
 
 from service.database.models.workflow import WorkflowMeta
+from service.database.models.deploy import DeployMeta
 from controller.workflow.helper import _workflow_parameter_helper, _default_workflow_parameter_helper
 
 logger = logging.getLogger("workflow-helpers")
@@ -163,6 +164,7 @@ async def workflow_data_synchronizer(app_db) -> Dict[str, Any]:
                         # workflow_data가 없는 경우 DB에서 삭제
                         try:
                             app_db.delete(WorkflowMeta, db_workflow['id'])
+                            app_db.delete(DeployMeta, {"user_id": user_id, "workflow_id": db_workflow['workflow_id']})
                             sync_results["orphaned_db_entries_removed"] += 1
                             logger.info("Removed orphaned database entry for workflow '%s' for user %s", workflow_name, user_id)
 
@@ -219,6 +221,7 @@ async def workflow_data_synchronizer(app_db) -> Dict[str, Any]:
                         # workflow_data가 없는 경우 DB에서 삭제
                         try:
                             app_db.delete(WorkflowMeta, workflow['id'])
+                            app_db.delete(DeployMeta, {"user_id": user_id, "workflow_id": workflow['workflow_id']})
                             sync_results["orphaned_db_entries_removed"] += 1
                             logger.info("Removed orphaned database entry for workflow '%s' for user %s", workflow_name, user_id)
 

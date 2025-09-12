@@ -21,4 +21,4 @@ router.include_router(execution.router, prefix="/execute")
 router.include_router(performance.router, prefix="/performance")
 
 # 테스터 관련 라우터 포함  
-router.include_router(tester.router, prefix="/tester")
+router.include_router(tester.router, prefix="/execute/tester")

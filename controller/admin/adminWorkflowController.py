@@ -1,5 +1,8 @@
 import logging
 import json
+import string
+import secrets
+import os
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -9,6 +12,7 @@ from controller.workflow.utils.data_parsers import parse_input_data
 
 from service.database.models.executor import ExecutionIO
 from service.database.models.workflow import WorkflowMeta
+from service.database.models.deploy import DeployMeta
 
 logger = logging.getLogger("admin-workflow-controller")
 router = APIRouter(prefix="/workflow", tags=["Admin"])
@@ -191,9 +195,11 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
                     wm.user_id, wm.workflow_id, wm.workflow_name,
                     wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                     wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                    u.full_name
+                    u.full_name, u.username,
+                    dm.is_deployed, dm.deploy_key
                 FROM workflow_meta wm
                 LEFT JOIN users u ON wm.user_id = u.id
+                LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
                 WHERE wm.user_id = %s
                 ORDER BY wm.created_at DESC
                 LIMIT %s OFFSET %s
@@ -206,9 +212,11 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
                     wm.user_id, wm.workflow_id, wm.workflow_name,
                     wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                     wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                    u.full_name, u.username
+                    u.full_name, u.username,
+                    dm.is_deployed, dm.deploy_key
                 FROM workflow_meta wm
                 LEFT JOIN users u ON wm.user_id = u.id
+                LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
                 ORDER BY wm.created_at DESC
                 LIMIT %s OFFSET %s
             """
@@ -229,3 +237,118 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         ) from e
+
+
+@router.post("/update/{workflow_name}")
+async def update_workflow(request: Request, workflow_name: str, update_dict: dict):
+    validate_superuser(request)
+    app_db = get_db_manager(request)
+    user_id = update_dict.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required in the update data")
+
+    try:
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name
+            },
+            limit=1
+        )
+
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        existing_data = existing_data[0]
+
+        deploy_data = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+        if not deploy_data:
+            raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
+        deploy_meta = deploy_data[0]
+
+        existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
+        existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
+
+        deploy_enabled = update_dict.get("enable_deploy", deploy_meta.is_deployed)
+        deploy_meta.is_deployed = deploy_enabled
+
+        if deploy_enabled:
+            alphabet = string.ascii_letters + string.digits
+            deploy_key = ''.join(secrets.choice(alphabet) for _ in range(32))
+            deploy_meta.deploy_key = deploy_key
+
+            logger.info(f"Generated new deploy key for workflow: {workflow_name}")
+        else:
+            deploy_meta.deploy_key = ""
+            logger.info(f"Cleared deploy key for workflow: {workflow_name}")
+
+        app_db.update(existing_data)
+        app_db.update(deploy_meta)
+
+        return {
+            "message": "Workflow updated successfully",
+            "workflow_name": existing_data.workflow_name,
+            "deploy_key": deploy_meta.deploy_key if deploy_meta.is_deployed else None,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to update workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
+
+
+
+
+@router.delete("/delete/{workflow_name}")
+async def delete_workflow(request: Request, user_id, workflow_name: str):
+    """
+    특정 workflow를 삭제합니다.
+    """
+    try:
+        validate_superuser(request)
+        app_db = get_db_manager(request)
+
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+            },
+            ignore_columns=['workflow_data'],
+            limit=1
+        )
+
+        app_db.delete(WorkflowMeta, existing_data[0].id if existing_data else None)
+        app_db.delete_by_condition(DeployMeta, {
+            "user_id": user_id,
+            "workflow_id": existing_data[0].workflow_id,
+            "workflow_name": workflow_name,
+        })
+
+        downloads_path = os.path.join(os.getcwd(), "downloads")
+        download_path_id = os.path.join(downloads_path, user_id)
+        filename = f"{workflow_name}.json"
+        file_path = os.path.join(download_path_id, filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+        os.remove(file_path)
+
+        logger.info(f"Workflow deleted successfully: {filename}")
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Workflow '{workflow_name}' deleted successfully"
+        })
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+    except Exception as e:
+        logger.error(f"Error deleting workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete workflow: {str(e)}")
