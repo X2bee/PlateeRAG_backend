@@ -5,6 +5,7 @@ from fastapi import APIRouter, Request, HTTPException
 from controller.helper.controllerHelper import require_admin_access
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from controller.admin.adminBaseController import validate_superuser
+from service.database.logger_helper import create_logger
 
 # authController에서 필요한 함수들과 모델들 import
 from controller.authController import (LoginRequest, LoginResponse, login, find_user_by_email)
@@ -25,12 +26,15 @@ async def superuser_login(request: Request, login_data: LoginRequest):
 
     기본 로그인 함수를 사용하되 슈퍼유저 검증만 추가
     """
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, None, request)
+
     try:
         # 먼저 사용자가 슈퍼유저인지 확인
-        app_db = get_db_manager(request)
         user = find_user_by_email(app_db, login_data.email)
 
         if not user:
+            backend_log.warn(f"Superuser login attempt with invalid email: {login_data.email}")
             raise HTTPException(
                 status_code=401,
                 detail="Invalid email or password"
@@ -38,6 +42,8 @@ async def superuser_login(request: Request, login_data: LoginRequest):
 
         # 슈퍼유저 여부 확인
         if user.user_type != "superuser":
+            backend_log.warn(f"Non-superuser attempted superuser login: {login_data.email}",
+                           metadata={"user_type": user.user_type, "user_id": user.id})
             raise HTTPException(
                 status_code=403,
                 detail="Superuser privileges required"
@@ -49,6 +55,8 @@ async def superuser_login(request: Request, login_data: LoginRequest):
         # 로그인 성공 시 메시지 수정
         if result.success:
             result.message = "Superuser login successful"
+            backend_log.success(f"Superuser login successful: {login_data.email}",
+                              metadata={"user_id": user.id, "email": login_data.email})
             logger.info(f"Superuser logged in: {login_data.email}")
 
         return result
@@ -56,6 +64,8 @@ async def superuser_login(request: Request, login_data: LoginRequest):
     except HTTPException:
         raise
     except Exception as e:
+        backend_log.error("Superuser login error", exception=e,
+                         metadata={"email": login_data.email})
         logger.error(f"Superuser login error: {str(e)}")
         raise HTTPException(
             status_code=500,
@@ -71,6 +81,9 @@ async def get_all_users(request: Request, page: int = 1, page_size: int = 100):
             detail="Admin privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
         # 페이지 번호 검증
         if page < 1:
@@ -80,9 +93,10 @@ async def get_all_users(request: Request, page: int = 1, page_size: int = 100):
 
         offset = (page - 1) * page_size
 
-        app_db = get_db_manager(request)
         users = app_db.find_all(User, limit=page_size, offset=offset)
 
+        backend_log.success("Successfully fetched all users",
+                          metadata={"page": page, "page_size": page_size, "returned_count": len(users)})
         return {
             "users": users,
             "pagination": {
@@ -93,6 +107,8 @@ async def get_all_users(request: Request, page: int = 1, page_size: int = 100):
             }
         }
     except Exception as e:
+        backend_log.error("Error fetching all users", exception=e,
+                         metadata={"page": page, "page_size": page_size})
         logger.error(f"Error fetching all users: {str(e)}")
         raise HTTPException(
             status_code=500,
@@ -108,11 +124,16 @@ async def get_standby_users(request: Request):
             detail="Admin privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
-        app_db = get_db_manager(request)
         users = app_db.find_by_condition(User, {"is_active": False})
+        backend_log.success("Successfully fetched standby users",
+                          metadata={"standby_user_count": len(users)})
         return {"users": users}
     except Exception as e:
+        backend_log.error("Error fetching standby users", exception=e)
         logger.error(f"Error fetching standby users: {str(e)}")
         raise HTTPException(
             status_code=500,
@@ -128,8 +149,10 @@ async def approve_user(request: Request, user_data: dict):
             detail="Admin privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
-        app_db = get_db_manager(request)
         user_id = user_data.get("id")
         username = user_data.get("username")
         user_email = user_data.get("email")
@@ -137,6 +160,7 @@ async def approve_user(request: Request, user_data: dict):
         # 사용자 존재 여부 확인
         db_user_info = app_db.find_by_condition(User, {"id": user_id, "is_active": False})
         if not db_user_info:
+            backend_log.warn(f"User not found for approval: {user_id}")
             raise HTTPException(
                 status_code=404,
                 detail="User not found"
@@ -146,6 +170,9 @@ async def approve_user(request: Request, user_data: dict):
 
         # 사용자 정보 일치 확인
         if db_user_info.username != username or db_user_info.email != user_email:
+            backend_log.warn(f"User information mismatch during approval: {user_id}",
+                           metadata={"provided_username": username, "provided_email": user_email,
+                                   "db_username": db_user_info.username, "db_email": db_user_info.email})
             raise HTTPException(
                 status_code=400,
                 detail="User information mismatch"
@@ -153,6 +180,7 @@ async def approve_user(request: Request, user_data: dict):
 
         # 이미 활성화된 사용자인지 확인
         if db_user_info.is_active:
+            backend_log.warn(f"User already active during approval attempt: {user_id}")
             raise HTTPException(
                 status_code=400,
                 detail="User is already active"
@@ -161,6 +189,8 @@ async def approve_user(request: Request, user_data: dict):
         db_user_info.is_active = True
         app_db.update(db_user_info)
 
+        backend_log.success(f"Successfully approved user: {username} ({user_id})",
+                          metadata={"user_id": user_id, "username": username, "email": user_email})
         logger.info(f"Successfully approved user {user_id} ({username})")
         return {
             "detail": "User approved successfully",
@@ -172,6 +202,8 @@ async def approve_user(request: Request, user_data: dict):
             }
         }
     except Exception as e:
+        backend_log.error("Error approving user", exception=e,
+                         metadata={"user_data": user_data})
         logger.error(f"Error approving user: {str(e)}")
         raise HTTPException(
             status_code=500,
@@ -187,13 +219,16 @@ async def edit_user(request: Request, user_data: dict):
             detail="Admin privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
-        app_db = get_db_manager(request)
         user_id = user_data.get("id")
 
         # 사용자 존재 여부 확인
         db_user_info = app_db.find_by_condition(User, {"id": user_id})
         if not db_user_info:
+            backend_log.warn(f"User not found for editing: {user_id}")
             raise HTTPException(
                 status_code=404,
                 detail="User not found"
@@ -210,22 +245,10 @@ async def edit_user(request: Request, user_data: dict):
         db_user_info.is_active = user_data.get("is_active", db_user_info.is_active)
         db_user_info.password_hash = user_data.get("password_hash", db_user_info.password_hash)
 
-        # app_db.update_list_columns(
-        #     User,
-        #     {
-        #         "email": user_data.get("email", db_user_info.email),
-        #         "username": user_data.get("username", db_user_info.username),
-        #         "full_name": user_data.get("full_name", db_user_info.full_name),
-        #         "is_admin": user_data.get("is_admin", db_user_info.is_admin),
-        #         "user_type": user_data.get("user_type", db_user_info.user_type),
-        #         "preferences": user_data.get("preferences", db_user_info.preferences),
-        #         "is_active": user_data.get("is_active", db_user_info.is_active),
-        #         "password_hash": user_data.get("password_hash", db_user_info.password_hash)
-        #     },
-        #     {"id": user_id}
-        # )
         app_db.update(db_user_info)
 
+        backend_log.success(f"Successfully edited user: {user_id}",
+                          metadata={"user_id": user_id, "updated_fields": list(user_data.keys())})
         logger.info(f"Successfully edited user {user_id}")
         return {
             "detail": "User approved successfully",
@@ -234,6 +257,8 @@ async def edit_user(request: Request, user_data: dict):
             }
         }
     except Exception as e:
+        backend_log.error("Error editing user", exception=e,
+                         metadata={"user_data": user_data})
         logger.error(f"Error approving user: {str(e)}")
         raise HTTPException(
             status_code=500,

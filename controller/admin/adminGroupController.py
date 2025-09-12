@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Request, HTTPException
 from controller.helper.singletonHelper import get_db_manager
 from controller.admin.adminBaseController import validate_superuser
+from service.database.logger_helper import create_logger
 
 from service.database.models.group import GroupMeta
 from service.database.models.user import User
@@ -25,11 +26,16 @@ async def get_all_groups(request: Request):
             detail="Admin privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
-        app_db = get_db_manager(request)
         groups = app_db.find_all(GroupMeta)
+        backend_log.success("Successfully fetched all groups",
+                          metadata={"group_count": len(groups)})
         return {"groups": groups}
     except Exception as e:
+        backend_log.error("Error fetching all groups", exception=e)
         logger.error("Error fetching all groups: %s", str(e))
         raise HTTPException(
             status_code=500,
@@ -62,11 +68,14 @@ async def create_group(request: Request, group_data: GroupData):
             detail="Admin privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
-        app_db = get_db_manager(request)
         exist_group = app_db.find_by_condition(GroupMeta, {'group_name': group_data.group_name})
 
         if exist_group:
+            backend_log.warn(f"Attempt to create existing group: {group_data.group_name}")
             raise HTTPException(
                 status_code=400,
                 detail="Group with this name already exists"
@@ -79,8 +88,12 @@ async def create_group(request: Request, group_data: GroupData):
         )
 
         app_db.insert(group)
+        backend_log.success(f"Successfully created group: {group_data.group_name}",
+                          metadata={"group_name": group_data.group_name, "available": group_data.available})
         return {"detail": "Group created successfully"}
     except Exception as e:
+        backend_log.error("Error creating group", exception=e,
+                         metadata={"group_data": group_data.dict()})
         logger.error("Error creating group: %s", str(e))
         raise HTTPException(
             status_code=500,
@@ -160,10 +173,13 @@ async def delete_group(request: Request, group_name: str):
             detail="Admin privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
-        app_db = get_db_manager(request)
         group = app_db.find_by_condition(GroupMeta, {'group_name': group_name})
         if not group:
+            backend_log.warn(f"Attempt to delete non-existent group: {group_name}")
             raise HTTPException(
                 status_code=404,
                 detail="Group not found"
@@ -194,9 +210,14 @@ async def delete_group(request: Request, group_name: str):
 
             # update_list_columns 메서드로 업데이트 (첫 번째 인자는 모델 클래스가 아닌 인스턴스)
             app_db.update_list_columns(User, {"groups": new_groups}, {"id": user.id})
+
+        backend_log.success(f"Successfully deleted group: {group_name}",
+                          metadata={"group_name": group_name, "affected_users": len(users)})
         return {"detail": f"Group '{group_name}' deleted successfully and {len(users)} users moved to 'none' group"}
 
     except Exception as e:
+        backend_log.error("Error deleting group", exception=e,
+                         metadata={"group_name": group_name})
         logger.error("Error deleting group: %s", str(e))
         raise HTTPException(
             status_code=500,

@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Request, HTTPException
 from controller.helper.singletonHelper import get_db_manager
 from controller.admin.adminBaseController import validate_superuser
+from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("admin-db-controller")
 router = APIRouter(prefix="/database", tags=["Admin"])
@@ -35,10 +36,14 @@ async def get_table_list(request: Request):
             detail="Superuser privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
-        app_db = get_db_manager(request)
         tables = app_db.get_table_list()
 
+        backend_log.success("Successfully retrieved database table list",
+                          metadata={"table_count": len(tables)})
         logger.info("Retrieved %d tables from database", len(tables))
         return TableListResponse(
             success=True,
@@ -46,6 +51,7 @@ async def get_table_list(request: Request):
         )
 
     except Exception as e:
+        backend_log.error("Error getting table list", exception=e)
         logger.error("Error getting table list: %s", str(e))
         return TableListResponse(
             success=False,
@@ -66,9 +72,10 @@ async def execute_query(request: Request, query_request: QueryRequest):
             detail="Superuser privileges required"
         )
 
-    try:
-        app_db = get_db_manager(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
 
+    try:
         # 파라미터 튜플로 변환
         params = None
         if query_request.params:
@@ -78,8 +85,12 @@ async def execute_query(request: Request, query_request: QueryRequest):
         result = app_db.execute_raw_query(query_request.query, params)
 
         if result["success"]:
+            backend_log.success("Query executed successfully",
+                              metadata={"query": query_request.query[:100], "row_count": result.get('row_count', 0)})
             logger.info("Query executed successfully, returned %d rows", result.get('row_count', 0))
         else:
+            backend_log.warn("Query execution failed",
+                           metadata={"query": query_request.query[:100], "error": result['error']})
             logger.warning("Query execution failed: %s", result['error'])
 
         return QueryResponse(
@@ -90,6 +101,8 @@ async def execute_query(request: Request, query_request: QueryRequest):
         )
 
     except Exception as e:
+        backend_log.error("Error executing query", exception=e,
+                         metadata={"query": query_request.query[:100]})
         logger.error("Error executing query: %s", str(e))
         return QueryResponse(
             success=False,
