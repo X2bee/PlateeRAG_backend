@@ -23,6 +23,13 @@ class AppConfig(BaseConfig):
             type_converter=convert_to_bool
         )
 
+        self.FREE_CHAT_DEPLOYMENT_MODE = self.create_persistent_config(
+            env_name="FREE_CHAT_DEPLOYMENT_MODE",
+            config_path="app.free_chat_deployment_mode",
+            default_value=False,
+            type_converter=convert_to_bool
+        )
+
         self.LOG_LEVEL = self.create_persistent_config(
             env_name="LOG_LEVEL",
             config_path="app.log_level",

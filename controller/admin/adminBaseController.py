@@ -46,6 +46,31 @@ async def check_superuser(request: Request):
             detail=f"Internal server error: {str(e)}"
         )
 
+async def is_superuser(request: Request, user_id: int) -> bool:
+    try:
+        app_db = get_db_manager(request)
+        super_users = app_db.find_by_condition(
+            User,
+            {
+                "id": user_id,
+                "user_type": "superuser"
+            },
+            limit=1
+        )
+
+        if super_users:
+            return {"superuser": True}
+
+        else:
+            return {"superuser": False}
+
+    except Exception as e:
+        logger.error(f"Token refresh error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
 @router.get("/validate/superuser")
 async def validate_superuser(request: Request):
     session = require_admin_access(request)

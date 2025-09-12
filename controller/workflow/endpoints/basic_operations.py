@@ -11,7 +11,7 @@ import string
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
-from controller.helper.singletonHelper import get_db_manager
+from controller.helper.singletonHelper import get_db_manager, get_config_composer
 from controller.workflow.models.requests import SaveWorkflowRequest
 from service.database.models.executor import ExecutionMeta, ExecutionIO
 from controller.workflow.utils.auth_helpers import workflow_user_id_extractor
@@ -60,6 +60,29 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
     """
     try:
         user_id = extract_user_id_from_request(request)
+        app_db = get_db_manager(request)
+
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_request.workflow_name,
+            },
+            limit=1,
+        )
+
+        if existing_data:
+            deploy_data = app_db.find_by_condition(
+                DeployMeta,
+                {
+                    "user_id": user_id,
+                    "workflow_id": existing_data[0].workflow_id if existing_data else workflow_request.content.workflow_id,
+                    "workflow_name": workflow_request.workflow_name,
+                },
+                limit=1
+            )
+            if not deploy_data[0].is_accepted:
+                raise HTTPException(status_code=400, detail="해당 이름의 워크플로우에 대한 권한이 박탈되었습니다. 해당 이름 사용이 불가능합니다.")
 
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
@@ -73,8 +96,6 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
         else:
             filename = workflow_request.workflow_name
         file_path = os.path.join(download_path_id, filename)
-
-        app_db = get_db_manager(request)
 
         # nodes 수 계산
         nodes = workflow_data.get('nodes', [])
@@ -102,14 +123,6 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             workflow_data=workflow_data,
         )
 
-        existing_data = app_db.find_by_condition(
-            WorkflowMeta,
-            {
-                "user_id": user_id,
-                "workflow_name": workflow_request.workflow_name,
-            },
-            limit=1,
-        )
         if existing_data:
             existing_data_id = existing_data[0].id
             workflow_meta.id = existing_data_id
@@ -269,6 +282,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
 async def update_workflow(request: Request, workflow_name: str, update_dict: dict):
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
+    config_composer = get_config_composer(request)
 
     try:
         existing_data = app_db.find_by_condition(
@@ -294,6 +308,11 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
         )
         if not deploy_data:
             raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
+        if not deploy_data[0].is_accepted:
+            raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
+        if deploy_data[0].is_deployed:
+            raise HTTPException(status_code=400, detail="배포된 워크플로우는 삭제할 수 없습니다. 배포를 해제한 후 다시 시도하세요.")
+
         deploy_meta = deploy_data[0]
 
         existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
@@ -301,15 +320,24 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
 
         deploy_enabled = update_dict.get("enable_deploy", deploy_meta.is_deployed)
         deploy_meta.is_deployed = deploy_enabled
+        free_deploy_mode = config_composer.get_config_by_name("FREE_CHAT_DEPLOYMENT_MODE").value
 
         if deploy_enabled:
             alphabet = string.ascii_letters + string.digits
             deploy_key = ''.join(secrets.choice(alphabet) for _ in range(32))
             deploy_meta.deploy_key = deploy_key
 
+            if not free_deploy_mode:
+                from controller.admin.adminBaseController import is_superuser
+                val_superuser = await is_superuser(request, user_id)
+                if not val_superuser.get("superuser", False):
+                    deploy_meta.is_deployed = False
+                    deploy_meta.inquire_deploy = True
+
             logger.info(f"Generated new deploy key for workflow: {workflow_name}")
         else:
             deploy_meta.deploy_key = ""
+            deploy_meta.inquire_deploy = False
             logger.info(f"Cleared deploy key for workflow: {workflow_name}")
 
         app_db.update(existing_data)
@@ -343,6 +371,21 @@ async def delete_workflow(request: Request, workflow_name: str):
             ignore_columns=['workflow_data'],
             limit=1
         )
+
+        deploy_meta = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_id": existing_data[0].workflow_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+
+        if not deploy_meta[0].is_accepted:
+            raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
+        if deploy_meta[0].is_deployed:
+            raise HTTPException(status_code=400, detail="배포된 워크플로우는 삭제할 수 없습니다. 배포를 해제한 후 다시 시도하세요.")
 
         app_db.delete(WorkflowMeta, existing_data[0].id if existing_data else None)
         app_db.delete_by_condition(DeployMeta, {
@@ -394,9 +437,11 @@ async def list_workflows_detail(request: Request):
                 wm.user_id, wm.workflow_id, wm.workflow_name,
                 wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                 wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                u.username, u.full_name
+                u.username, u.full_name,
+                dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
             FROM workflow_meta wm
             LEFT JOIN users u ON wm.user_id = u.id
+            LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
             WHERE wm.user_id = %s
             ORDER BY wm.updated_at DESC
             LIMIT 10000
@@ -412,9 +457,11 @@ async def list_workflows_detail(request: Request):
                         wm.user_id, wm.workflow_id, wm.workflow_name,
                         wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                         wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                        u.username, u.full_name
+                        u.username, u.full_name,
+                        dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
                     FROM workflow_meta wm
                     LEFT JOIN users u ON wm.user_id = u.id
+                    LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
                     WHERE wm.share_group = %s AND wm.is_shared = true
                     ORDER BY wm.updated_at DESC
                     LIMIT 10000

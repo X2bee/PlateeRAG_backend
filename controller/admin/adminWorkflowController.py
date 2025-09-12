@@ -196,7 +196,7 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
                     wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                     wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
                     u.full_name, u.username,
-                    dm.is_deployed, dm.deploy_key
+                    dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
                 FROM workflow_meta wm
                 LEFT JOIN users u ON wm.user_id = u.id
                 LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
@@ -213,7 +213,7 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
                     wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                     wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
                     u.full_name, u.username,
-                    dm.is_deployed, dm.deploy_key
+                    dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
                 FROM workflow_meta wm
                 LEFT JOIN users u ON wm.user_id = u.id
                 LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
@@ -275,14 +275,17 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
 
         existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
         existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
-
         deploy_enabled = update_dict.get("enable_deploy", deploy_meta.is_deployed)
         deploy_meta.is_deployed = deploy_enabled
+
+        deploy_meta.is_accepted = update_dict.get("is_accepted", deploy_meta.is_accepted)
+        deploy_meta.inquire_deploy = update_dict.get("inquire_deploy", deploy_meta.inquire_deploy)
 
         if deploy_enabled:
             alphabet = string.ascii_letters + string.digits
             deploy_key = ''.join(secrets.choice(alphabet) for _ in range(32))
             deploy_meta.deploy_key = deploy_key
+            deploy_meta.inquire_deploy = False
 
             logger.info(f"Generated new deploy key for workflow: {workflow_name}")
         else:

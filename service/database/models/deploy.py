@@ -11,6 +11,8 @@ class DeployMeta(BaseModel):
         self.workflow_id: str = kwargs.get('workflow_id', '')
         self.workflow_name: str = kwargs.get('workflow_name', '')
         self.is_deployed: bool = kwargs.get('is_deployed', False)
+        self.inquire_deploy: bool = kwargs.get('inquire_deploy', False)
+        self.is_accepted: bool = kwargs.get('is_accepted', True)
         self.deploy_key: str = kwargs.get('deploy_key', '')
 
     def get_table_name(self) -> str:
@@ -22,5 +24,7 @@ class DeployMeta(BaseModel):
             'workflow_id': 'VARCHAR(100) NOT NULL',
             'workflow_name': 'VARCHAR(200) NOT NULL',
             'is_deployed': 'BOOLEAN DEFAULT FALSE',
+            'inquire_deploy': 'BOOLEAN DEFAULT FALSE',
+            'is_accepted': 'BOOLEAN DEFAULT TRUE',
             'deploy_key': 'VARCHAR(100)'
         }
