@@ -8,6 +8,7 @@ from controller.node.nodeApiController import register_node_api_routes
 
 from controller.node.router import node_router
 from controller.admin.router import admin_router
+from controller.manager.router import manager_router
 from controller.workflow.router import workflow_router
 from controller.rag.router import rag_router
 from controller.audio.router import audio_router
@@ -313,6 +314,7 @@ app.add_middleware(
 
 app.include_router(node_router)
 app.include_router(admin_router)
+app.include_router(manager_router)
 app.include_router(workflow_router)
 app.include_router(rag_router)
 app.include_router(audio_router)

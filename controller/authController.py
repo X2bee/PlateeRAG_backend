@@ -603,6 +603,9 @@ async def get_group_available_sections(request: Request, user_id=None):
                         status_code=404,
                         detail="Group not found"
                     )
+
+            if user_type == "admin":
+                total_available_sections.extend(["manager-page"])
         return {"available_sections": total_available_sections}
 
     except Exception as e:

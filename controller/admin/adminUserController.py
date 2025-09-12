@@ -209,6 +209,21 @@ async def edit_user(request: Request, user_data: dict):
         db_user_info.preferences = user_data.get("preferences", db_user_info.preferences)
         db_user_info.is_active = user_data.get("is_active", db_user_info.is_active)
         db_user_info.password_hash = user_data.get("password_hash", db_user_info.password_hash)
+
+        # app_db.update_list_columns(
+        #     User,
+        #     {
+        #         "email": user_data.get("email", db_user_info.email),
+        #         "username": user_data.get("username", db_user_info.username),
+        #         "full_name": user_data.get("full_name", db_user_info.full_name),
+        #         "is_admin": user_data.get("is_admin", db_user_info.is_admin),
+        #         "user_type": user_data.get("user_type", db_user_info.user_type),
+        #         "preferences": user_data.get("preferences", db_user_info.preferences),
+        #         "is_active": user_data.get("is_active", db_user_info.is_active),
+        #         "password_hash": user_data.get("password_hash", db_user_info.password_hash)
+        #     },
+        #     {"id": user_id}
+        # )
         app_db.update(db_user_info)
 
         logger.info(f"Successfully edited user {user_id}")
