@@ -387,7 +387,7 @@ async def delete_workflow_io_logs_for_tester(request: Request, workflow_name: st
         logger.error(f"Error deleting workflow logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")
 
-@router.post("/execute/stream")
+@router.post("/stream")
 async def execute_workflow_tester_stream(request: Request, tester_request: TesterExecuteRequest):
     """
     워크플로우 테스터 실행 스트리밍 엔드포인트
