@@ -15,10 +15,10 @@ async def delete_user_groups(request: Request, user_data: dict):
 
     try:
         app_db = get_db_manager(request)
-        user_id = user_data.get("user_id")
+        user_id = user_data.get("id")
 
-        # 사용자 존재 여부 확인
         db_user_info = app_db.find_by_condition(User, {"id": user_id})
+        print(db_user_info)
         if not db_user_info:
             raise HTTPException(
                 status_code=404,
@@ -26,6 +26,13 @@ async def delete_user_groups(request: Request, user_data: dict):
             )
 
         db_user_info = db_user_info[0]
+
+        if db_user_info.user_type == "admin" or db_user_info.user_type == "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot modify admin or superuser accounts"
+            )
+
         existing_groups = db_user_info.groups if db_user_info.groups else []
         remove_group = user_data.get("group_name", "")
 
