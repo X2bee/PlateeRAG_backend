@@ -10,6 +10,7 @@ from service.database.execution_meta_service import get_or_create_execution_meta
 from controller.helper.controllerHelper import extract_user_id_from_request
 from service.database.models.executor import ExecutionMeta
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("interaction-controller")
 router = APIRouter(prefix="/api/interaction", tags=["interaction"])
@@ -47,8 +48,9 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
     """
     try:
         user_id = extract_user_id_from_request(request)
-
         app_db = get_db_manager(request)
+        backend_log = create_logger(app_db=app_db, user_id=user_id, request=request)
+
         where_conditions = {}
         where_conditions["user_id"] = user_id
         where_conditions["interaction_id__notlike__"] = "deploy"
@@ -63,6 +65,8 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
         )
 
         if not result:
+            backend_log.error("No execution meta data found for the given filters",
+                              metadata={"interaction_id": interaction_id, "workflow_id": workflow_id, "limit": limit})
             return JSONResponse(content={
                 "execution_meta_list": [],
                 "total_count": 0,
@@ -98,6 +102,8 @@ async def list_interaction(request: Request, interaction_id: str = None, workflo
             },
             "message": f"Found {len(execution_meta_list)} execution meta records"
         }
+        backend_log.success("Successfully retrieved execution meta list",
+                          metadata={"returned_count": len(execution_meta_list), "filters": response_data["filters"]})
 
         logger.info(f"Retrieved {len(execution_meta_list)} execution meta records with filters: interaction_id={interaction_id}, workflow_id={workflow_id}")
         return JSONResponse(content=response_data)
