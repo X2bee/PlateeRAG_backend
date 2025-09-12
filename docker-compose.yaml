@@ -2,12 +2,58 @@ services:
   backend:
     build: .
     ports:
-      - "${SERVER_PORT}:${SERVER_PORT}"
+      - "8000:8000"
     env_file:
       - .env
-    command: "./.venv/bin/uvicorn main:app --host ${SERVER_HOST} --port ${SERVER_PORT} --reload"
+    command: "./.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    depends_on:
+      - postgres
+      - qdrant
     volumes:
       - ./backup/service/eval/job_data:/app/job_data
       - ./backup/service/eval/eval_job_data:/app/eval_job_data
       - ./backup/downloads:/app/downloads
       - ./backup/constants:/app/constants
+
+  postgres:
+    env_file:
+      - .env
+    image: postgres:15.4
+    container_name: prg_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+    restart: unless-stopped
+
+  qdrant:
+    env_file:
+      - .env
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    container_name: qdrant
+    ports:
+      - "${QDRANT_HTTP_PORT}:${QDRANT_HTTP_PORT}"
+      - "${QDRANT_GRPC_PORT}:${QDRANT_GRPC_PORT}"
+    expose:
+      - "${QDRANT_HTTP_PORT}"
+      - "${QDRANT_GRPC_PORT}"
+      - "6335"
+    configs:
+      - source: qdrant_config
+        target: ${QDRANT_CONFIG_PATH}
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+
+configs:
+  qdrant_config:
+    content: |
+      log_level: INFO
