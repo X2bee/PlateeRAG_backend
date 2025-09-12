@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 from controller.helper.singletonHelper import get_db_manager
 from controller.admin.adminBaseController import validate_superuser
-from controller.workflow.utils.data_parsers import parse_input_data
+from controller.helper.utils.data_parsers import parse_input_data
 from service.database.logger_helper import create_logger
 
 from service.database.models.executor import ExecutionIO

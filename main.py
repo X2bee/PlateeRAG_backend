@@ -35,7 +35,7 @@ from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
-from controller.workflow.utils.workflow_helpers import workflow_data_synchronizer
+from controller.helper.utils.workflow_helpers import workflow_data_synchronizer
 
 def print_xgen_logo():
     logo = """

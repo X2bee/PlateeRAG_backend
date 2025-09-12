@@ -4,8 +4,7 @@ import copy
 import hashlib
 
 from typing import Dict, Any
-
-from controller.workflow.utils.data_parsers import extract_collection_name
+from controller.helper.utils.data_parsers import extract_collection_name
 from fastapi import HTTPException
 from controller.workflow.models.requests import WorkflowRequest
 from controller.helper.singletonHelper import get_config_composer
