@@ -15,12 +15,10 @@ class FeedbackLoopFormatterNode(Node):
     tags = ["format", "feedback", "display", "output"]
 
     inputs = [
-        {"id": "result", "name": "Final Result", "type": "STR", "multi": False, "required": True},
-        {"id": "iteration_log", "name": "Iteration Log", "type": "LIST", "multi": False, "required": True},
-        {"id": "feedback_scores", "name": "Feedback Scores", "type": "LIST", "multi": False, "required": True},
+        {"id": "feedback_result", "name": "Feedback Loop Result", "type": "FeedbackDICT", "multi": False, "required": True, "stream": False},
     ]
     outputs = [
-        {"id": "formatted_output", "name": "Formatted Output", "type": "STR"},
+        {"id": "formatted_output", "name": "Formatted Output", "type": "STR", "required": True, "multi": False, "stream": False},
     ]
     parameters = [
         {
@@ -41,9 +39,7 @@ class FeedbackLoopFormatterNode(Node):
 
     def execute(
         self,
-        result: str,
-        iteration_log: List[Dict] = None,
-        feedback_scores: List[int] = None,
+        feedback_result: Dict[str, Any],
         format_style: str = "detailed",
         show_scores: bool = True,
         show_timestamps: bool = False,
@@ -53,68 +49,68 @@ class FeedbackLoopFormatterNode(Node):
     ) -> Dict[str, Any]:
         
         try:
-            # 빈 값 처리
-            if iteration_log is None:
-                iteration_log = []
-            if feedback_scores is None:
-                feedback_scores = []
+            # 피드백 결과에서 데이터 추출
+            result = feedback_result.get("result", "결과 없음")
+            iteration_log = feedback_result.get("iteration_log", [])
+            feedback_scores = feedback_result.get("feedback_scores", [])
+            total_iterations = feedback_result.get("total_iterations", len(iteration_log))
+            final_score = feedback_result.get("final_score", 0)
+            average_score = feedback_result.get("average_score", 0)
+            has_error = feedback_result.get("error", False)
             
             if format_style == "summary":
-                formatted_output = self._format_summary(result, iteration_log, feedback_scores)
+                formatted_output = self._format_summary(result, iteration_log, feedback_scores, total_iterations, final_score, average_score, has_error)
             elif format_style == "compact":
-                formatted_output = self._format_compact(result, iteration_log, feedback_scores, show_scores)
+                formatted_output = self._format_compact(result, iteration_log, feedback_scores, show_scores, total_iterations, final_score, has_error)
             elif format_style == "markdown":
-                formatted_output = self._format_markdown(result, iteration_log, feedback_scores, show_scores, show_timestamps, max_iteration_display, truncate_results)
+                formatted_output = self._format_markdown(result, iteration_log, feedback_scores, show_scores, show_timestamps, max_iteration_display, truncate_results, total_iterations, final_score, average_score, has_error)
             else:  # detailed
-                formatted_output = self._format_detailed(result, iteration_log, feedback_scores, show_scores, show_timestamps, max_iteration_display, truncate_results)
+                formatted_output = self._format_detailed(result, iteration_log, feedback_scores, show_scores, show_timestamps, max_iteration_display, truncate_results, total_iterations, final_score, average_score, has_error)
             
             return {"formatted_output": formatted_output}
             
         except Exception as e:
             logger.error(f"[FEEDBACK_FORMATTER] 포매팅 중 오류 발생: {str(e)}")
-            return {"formatted_output": f"포매팅 오류: {str(e)}\n\n원본 결과: {result}"}
+            return {"formatted_output": f"포매팅 오류: {str(e)}\n\n원본 결과: {str(feedback_result)}"}
 
-    def _format_summary(self, result: str, iteration_log: List[Dict], feedback_scores: List[int]) -> str:
+    def _format_summary(self, result: str, iteration_log: List[Dict], feedback_scores: List[int], 
+                       total_iterations: int, final_score: int, average_score: float, has_error: bool) -> str:
         """요약 형태로 포매팅"""
-        total_iterations = len(iteration_log)
-        final_score = feedback_scores[-1] if feedback_scores else 0
-        avg_score = sum(feedback_scores) / len(feedback_scores) if feedback_scores else 0
+        error_indicator = "⚠️ 오류 발생 " if has_error else ""
         
-        return f"""=== 피드백 루프 실행 요약 ===
+        return f"""{error_indicator}=== 피드백 루프 실행 요약 ===
 
 📊 실행 통계:
 - 총 반복 횟수: {total_iterations}회
 - 최종 점수: {final_score}/10
-- 평균 점수: {avg_score:.1f}/10
+- 평균 점수: {average_score:.1f}/10
 
 ✅ 최종 결과:
 {str(result)}
 """
 
-    def _format_compact(self, result: str, iteration_log: List[Dict], feedback_scores: List[int], show_scores: bool) -> str:
+    def _format_compact(self, result: str, iteration_log: List[Dict], feedback_scores: List[int], 
+                       show_scores: bool, total_iterations: int, final_score: int, has_error: bool) -> str:
         """압축된 형태로 포매팅"""
-        total_iterations = len(iteration_log)
         score_info = f" (점수: {' → '.join(map(str, feedback_scores))})" if show_scores and feedback_scores else ""
+        error_indicator = "⚠️ " if has_error else "🔄 "
         
-        return f"""🔄 피드백 루프 완료: {total_iterations}회 반복{score_info}
+        return f"""{error_indicator}피드백 루프 완료: {total_iterations}회 반복{score_info}
 
 📝 결과: {str(result)}"""
 
     def _format_markdown(self, result: str, iteration_log: List[Dict], feedback_scores: List[int], 
-                        show_scores: bool, show_timestamps: bool, max_iterations: int, truncate_len: int) -> str:
+                        show_scores: bool, show_timestamps: bool, max_iterations: int, truncate_len: int,
+                        total_iterations: int, final_score: int, average_score: float, has_error: bool) -> str:
         """마크다운 형태로 포매팅"""
-        markdown = "# 🔄 피드백 루프 실행 결과\n\n"
-        
-        # 통계 정보
-        total_iterations = len(iteration_log)
-        final_score = feedback_scores[-1] if feedback_scores else 0
-        avg_score = sum(feedback_scores) / len(feedback_scores) if feedback_scores else 0
+        error_indicator = "⚠️ " if has_error else "🔄 "
+        markdown = f"# {error_indicator}피드백 루프 실행 결과\n\n"
         
         markdown += "## 📊 실행 통계\n\n"
         markdown += f"- **총 반복 횟수**: {total_iterations}회\n"
         if show_scores and feedback_scores:
             markdown += f"- **최종 점수**: {final_score}/10\n"
-            markdown += f"- **평균 점수**: {avg_score:.1f}/10\n"
+            markdown += f"- **평균 점수**: {average_score:.1f}/10\n"
             markdown += f"- **점수 변화**: {' → '.join(map(str, feedback_scores))}\n"
         markdown += "\n"
         
@@ -153,25 +149,24 @@ class FeedbackLoopFormatterNode(Node):
         return markdown
 
     def _format_detailed(self, result: str, iteration_log: List[Dict], feedback_scores: List[int],
-                        show_scores: bool, show_timestamps: bool, max_iterations: int, truncate_len: int) -> str:
+                        show_scores: bool, show_timestamps: bool, max_iterations: int, truncate_len: int,
+                        total_iterations: int, final_score: int, average_score: float, has_error: bool) -> str:
         """상세한 형태로 포매팅"""
+        error_indicator = "⚠️ 오류 발생 - " if has_error else ""
         output = "=" * 60 + "\n"
-        output += "🔄 피드백 루프 실행 결과\n"
+        output += f"{error_indicator}🔄 피드백 루프 실행 결과\n"
         output += "=" * 60 + "\n\n"
         
         # 실행 통계
-        total_iterations = len(iteration_log)
         output += f"📊 실행 통계:\n"
         output += f"   - 총 반복 횟수: {total_iterations}회\n"
         
         if show_scores and feedback_scores:
-            final_score = feedback_scores[-1]
-            avg_score = sum(feedback_scores) / len(feedback_scores)
             min_score = min(feedback_scores)
             max_score = max(feedback_scores)
             
             output += f"   - 최종 점수: {final_score}/10\n"
-            output += f"   - 평균 점수: {avg_score:.1f}/10\n"
+            output += f"   - 평균 점수: {average_score:.1f}/10\n"
             output += f"   - 최고 점수: {max_score}/10\n"
             output += f"   - 최저 점수: {min_score}/10\n"
             output += f"   - 점수 변화: {' → '.join(map(str, feedback_scores))}\n"

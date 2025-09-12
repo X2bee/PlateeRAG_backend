@@ -52,9 +52,7 @@ class AgentFeedbackLoopNode(Node):
         {"id": "feedback_criteria", "name": "Feedback Criteria", "type": "FeedbackCrit", "multi": False, "required": False, "value": ""},
     ]
     outputs = [
-        {"id": "result", "name": "Final Result", "type": "STR"},
-        {"id": "iteration_log", "name": "Iteration Log", "type": "LIST"},
-        {"id": "feedback_scores", "name": "Feedback Scores", "type": "LIST"},
+        {"id": "feedback_result", "name": "Feedback Loop Result", "type": "FeedbackDICT", "required": True, "multi": False, "stream": False},
     ]
     parameters = [
         {
@@ -397,9 +395,12 @@ class AgentFeedbackLoopNode(Node):
                 feedback_scores.append(result.get("feedback_score", 0))
 
             return {
-                "result": final_state["final_result"] or "No final result generated",
-                "iteration_log": iteration_log,
-                "feedback_scores": feedback_scores
+                    "result": final_state["final_result"] or "No final result generated",
+                    "iteration_log": iteration_log,
+                    "feedback_scores": feedback_scores,
+                    "total_iterations": len(iteration_log),
+                    "final_score": feedback_scores[-1] if feedback_scores else 0,
+                    "average_score": sum(feedback_scores) / len(feedback_scores) if feedback_scores else 0 
             }
 
         except Exception as e:
@@ -408,5 +409,10 @@ class AgentFeedbackLoopNode(Node):
             return {
                 "result": f"죄송합니다. 피드백 루프 실행 중 오류가 발생했습니다: {str(e)}",
                 "iteration_log": [],
-                "feedback_scores": []
+                "feedback_scores": [],
+                "total_iterations": 0,
+                "final_score": 0,
+                "average_score": 0,
+                "error": True
+                
             }
