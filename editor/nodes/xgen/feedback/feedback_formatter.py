@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 class FeedbackLoopFormatterNode(Node):
     categoryId = "xgen" 
-    functionId = "format"
-    nodeId = "format/feedback_loop"
+    functionId = "feedback"
+    nodeId = "feedback/feedback_loop"
     nodeName = "Feedback Loop Formatter"
     description = "피드백 루프 노드의 출력을 가독성 좋게 포매팅하여 하나의 문자열로 반환하는 노드"
     tags = ["format", "feedback", "display", "output"]
@@ -42,17 +42,23 @@ class FeedbackLoopFormatterNode(Node):
     def execute(
         self,
         result: str,
-        iteration_log: List[Dict],
-        feedback_scores: List[int],
+        iteration_log: List[Dict] = None,
+        feedback_scores: List[int] = None,
         format_style: str = "detailed",
         show_scores: bool = True,
         show_timestamps: bool = False,
         max_iteration_display: int = 5,
         truncate_results: int = 150,
         **kwargs
-    ) -> str:
+    ) -> Dict[str, Any]:
         
         try:
+            # 빈 값 처리
+            if iteration_log is None:
+                iteration_log = []
+            if feedback_scores is None:
+                feedback_scores = []
+            
             if format_style == "summary":
                 formatted_output = self._format_summary(result, iteration_log, feedback_scores)
             elif format_style == "compact":
@@ -62,11 +68,11 @@ class FeedbackLoopFormatterNode(Node):
             else:  # detailed
                 formatted_output = self._format_detailed(result, iteration_log, feedback_scores, show_scores, show_timestamps, max_iteration_display, truncate_results)
             
-            return formatted_output
+            return {"formatted_output": formatted_output}
             
         except Exception as e:
             logger.error(f"[FEEDBACK_FORMATTER] 포매팅 중 오류 발생: {str(e)}")
-            return f"포매팅 오류: {str(e)}\n\n원본 결과: {result}"
+            return {"formatted_output": f"포매팅 오류: {str(e)}\n\n원본 결과: {result}"}
 
     def _format_summary(self, result: str, iteration_log: List[Dict], feedback_scores: List[int]) -> str:
         """요약 형태로 포매팅"""
@@ -82,7 +88,7 @@ class FeedbackLoopFormatterNode(Node):
 - 평균 점수: {avg_score:.1f}/10
 
 ✅ 최종 결과:
-{result}
+{str(result)}
 """
 
     def _format_compact(self, result: str, iteration_log: List[Dict], feedback_scores: List[int], show_scores: bool) -> str:
@@ -92,7 +98,7 @@ class FeedbackLoopFormatterNode(Node):
         
         return f"""🔄 피드백 루프 완료: {total_iterations}회 반복{score_info}
 
-📝 결과: {result}"""
+📝 결과: {str(result)}"""
 
     def _format_markdown(self, result: str, iteration_log: List[Dict], feedback_scores: List[int], 
                         show_scores: bool, show_timestamps: bool, max_iterations: int, truncate_len: int) -> str:
@@ -119,7 +125,7 @@ class FeedbackLoopFormatterNode(Node):
             
             for i, log_entry in enumerate(iteration_log[:display_iterations]):
                 iteration_num = log_entry.get('iteration', i + 1)
-                iteration_result = log_entry.get('result', '결과 없음')
+                iteration_result = str(log_entry.get('result', '결과 없음'))
                 score = log_entry.get('score', 0)
                 
                 # 결과 자르기
@@ -142,7 +148,7 @@ class FeedbackLoopFormatterNode(Node):
         
         # 최종 결과
         markdown += "## ✅ 최종 결과\n\n"
-        markdown += f"```\n{result}\n```\n"
+        markdown += f"```\n{str(result)}\n```\n"
         
         return markdown
 
@@ -179,7 +185,7 @@ class FeedbackLoopFormatterNode(Node):
             
             for i, log_entry in enumerate(iteration_log[:display_iterations]):
                 iteration_num = log_entry.get('iteration', i + 1)
-                iteration_result = log_entry.get('result', '결과 없음')
+                iteration_result = str(log_entry.get('result', '결과 없음'))
                 score = log_entry.get('score', 0)
                 
                 output += f"[반복 {iteration_num}]"
@@ -205,13 +211,13 @@ class FeedbackLoopFormatterNode(Node):
                     eval_info = log_entry['evaluation']
                     if isinstance(eval_info, dict):
                         if 'reasoning' in eval_info:
-                            output += f"평가: {eval_info['reasoning']}\n"
+                            output += f"평가: {str(eval_info['reasoning'])}\n"
                         if 'improvements' in eval_info and eval_info['improvements']:
                             improvements = eval_info['improvements']
                             if isinstance(improvements, list):
-                                output += f"개선사항: {', '.join(improvements)}\n"
+                                output += f"개선사항: {', '.join(str(item) for item in improvements)}\n"
                             else:
-                                output += f"개선사항: {improvements}\n"
+                                output += f"개선사항: {str(improvements)}\n"
                 
                 output += "\n"
             
@@ -222,7 +228,7 @@ class FeedbackLoopFormatterNode(Node):
         output += "=" * 60 + "\n"
         output += "✅ 최종 결과:\n"
         output += "=" * 60 + "\n\n"
-        output += result
+        output += str(result)
         
         return output
 

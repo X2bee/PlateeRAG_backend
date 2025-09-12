@@ -49,7 +49,7 @@ class AgentFeedbackLoopNode(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
         {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema", "required": False},
-        {"id": "feedback_criteria", "name": "Feedback Criteria", "type": "STR", "multi": False, "required": False, "value": ""},
+        {"id": "feedback_criteria", "name": "Feedback Criteria", "type": "FeedbackCrit", "multi": False, "required": False, "value": ""},
     ]
     outputs = [
         {"id": "result", "name": "Final Result", "type": "STR"},
@@ -117,10 +117,11 @@ class AgentFeedbackLoopNode(Node):
                     result = chain.invoke(inputs)
 
                 # 도구 실행 결과 저장
+                import time
                 tool_result = {
                     "iteration": iteration,
                     "result": result,
-                    "timestamp": asyncio.get_event_loop().time()
+                    "timestamp": time.time()
                 }
                 
                 new_tool_results = state["tool_results"] + [tool_result]
@@ -133,10 +134,11 @@ class AgentFeedbackLoopNode(Node):
                 
             except Exception as e:
                 logger.error(f"Task execution failed: {str(e)}")
+                import time
                 error_result = {
                     "iteration": state["iteration_count"],
                     "result": f"Error: {str(e)}",
-                    "timestamp": asyncio.get_event_loop().time(),
+                    "timestamp": time.time(),
                     "error": True
                 }
                 return {
@@ -182,11 +184,25 @@ class AgentFeedbackLoopNode(Node):
                 evaluation_inputs = {
                     "input": evaluation_prompt,
                     "chat_history": [],
-                    "additional_rag_context": additional_rag_context
+                    "additional_rag_context": additional_rag_context,
+                    "agent_scratchpad": ""
                 }
                 
-                evaluation_chain = prompt_template | llm | JsonOutputParser()
-                evaluation_result = evaluation_chain.invoke(evaluation_inputs)
+                # 평가용 간단한 프롬프트 직접 처리
+                formatted_evaluation_prompt = f"{additional_rag_context}\n\n{evaluation_prompt}"
+                
+                # 직접 LLM 호출
+                from langchain.schema import HumanMessage
+                messages = [HumanMessage(content=formatted_evaluation_prompt)]
+                llm_response = llm.invoke(messages)
+                
+                try:
+                    # JSON 파싱 시도
+                    import json
+                    evaluation_result = json.loads(llm_response.content)
+                except:
+                    # JSON 파싱 실패시 기본값
+                    evaluation_result = {"score": 5, "reasoning": "평가 파싱 실패", "improvements": "", "strengths": ""}
                 
                 score = evaluation_result.get("score", 0)
                 
@@ -359,7 +375,8 @@ class AgentFeedbackLoopNode(Node):
             )
 
             # 워크플로우 실행
-            thread_id = f"feedback_loop_{hash(text)}_{asyncio.get_event_loop().time()}"
+            import time
+            thread_id = f"feedback_loop_{hash(text)}_{int(time.time())}"
             final_state = workflow.invoke(
                 initial_state,
                 config={"configurable": {"thread_id": thread_id}}
