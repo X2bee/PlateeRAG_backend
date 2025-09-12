@@ -17,8 +17,6 @@ class LogData(BaseModel):
     metadata: Optional[Dict] = {}
 
 class BackendLogger:
-    """고도화된 백엔드 로거 클래스"""
-
     def __init__(self, app_db: AppDatabaseManager, user_id: Optional[int] = None, request: Optional[Request] = None):
         self.app_db = app_db
         self.user_id = user_id
@@ -30,7 +28,6 @@ class BackendLogger:
         self._extract_context_info()
 
     def _extract_context_info(self):
-        """호출된 컨텍스트에서 API 엔드포인트를 자동 추출"""
         try:
             # Request 객체에서 API 엔드포인트 추출
             if self.request:
