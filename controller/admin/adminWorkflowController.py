@@ -14,6 +14,7 @@ from service.database.logger_helper import create_logger
 from service.database.models.executor import ExecutionIO
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.deploy import DeployMeta
+from service.database.models.user import User
 
 logger = logging.getLogger("admin-workflow-controller")
 router = APIRouter(prefix="/workflow", tags=["Admin"])
@@ -70,16 +71,28 @@ async def get_io_logs_by_id(request: Request, user_id = None, workflow_name: str
         if workflow_id:
             conditions['workflow_id'] = workflow_id
 
-        # 조건이 있으면 조건 검색, 없으면 모든 로그
         if conditions:
-            result = app_db.find_by_condition(
-                ExecutionIO,
-                conditions,
-                limit=1000000,
-                orderby="updated_at",
-                orderby_asc=True,
-                return_list=True
-            )
+            where_conditions = []
+            query_params = []
+
+            for key, value in conditions.items():
+                where_conditions.append(f"eio.{key} = %s")
+                query_params.append(value)
+
+            where_clause = " AND ".join(where_conditions)
+
+            query = f"""
+                SELECT
+                    eio.id, eio.user_id, eio.interaction_id, eio.workflow_name, eio.workflow_id,
+                    eio.input_data, eio.output_data, eio.created_at, eio.updated_at,
+                    u.username, u.full_name
+                FROM execution_io eio
+                LEFT JOIN users u ON eio.user_id = u.id
+                WHERE {where_clause}
+                ORDER BY eio.updated_at ASC
+                LIMIT 1000000
+            """
+            result = app_db.config_db_manager.execute_query(query, tuple(query_params))
         else:
             raise HTTPException(
                 status_code=400,
@@ -97,7 +110,7 @@ async def get_io_logs_by_id(request: Request, user_id = None, workflow_name: str
 
         io_logs = []
         for idx, row in enumerate(result):
-            # input_data 파싱
+            # input_data 파싱 (row는 이제 딕셔너리 형태)
             raw_input_data = json.loads(row['input_data']).get('result', None) if row['input_data'] else None
             parsed_input_data = parse_input_data(raw_input_data) if raw_input_data else None
 
@@ -105,6 +118,8 @@ async def get_io_logs_by_id(request: Request, user_id = None, workflow_name: str
                 "log_id": idx + 1,
                 "io_id": row['id'],
                 "user_id": row['user_id'],
+                "username": row['username'],
+                "full_name": row['full_name'],
                 "interaction_id": row['interaction_id'],
                 "workflow_name": row['workflow_name'],
                 "workflow_id": row['workflow_id'],
@@ -154,11 +169,43 @@ async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: in
         offset = (page - 1) * page_size
 
         app_db = get_db_manager(request)
+
+        # ExecutionIO와 users를 조인하여 직접 쿼리 작성
         if user_id:
-            io_logs = app_db.find_by_condition(ExecutionIO, {'user_id': user_id}, limit=page_size, offset=offset)
+            query = """
+                SELECT
+                    eio.id, eio.user_id, eio.interaction_id, eio.workflow_name, eio.workflow_id,
+                    eio.input_data, eio.output_data, eio.created_at, eio.updated_at,
+                    u.username, u.full_name
+                FROM execution_io eio
+                LEFT JOIN users u ON eio.user_id = u.id
+                WHERE eio.user_id = %s
+                ORDER BY eio.updated_at DESC
+                LIMIT %s OFFSET %s
+            """
+            io_logs = app_db.config_db_manager.execute_query(query, (user_id, page_size, offset))
         else:
-            io_logs = app_db.find_all(ExecutionIO, limit=page_size, offset=offset)
-        processed_logs = process_io_logs_efficient(io_logs)
+            query = """
+                SELECT
+                    eio.id, eio.user_id, eio.interaction_id, eio.workflow_name, eio.workflow_id,
+                    eio.input_data, eio.output_data, eio.created_at, eio.updated_at,
+                    u.username, u.full_name
+                FROM execution_io eio
+                LEFT JOIN users u ON eio.user_id = u.id
+                ORDER BY eio.updated_at DESC
+                LIMIT %s OFFSET %s
+            """
+            io_logs = app_db.config_db_manager.execute_query(query, (page_size, offset))
+
+        # 딕셔너리 형태의 결과를 처리 (기존 process_io_logs_efficient 대신)
+        processed_logs = []
+        for log in io_logs:
+            log_dict = dict(log)
+            log_dict.update({
+                "input_data": extract_result_from_json(log_dict["input_data"]),
+                "output_data": extract_result_from_json(log_dict["output_data"])
+            })
+            processed_logs.append(log_dict)
 
         return {
             "io_logs": processed_logs,
@@ -231,13 +278,22 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
             """
             all_workflows = app_db.config_db_manager.execute_query(query, (page_size, offset))
 
+        # id 중복 제거 - id를 기준으로 중복된 항목은 첫 번째 것만 유지
+        seen_ids = set()
+        unique_workflows = []
+        for workflow in all_workflows:
+            workflow_id = workflow['id']
+            if workflow_id not in seen_ids:
+                seen_ids.add(workflow_id)
+                unique_workflows.append(workflow)
+
         return {
-            "workflows": all_workflows,
+            "workflows": unique_workflows,
             "pagination": {
                 "page": page,
                 "page_size": page_size,
                 "offset": offset,
-                "total_returned": len(all_workflows)
+                "total_returned": len(unique_workflows)
             }
         }
     except Exception as e:
