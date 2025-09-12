@@ -70,6 +70,7 @@ FUNCTION_LABEL_MAP = {
     'memory': 'Memory',
     'moderation': 'Moderation',
     'output_parsers': 'Output Parser',
+    'format':'Formatter',
     'tools': 'Tool',
     'api_loader': 'API Loader',
     'mcp': 'MCP',

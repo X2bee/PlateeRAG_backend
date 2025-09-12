@@ -206,3 +206,5 @@ trash/persistent_config_new.py
 backup
 
 CLAUDE.md
+
+docker-compose.yaml
