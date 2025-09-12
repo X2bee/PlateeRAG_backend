@@ -278,13 +278,22 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
             """
             all_workflows = app_db.config_db_manager.execute_query(query, (page_size, offset))
 
+        # id 중복 제거 - id를 기준으로 중복된 항목은 첫 번째 것만 유지
+        seen_ids = set()
+        unique_workflows = []
+        for workflow in all_workflows:
+            workflow_id = workflow['id']
+            if workflow_id not in seen_ids:
+                seen_ids.add(workflow_id)
+                unique_workflows.append(workflow)
+
         return {
-            "workflows": all_workflows,
+            "workflows": unique_workflows,
             "pagination": {
                 "page": page,
                 "page_size": page_size,
                 "offset": offset,
-                "total_returned": len(all_workflows)
+                "total_returned": len(unique_workflows)
             }
         }
     except Exception as e:
