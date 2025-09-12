@@ -98,9 +98,17 @@ class FeedbackCriteriaGeneratorNode(Node):
             "id": "evaluation_aspects", 
             "name": "Evaluation Aspects", 
             "type": "STR", 
-            "value": "accuracy,completeness,quality,usefulness,clarity,relevance,efficiency,creativity,feasibility", 
+            "value": "accuracy,completeness,quality,usefulness", 
             "required": False,
-            "description": "평가할 측면들 (쉼표로 구분)"
+            "options": [
+                {"value": "accuracy,completeness,quality,usefulness", "label": "기본 (정확성, 완성도, 품질, 유용성)"},
+                {"value": "accuracy,completeness,quality,clarity", "label": "문서/글쓰기 (정확성, 완성도, 품질, 명확성)"},
+                {"value": "accuracy,efficiency,quality,feasibility", "label": "코딩/기술 (정확성, 효율성, 품질, 실행가능성)"},
+                {"value": "creativity,quality,relevance,usefulness", "label": "창작/디자인 (창의성, 품질, 관련성, 유용성)"},
+                {"value": "accuracy,completeness,clarity,relevance", "label": "분석/리서치 (정확성, 완성도, 명확성, 관련성)"},
+                {"value": "accuracy,completeness,quality,usefulness,clarity,relevance,efficiency,creativity,feasibility", "label": "전체 (모든 측면 포함)"}
+            ],
+            "description": "평가할 측면들을 선택하세요"
         }
     ]
 
