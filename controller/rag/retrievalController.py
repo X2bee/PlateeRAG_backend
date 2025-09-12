@@ -22,6 +22,7 @@ from service.database.models.user import User
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_document_info_generator
 from service.embedding import get_fastembed_service
+from service.database.logger_helper import create_logger
 
 from service.embedding.embedding_factory import EmbeddingFactory
 from service.vector_db.vector_manager import VectorManager
@@ -91,10 +92,19 @@ class DocumentSearchRequest(BaseModel):
 async def list_collections(request: Request):
     """모든 컬렉션 목록 조회"""
     user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
     app_db = get_db_manager(request)
-    user = app_db.find_by_id(User, user_id)
-    groups = user.groups
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
+        user = app_db.find_by_id(User, user_id)
+        groups = user.groups
+
+        backend_log.info("Starting collections list retrieval",
+                        metadata={"user_groups": groups})
+
         existing_data = app_db.find_by_condition(
             VectorDB,
             {
@@ -103,6 +113,8 @@ async def list_collections(request: Request):
         limit=10000,
         return_list=True
         )
+
+        user_collections_count = len(existing_data)
 
         if groups and groups != None and groups != [] and len(groups) > 0:
             for group_name in groups:
@@ -124,8 +136,16 @@ async def list_collections(request: Request):
                 seen_ids.add(item['id'])
                 unique_data.append(item)
 
+        backend_log.success("Collections list retrieved successfully",
+                          metadata={"user_collections_count": user_collections_count,
+                                  "shared_collections_count": len(existing_data) - user_collections_count,
+                                  "total_unique_collections": len(unique_data),
+                                  "user_groups_count": len(groups) if groups else 0})
+
         return unique_data
+
     except Exception as e:
+        backend_log.error("Failed to list collections", exception=e)
         logger.error(f"Failed to list collections: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list collections: {str(e)}")
 
@@ -166,7 +186,12 @@ async def update_collections(request: Request, update_dict: dict):
 async def create_collection(request: Request, collection_request: CollectionCreateRequest):
     """새 컬렉션 생성 및 메타 등록"""
     user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
     app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     config_composer = get_config_composer(request)
     vector_size = config_composer.get_config_by_name("QDRANT_VECTOR_DIMENSION").value
     vector_manager = get_vector_manager(request)
@@ -177,6 +202,12 @@ async def create_collection(request: Request, collection_request: CollectionCrea
     print(collection_name)
 
     try:
+        backend_log.info("Starting collection creation",
+                        metadata={"collection_make_name": collection_request.collection_make_name,
+                                "collection_name": collection_name,
+                                "distance": collection_request.distance,
+                                "vector_size": vector_size})
+
         # 1. Qdrant에 컬렉션 생성 먼저
         result = vector_manager.create_collection(
             collection_name=collection_name,  # 실제 Qdrant 컬렉션 이름은 UUID
@@ -189,7 +220,6 @@ async def create_collection(request: Request, collection_request: CollectionCrea
                 "original_name": collection_request.collection_make_name,
             }
         )
-
 
         if result.get("status") == "created":
             vector_db = VectorDB(
@@ -206,6 +236,13 @@ async def create_collection(request: Request, collection_request: CollectionCrea
             )
             app_db.insert(vector_db)
 
+            backend_log.success("Collection created successfully",
+                              metadata={"collection_make_name": collection_request.collection_make_name,
+                                      "collection_name": collection_name,
+                                      "vector_size": vector_size,
+                                      "distance": collection_request.distance,
+                                      "description": collection_request.description})
+
         return {
             "message": "Collection created",
             "collection_name": collection_name,
@@ -213,6 +250,9 @@ async def create_collection(request: Request, collection_request: CollectionCrea
         }
 
     except Exception as e:
+        backend_log.error("Collection creation failed", exception=e,
+                         metadata={"collection_make_name": collection_request.collection_make_name,
+                                 "collection_name": collection_name if 'collection_name' in locals() else None})
         raise HTTPException(status_code=500, detail=f"Failed to create collection: {str(e)}")
 
 
@@ -270,15 +310,28 @@ async def upload_document(
     process_type: Optional[str] = Form("default")
 ):
     """문서 업로드 및 처리"""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        rag_service = get_rag_service(request)
-        app_db = get_db_manager(request)
         file_extension = Path(file.filename).suffix[1:].lower() if file.filename else ""
+
+        backend_log.info("Starting document upload",
+                        metadata={"filename": file.filename, "collection_name": collection_name,
+                                "file_extension": file_extension, "chunk_size": chunk_size,
+                                "chunk_overlap": chunk_overlap, "process_type": process_type})
+
+        rag_service = get_rag_service(request)
 
         # 파일 유형에 따른 process_type 검증
         if file_extension == 'pdf':
             valid_process_types = ["default", "text", "ocr"]
             if process_type not in valid_process_types:
+                backend_log.warn("Invalid process_type for PDF",
+                               metadata={"process_type": process_type, "valid_types": valid_process_types})
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid process_type for PDF files. Must be one of: {valid_process_types}"
@@ -286,6 +339,8 @@ async def upload_document(
         elif file_extension in ['docx', 'doc']:
             valid_process_types = ["default", "text", "html", "ocr", "html_pdf_ocr"]
             if process_type not in valid_process_types:
+                backend_log.warn("Invalid process_type for DOCX",
+                               metadata={"process_type": process_type, "valid_types": valid_process_types})
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid process_type for DOCX files. Must be one of: {valid_process_types}"
@@ -293,6 +348,8 @@ async def upload_document(
         else:
             # PDF, DOCX가 아닌 파일들은 process_type이 default가 아니면 경고
             if process_type != "default":
+                backend_log.warn("process_type not supported for file type, using default",
+                               metadata={"file_extension": file_extension, "requested_process_type": process_type})
                 logger.warning(f"process_type '{process_type}' is only supported for PDF and DOCX files. Using 'default' for {file_extension} files.")
                 process_type = "default"
 
@@ -303,11 +360,13 @@ async def upload_document(
         file_path = upload_dir / file.filename
 
         await file.seek(0)
+        file_size = 0
         async with aiofiles.open(file_path, 'wb') as f:
             while True:
                 chunk = await file.read(1024 * 1024)  # 1MB
                 if not chunk:
                     break
+                file_size += len(chunk)
                 await f.write(chunk)
 
         # 메타데이터 파싱
@@ -316,6 +375,8 @@ async def upload_document(
             try:
                 doc_metadata = json.loads(metadata)
             except json.JSONDecodeError:
+                backend_log.warn("Invalid metadata JSON provided",
+                               metadata={"raw_metadata": metadata})
                 logger.warning("Invalid metadata JSON: %s", metadata)
 
         # 문서 처리
@@ -331,16 +392,43 @@ async def upload_document(
             process_type=process_type
         )
 
+        backend_log.success("Document uploaded and processed successfully",
+                          metadata={"filename": file.filename, "collection_name": collection_name,
+                                  "file_size": file_size, "file_extension": file_extension,
+                                  "chunk_size": chunk_size, "chunk_overlap": chunk_overlap,
+                                  "process_type": process_type, "result": result})
+
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
+        backend_log.error("Document upload failed", exception=e,
+                         metadata={"filename": file.filename if 'file' in locals() else None,
+                                 "collection_name": collection_name,
+                                 "process_type": process_type})
         logger.error("Document upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to upload document: {str(e)}")
 
 @router.post("/documents/search")
 async def search_documents(request: Request, search_request: DocumentSearchRequest):
     """문서 검색"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
+        backend_log.info("Starting document search",
+                        metadata={"collection_name": search_request.collection_name,
+                                "query_text": search_request.query_text[:100] if search_request.query_text else None,
+                                "limit": search_request.limit,
+                                "score_threshold": search_request.score_threshold,
+                                "rerank": search_request.rerank,
+                                "rerank_top_k": search_request.rerank_top_k})
+
         rag_service = get_rag_service(request)
         result = await rag_service.search_documents(
             search_request.collection_name,
@@ -351,8 +439,20 @@ async def search_documents(request: Request, search_request: DocumentSearchReque
             rerank=search_request.rerank,
             rerank_top_k=search_request.rerank_top_k
         )
+
+        backend_log.success("Document search completed successfully",
+                          metadata={"collection_name": search_request.collection_name,
+                                  "query_length": len(search_request.query_text) if search_request.query_text else 0,
+                                  "results_count": len(result) if isinstance(result, list) else 1,
+                                  "limit": search_request.limit,
+                                  "rerank_used": search_request.rerank})
+
         return result
+
     except Exception as e:
+        backend_log.error("Document search failed", exception=e,
+                         metadata={"collection_name": search_request.collection_name,
+                                 "query_text": search_request.query_text[:100] if search_request.query_text else None})
         raise HTTPException(status_code=500, detail=f"Failed to search documents: {str(e)}")
 
 

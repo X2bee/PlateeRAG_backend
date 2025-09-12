@@ -88,11 +88,42 @@ class AppDatabaseManager:
             return None
 
     def update(self, model: BaseModel) -> bool:
-        """모델 인스턴스를 데이터베이스에서 업데이트"""
+        """모델 인스턴스를 데이터베이스에서 업데이트 (리스트 데이터 처리 지원)"""
         try:
             db_type = self.config_db_manager.db_type
+
+            original_data = {}
+            for attr_name in dir(model):
+                if not attr_name.startswith('_') and not callable(getattr(model, attr_name)):
+                    attr_value = getattr(model, attr_name)
+                    if not attr_name in ['id', 'created_at', 'updated_at']:
+                        original_data[attr_name] = attr_value
+
             query, values = model.get_update_query(db_type)
-            affected_rows = self.config_db_manager.execute_update_delete(query, tuple(values))
+            set_part = query.split('SET')[1].split('WHERE')[0].strip()
+            set_clauses = [clause.strip() for clause in set_part.split(',')]
+
+            processed_values = []
+            value_index = 0
+
+            for clause in set_clauses:
+                column_name = clause.split('=')[0].strip()
+                original_value = original_data.get(column_name)
+
+                if isinstance(original_value, list) and db_type == "postgresql":
+                    escaped_items = []
+                    for item in original_value:
+                        escaped_item = str(item).replace('"', '""')
+                        escaped_items.append(f'"{escaped_item}"')
+                    array_literal = "{" + ",".join(escaped_items) + "}"
+                    processed_values.append(array_literal)
+                else:
+                    processed_values.append(values[value_index])
+
+                value_index += 1
+
+            processed_values.append(values[-1])
+            affected_rows = self.config_db_manager.execute_update_delete(query, tuple(processed_values))
             return {"result": "success"}
 
         except AttributeError as e:

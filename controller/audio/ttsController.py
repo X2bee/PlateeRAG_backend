@@ -10,11 +10,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from service.tts.tts_factory import TTSFactory
-from controller.helper.singletonHelper import get_tts_service, get_config_composer
+from controller.helper.singletonHelper import get_tts_service, get_config_composer, get_db_manager
 import io
 from service.tts.tts_factory import TTSFactory
 from controller.admin.adminBaseController import validate_superuser
-
+from service.database.logger_helper import create_logger
+from controller.helper.controllerHelper import extract_user_id_from_request
 logger = logging.getLogger("controller.tts")
 
 # TTS 요청 모델
@@ -178,6 +179,10 @@ async def generate_speech(
     Returns:
         오디오 파일 (streaming response)
     """
+    app_db = get_db_manager(request)
+    user_id = extract_user_id_from_request(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         tts_controller = get_tts_service(request)
         audio_data = await tts_controller.generate_speech(
@@ -195,6 +200,10 @@ async def generate_speech(
         }
         media_type = media_type_map.get(tts_request.output_format.lower(), "audio/wav")
 
+        backend_log.success("TTS generation completed successfully",
+                          metadata={"text_length": len(tts_request.text), "speaker": tts_request.speaker,
+                                  "output_format": tts_request.output_format, "audio_size": len(audio_data)})
+
         # 스트리밍 응답으로 반환
         return StreamingResponse(
             io.BytesIO(audio_data),
@@ -207,6 +216,8 @@ async def generate_speech(
     except HTTPException:
         raise
     except Exception as e:
+        backend_log.error("Unexpected error in TTS generation", exception=e,
+                         metadata={"text_length": len(tts_request.text), "output_format": tts_request.output_format})
         logger.error("Unexpected error in TTS generation: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error during TTS generation") from e
 
@@ -265,11 +276,18 @@ async def refresh_tts_factory(request: Request):
             status_code=403,
             detail="Admin privileges required"
         )
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
         config_composer = get_config_composer(request)
         if config_composer.get_config_by_name("IS_AVAILABLE_TTS").value:
             tts_client = TTSFactory.create_tts_client(config_composer)
             request.app.state.tts_service = tts_client
+
+            backend_log.success("TTS configuration refreshed successfully",
+                              metadata={"tts_enabled": True})
             return {
                 "message": "TTS configuration refreshed successfully"
             }
@@ -278,6 +296,8 @@ async def refresh_tts_factory(request: Request):
                 try:
                     await request.app.state.tts_service.cleanup()
                 except Exception as cleanup_e:
+                    backend_log.warn("Error during existing TTS service cleanup",
+                                   metadata={"cleanup_error": str(cleanup_e)})
                     logger.warning(f"Error during existing TTS service cleanup: {cleanup_e}")
 
                 request.app.state.tts_service = None
@@ -285,9 +305,13 @@ async def refresh_tts_factory(request: Request):
                 gc.collect()
             else:
                 request.app.state.tts_service = None
+
+            backend_log.info("TTS service disabled in configuration",
+                           metadata={"tts_enabled": False})
             return {
                 "message": "TTS service is disabled in configuration"
             }
 
     except Exception as e:
+        backend_log.error("Failed to refresh TTS config", exception=e)
         raise HTTPException(status_code=500, detail=f"Failed to refresh TTS config: {str(e)}")

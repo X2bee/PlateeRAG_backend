@@ -8,6 +8,7 @@ from controller.node.nodeApiController import register_node_api_routes
 
 from controller.node.router import node_router
 from controller.admin.router import admin_router
+from controller.manager.router import manager_router
 from controller.workflow.router import workflow_router
 from controller.rag.router import rag_router
 from controller.audio.router import audio_router
@@ -34,7 +35,7 @@ from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
-from controller.workflow.utils.workflow_helpers import workflow_data_synchronizer
+from controller.helper.utils.workflow_helpers import workflow_data_synchronizer
 
 def print_xgen_logo():
     logo = """
@@ -313,6 +314,7 @@ app.add_middleware(
 
 app.include_router(node_router)
 app.include_router(admin_router)
+app.include_router(manager_router)
 app.include_router(workflow_router)
 app.include_router(rag_router)
 app.include_router(audio_router)

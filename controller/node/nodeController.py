@@ -12,6 +12,7 @@ import glob
 from pathlib import Path
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from service.database.logger_helper import create_logger
 
 from editor.node_composer import (
     run_discovery,
@@ -48,14 +49,17 @@ def get_node_list(user_id = None):
 
 @router.get("/get", response_model=List[Dict[str, Any]])
 async def list_nodes(request: Request):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
     try:
-        user_id = extract_user_id_from_request(request)
         nodes = get_node_list(user_id=user_id)
+        backend_log.info("Listed nodes", metadata={"node_count": len(nodes)})
         return nodes
     except HTTPException as e:
         raise e
     except Exception as e:
-        logging.error(f"Error listing nodes: {e}")
+        backend_log.error("Error listing nodes", metadata={"error": str(e)})
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/export", response_model=Dict[str, Any])
@@ -63,21 +67,23 @@ async def export_nodes(request: Request):
     """
     Refesh and export the list of nodes to a JSON file.
     """
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
     try:
-        user_id = extract_user_id_from_request(request)
-
         from editor.node_composer import NODE_REGISTRY
         run_discovery()
         output_filename = f"./constants/{user_id}/exported_nodes.json"
         generate_json_spec(output_path=output_filename)
         if not os.path.exists(output_filename):
+            backend_log.error("Failed to generate nodes JSON file.")
             raise HTTPException(status_code=500, detail="Failed to generate nodes JSON file.")
-
         else:
+            backend_log.info("Nodes exported successfully", metadata={"file": output_filename})
             return {"status": "success", "message": "Nodes exported successfully", "file": output_filename}
 
     except Exception as e:
-        logging.error(f"Error listing nodes: {e}")
+        backend_log.error("Error listing nodes", metadata={"error": str(e)})
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/refresh", response_model=Dict[str, Any])
@@ -85,21 +91,23 @@ async def refresh_nodes(request: Request):
     """
     Refesh and export the list of nodes to a JSON file.
     """
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
     try:
-        user_id = extract_user_id_from_request(request)
-
         from editor.node_composer import NODE_REGISTRY
         run_force_discovery(user_id=user_id)
         output_filename = f"./constants/{user_id}/exported_nodes.json"
         generate_json_spec(output_path=output_filename)
         if not os.path.exists(output_filename):
+            backend_log.error("Failed to generate nodes JSON file.")
             raise HTTPException(status_code=500, detail="Failed to generate nodes JSON file.")
-
         else:
+            backend_log.info("Nodes exported successfully", metadata={"file": output_filename})
             return {"status": "success", "message": "Nodes exported successfully", "file": output_filename}
 
     except Exception as e:
-        logging.error(f"Error listing nodes: {e}")
+        backend_log.error("Error listing nodes", metadata={"error": str(e)})
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/registry", response_model=Dict[str, Any])

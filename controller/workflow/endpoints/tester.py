@@ -14,11 +14,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_db_manager, get_config_composer
 from controller.workflow.models.requests import TesterExecuteRequest, TesterTestCase, TesterTestResult, WorkflowRequest
-from controller.workflow.utils.data_parsers import parse_input_data
-from controller.workflow.utils.workflow_helpers import workflow_parameter_helper
-from controller.workflow.utils.llm_evaluators import evaluate_with_llm
+from controller.helper.utils.data_parsers import parse_input_data
+from controller.helper.utils.workflow_helpers import workflow_parameter_helper
+from controller.helper.utils.llm_evaluators import evaluate_with_llm
 from service.database.models.executor import ExecutionIO
 from editor.async_workflow_executor import execution_manager
+from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("tester-endpoints")
 router = APIRouter()
@@ -244,9 +245,17 @@ async def get_workflow_io_logs_for_tester(request: Request, workflow_name: str):
     """
     특정 워크플로우의 ExecutionIO 로그를 interaction_batch_id별로 그룹화하여 반환합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        user_id = extract_user_id_from_request(request)
-        app_db = get_db_manager(request)
+        backend_log.info("Retrieving workflow tester IO logs",
+                        metadata={"workflow_name": workflow_name})
+
         result = app_db.find_by_condition(
             ExecutionIO,
             {
@@ -261,6 +270,8 @@ async def get_workflow_io_logs_for_tester(request: Request, workflow_name: str):
         )
 
         if not result:
+            backend_log.info("No tester IO logs found",
+                           metadata={"workflow_name": workflow_name})
             logger.info(f"No performance data found for workflow: {workflow_name}")
             return JSONResponse(content={
                 "workflow_name": workflow_name,
@@ -325,10 +336,17 @@ async def get_workflow_io_logs_for_tester(request: Request, workflow_name: str):
             "message": f"In/Out logs retrieved successfully for {len(response_data_list)} tester groups"
         }
 
+        backend_log.success("Successfully retrieved workflow tester IO logs",
+                          metadata={"workflow_name": workflow_name,
+                                  "tester_groups": len(response_data_list),
+                                  "total_logs": len(result)})
+
         logger.info(f"Performance stats retrieved for workflow: {workflow_name}, {len(response_data_list)} tester groups")
         return JSONResponse(content=final_response)
 
     except Exception as e:
+        backend_log.error("Failed to retrieve workflow tester IO logs", exception=e,
+                         metadata={"workflow_name": workflow_name})
         logger.error(f"Error retrieving workflow performance: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance data: {str(e)}")
 
@@ -337,9 +355,16 @@ async def delete_workflow_io_logs_for_tester(request: Request, workflow_name: st
     """
     특정 워크플로우의 ExecutionIO 로그를 삭제합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        user_id = extract_user_id_from_request(request)
-        app_db = get_db_manager(request)
+        backend_log.info("Starting workflow tester IO logs deletion",
+                        metadata={"workflow_name": workflow_name, "interaction_batch_id": interaction_batch_id})
 
         existing_data = app_db.find_by_condition(
             ExecutionIO,
@@ -355,6 +380,8 @@ async def delete_workflow_io_logs_for_tester(request: Request, workflow_name: st
         delete_count = len(existing_data) if existing_data else 0
 
         if delete_count == 0:
+            backend_log.info("No tester logs found to delete",
+                           metadata={"workflow_name": workflow_name, "interaction_batch_id": interaction_batch_id})
             logger.info(f"No logs found to delete for workflow: {workflow_name}")
             return JSONResponse(content={
                 "workflow_name": workflow_name,
@@ -372,6 +399,11 @@ async def delete_workflow_io_logs_for_tester(request: Request, workflow_name: st
             }
         )
 
+        backend_log.success("Successfully deleted workflow tester IO logs",
+                          metadata={"workflow_name": workflow_name,
+                                  "interaction_batch_id": interaction_batch_id,
+                                  "deleted_count": delete_count})
+
         logger.info(f"Successfully deleted {delete_count} logs for workflow: {workflow_name}")
 
         return JSONResponse(content={
@@ -384,6 +416,10 @@ async def delete_workflow_io_logs_for_tester(request: Request, workflow_name: st
     except HTTPException:
         raise
     except Exception as e:
+        backend_log.error("Failed to delete workflow tester IO logs", exception=e,
+                         metadata={"workflow_name": workflow_name,
+                                 "interaction_batch_id": interaction_batch_id,
+                                 "expected_delete_count": delete_count if 'delete_count' in locals() else 0})
         logger.error(f"Error deleting workflow logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")
 
@@ -394,8 +430,12 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
     여러 테스트 케이스를 배치로 처리하며 개별 완료 시마다 실시간 진행 상황을 SSE로 스트리밍합니다.
     """
     user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
     app_db = get_db_manager(request)
     config_composer = get_config_composer(request=request)
+    backend_log = create_logger(app_db, user_id, request)
 
     async def tester_stream_generator():
         batch_id = str(uuid.uuid4())
@@ -404,6 +444,17 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
         result_queue = asyncio.Queue()
 
         try:
+            backend_log.info("Starting workflow tester streaming execution",
+                            metadata={"workflow_name": tester_request.workflow_name,
+                                    "workflow_id": tester_request.workflow_id,
+                                    "interaction_id": tester_request.interaction_id,
+                                    "batch_id": batch_id,
+                                    "total_test_cases": len(tester_request.test_cases),
+                                    "batch_size": tester_request.batch_size,
+                                    "llm_eval_enabled": tester_request.llm_eval_enabled,
+                                    "llm_eval_type": tester_request.llm_eval_type,
+                                    "llm_eval_model": tester_request.llm_eval_model})
+
             tester_status_storage[batch_id] = {
                 "status": "running",
                 "total_count": len(tester_request.test_cases),
@@ -468,6 +519,8 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
                     if result == "TESTER_COMPLETE":
                         break
                     elif isinstance(result, str) and result.startswith("ERROR:"):
+                        backend_log.error("Workflow tester execution failed",
+                                        metadata={"batch_id": batch_id, "error": result[6:]})
                         error_message = {
                             "type": "error",
                             "batch_id": batch_id,
@@ -509,6 +562,11 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
 
             # LLM 평가 처리
             if tester_request.llm_eval_enabled and all_results:
+                backend_log.info("Starting LLM evaluation for tester results",
+                               metadata={"batch_id": batch_id, "results_count": len(all_results),
+                                       "llm_eval_type": tester_request.llm_eval_type,
+                                       "llm_eval_model": tester_request.llm_eval_model})
+
                 logger.info(f"LLM 평가 시작: {len(all_results)}개 결과 평가")
 
                 eval_progress_message = {
@@ -548,6 +606,8 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
                             logger.info(f"테스트 케이스 {result.id} LLM 평가 완료: 점수={llm_score}, interaction_id={unique_interaction_id}")
 
                         except Exception as eval_error:
+                            backend_log.error("LLM evaluation failed for test case", exception=eval_error,
+                                            metadata={"batch_id": batch_id, "test_id": result.id})
                             logger.error(f"테스트 케이스 {result.id} LLM 평가 실패: {str(eval_error)}")
 
                             eval_error_message = {
@@ -565,6 +625,9 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
                     "message": "LLM 평가가 완료되었습니다"
                 }
                 yield f"data: {json.dumps(eval_complete_message, ensure_ascii=False)}\n\n"
+
+                backend_log.info("LLM evaluation completed for tester results",
+                               metadata={"batch_id": batch_id})
 
             # 최종 결과 계산
             total_execution_time = int((time.time() - start_time) * 1000)
@@ -587,10 +650,23 @@ async def execute_workflow_tester_stream(request: Request, tester_request: Teste
             }
             yield f"data: {json.dumps(final_message, ensure_ascii=False)}\n\n"
 
+            backend_log.success("Workflow tester streaming execution completed",
+                              metadata={"workflow_name": tester_request.workflow_name,
+                                      "batch_id": batch_id,
+                                      "total_count": len(all_results),
+                                      "success_count": success_count,
+                                      "error_count": error_count,
+                                      "total_execution_time": total_execution_time,
+                                      "llm_eval_enabled": tester_request.llm_eval_enabled})
+
             logger.info(f"테스터 스트림 {batch_id} 완료: 성공={success_count}개, 실패={error_count}개, "
                        f"총 소요시간={total_execution_time}ms")
 
         except Exception as e:
+            backend_log.error("Workflow tester streaming execution failed", exception=e,
+                            metadata={"batch_id": batch_id if 'batch_id' in locals() else "unknown",
+                                    "workflow_name": tester_request.workflow_name,
+                                    "workflow_id": tester_request.workflow_id})
             logger.error(f"테스터 스트림 실행 중 오류: {str(e)}", exc_info=True)
 
             if 'batch_id' in locals() and batch_id in tester_status_storage:

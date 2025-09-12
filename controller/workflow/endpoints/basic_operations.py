@@ -11,14 +11,15 @@ import string
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
-from controller.helper.singletonHelper import get_db_manager
+from controller.helper.singletonHelper import get_db_manager, get_config_composer
 from controller.workflow.models.requests import SaveWorkflowRequest
 from service.database.models.executor import ExecutionMeta, ExecutionIO
-from controller.workflow.utils.auth_helpers import workflow_user_id_extractor
-from controller.workflow.utils.data_parsers import parse_input_data
+from controller.helper.utils.auth_helpers import workflow_user_id_extractor
+from controller.helper.utils.data_parsers import parse_input_data
 from service.database.models.user import User
 from service.database.models.workflow import WorkflowMeta
 from service.database.models.deploy import DeployMeta
+from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("basic-operations")
 router = APIRouter()
@@ -28,15 +29,25 @@ async def list_workflows(request: Request):
     """
     downloads 폴더에 있는 모든 workflow 파일들의 이름을 반환합니다.
     """
-    try:
-        user_id = extract_user_id_from_request(request)
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    try:
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
+
+        backend_log.info("Starting workflow list retrieval",
+                        metadata={"downloads_path": download_path_id})
 
         # downloads 폴더가 존재하지 않으면 생성
         if not os.path.exists(download_path_id):
             os.makedirs(download_path_id)
+            backend_log.info("Created downloads directory for user",
+                           metadata={"path": download_path_id})
             return JSONResponse(content={"workflows": []})
 
         # .json 확장자를 가진 파일들만 필터링
@@ -45,10 +56,16 @@ async def list_workflows(request: Request):
             if file.endswith('.json'):
                 workflow_files.append(file)
 
+        backend_log.success("Workflow list retrieved successfully",
+                          metadata={"workflow_count": len(workflow_files),
+                                  "workflow_files": workflow_files[:10]})  # 처음 10개만 로깅
+
         logger.info(f"Found {len(workflow_files)} workflow files")
         return JSONResponse(content={"workflows": workflow_files})
 
     except Exception as e:
+        backend_log.error("Failed to list workflows", exception=e,
+                         metadata={"downloads_path": download_path_id if 'download_path_id' in locals() else None})
         logger.error(f"Error listing workflows: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflows: {str(e)}")
 
@@ -58,12 +75,46 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
     Frontend에서 받은 workflow 정보를 파일로 저장합니다.
     파일명: {workflow_name}.json
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        user_id = extract_user_id_from_request(request)
+        workflow_data = workflow_request.content.dict()
+
+        backend_log.info("Starting workflow save operation",
+                        metadata={"workflow_name": workflow_request.workflow_name,
+                                "workflow_id": workflow_request.content.workflow_id})
+
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_request.workflow_name,
+            },
+            limit=1,
+        )
+
+        if existing_data:
+            deploy_data = app_db.find_by_condition(
+                DeployMeta,
+                {
+                    "user_id": user_id,
+                    "workflow_id": existing_data[0].workflow_id if existing_data else workflow_request.content.workflow_id,
+                    "workflow_name": workflow_request.workflow_name,
+                },
+                limit=1
+            )
+            if not deploy_data[0].is_accepted:
+                backend_log.warn("Workflow access denied - permissions revoked",
+                               metadata={"workflow_name": workflow_request.workflow_name})
+                raise HTTPException(status_code=400, detail="해당 이름의 워크플로우에 대한 권한이 박탈되었습니다. 해당 이름 사용이 불가능합니다.")
 
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
-        workflow_data = workflow_request.content.dict()
 
         if not os.path.exists(download_path_id):
             os.makedirs(download_path_id)
@@ -73,8 +124,6 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
         else:
             filename = workflow_request.workflow_name
         file_path = os.path.join(download_path_id, filename)
-
-        app_db = get_db_manager(request)
 
         # nodes 수 계산
         nodes = workflow_data.get('nodes', [])
@@ -102,14 +151,6 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             workflow_data=workflow_data,
         )
 
-        existing_data = app_db.find_by_condition(
-            WorkflowMeta,
-            {
-                "user_id": user_id,
-                "workflow_name": workflow_request.workflow_name,
-            },
-            limit=1,
-        )
         if existing_data:
             existing_data_id = existing_data[0].id
             workflow_meta.id = existing_data_id
@@ -145,8 +186,22 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
 
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(workflow_data, f, indent=2, ensure_ascii=False)
+
+            backend_log.success("Workflow saved successfully",
+                              metadata={"workflow_name": workflow_request.workflow_name,
+                                      "filename": filename,
+                                      "node_count": node_count,
+                                      "edge_count": edge_count,
+                                      "has_startnode": has_startnode,
+                                      "has_endnode": has_endnode,
+                                      "is_completed": has_startnode and has_endnode,
+                                      "operation": "update" if existing_data else "create"})
+
             logger.info(f"Workflow metadata and deploy metadata saved successfully: {workflow_request.workflow_name}")
         else:
+            backend_log.error("Failed to save workflow metadata",
+                            metadata={"workflow_name": workflow_request.workflow_name,
+                                    "error": insert_result.get('error', 'Unknown error')})
             logger.error(f"Failed to save workflow metadata: {insert_result.get('error', 'Unknown error')}")
             raise HTTPException(
                 status_code=500,
@@ -160,7 +215,12 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             "filename": filename
         })
 
+    except HTTPException:
+        raise
     except Exception as e:
+        backend_log.error("Workflow save operation failed", exception=e,
+                         metadata={"workflow_name": workflow_request.workflow_name,
+                                 "workflow_id": workflow_request.content.workflow_id if hasattr(workflow_request, 'content') else None})
         logger.error(f"Error saving workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to save workflow: {str(e)}")
 
@@ -169,10 +229,20 @@ async def load_workflow(request: Request, workflow_name: str, user_id):
     """
     특정 workflow를 로드합니다.
     """
+    login_user_id = extract_user_id_from_request(request)
+    if not login_user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, login_user_id, request)
+
     try:
-        login_user_id = extract_user_id_from_request(request)
+        backend_log.info("Starting workflow load operation",
+                        metadata={"workflow_name": workflow_name,
+                                "requested_user_id": user_id,
+                                "login_user_id": login_user_id})
+
         downloads_path = os.path.join(os.getcwd(), "downloads")
-        app_db = get_db_manager(request)
         using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
         download_path_id = os.path.join(downloads_path, using_id)
 
@@ -180,17 +250,37 @@ async def load_workflow(request: Request, workflow_name: str, user_id):
         file_path = os.path.join(download_path_id, filename)
 
         if not os.path.exists(file_path):
+            backend_log.warn("Workflow file not found",
+                           metadata={"workflow_name": workflow_name, "file_path": file_path})
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
         with open(file_path, 'r', encoding='utf-8') as f:
             workflow_data = json.load(f)
 
+        # 워크플로우 메타데이터 계산
+        nodes = workflow_data.get('nodes', [])
+        edges = workflow_data.get('edges', [])
+        workflow_id = workflow_data.get('workflow_id', 'unknown')
+
+        backend_log.success("Workflow loaded successfully",
+                          metadata={"workflow_name": workflow_name,
+                                  "workflow_id": workflow_id,
+                                  "filename": filename,
+                                  "node_count": len(nodes),
+                                  "edge_count": len(edges),
+                                  "using_user_id": using_id,
+                                  "file_size": os.path.getsize(file_path)})
+
         logger.info(f"Workflow loaded successfully: {filename}")
         return JSONResponse(content=workflow_data)
 
     except FileNotFoundError:
+        backend_log.error("Workflow file not found",
+                         metadata={"workflow_name": workflow_name, "file_path": file_path if 'file_path' in locals() else None})
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
     except Exception as e:
+        backend_log.error("Workflow load operation failed", exception=e,
+                         metadata={"workflow_name": workflow_name, "requested_user_id": user_id})
         logger.error(f"Error loading workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to load workflow: {str(e)}")
 
@@ -269,6 +359,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
 async def update_workflow(request: Request, workflow_name: str, update_dict: dict):
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
+    config_composer = get_config_composer(request)
 
     try:
         existing_data = app_db.find_by_condition(
@@ -294,6 +385,11 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
         )
         if not deploy_data:
             raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
+        if not deploy_data[0].is_accepted:
+            raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
+        if deploy_data[0].is_deployed:
+            raise HTTPException(status_code=400, detail="배포된 워크플로우는 삭제할 수 없습니다. 배포를 해제한 후 다시 시도하세요.")
+
         deploy_meta = deploy_data[0]
 
         existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
@@ -301,15 +397,24 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
 
         deploy_enabled = update_dict.get("enable_deploy", deploy_meta.is_deployed)
         deploy_meta.is_deployed = deploy_enabled
+        free_deploy_mode = config_composer.get_config_by_name("FREE_CHAT_DEPLOYMENT_MODE").value
 
         if deploy_enabled:
             alphabet = string.ascii_letters + string.digits
             deploy_key = ''.join(secrets.choice(alphabet) for _ in range(32))
             deploy_meta.deploy_key = deploy_key
 
+            if not free_deploy_mode:
+                from controller.admin.adminBaseController import is_superuser
+                val_superuser = await is_superuser(request, user_id)
+                if not val_superuser.get("superuser", False):
+                    deploy_meta.is_deployed = False
+                    deploy_meta.inquire_deploy = True
+
             logger.info(f"Generated new deploy key for workflow: {workflow_name}")
         else:
             deploy_meta.deploy_key = ""
+            deploy_meta.inquire_deploy = False
             logger.info(f"Cleared deploy key for workflow: {workflow_name}")
 
         app_db.update(existing_data)
@@ -330,9 +435,16 @@ async def delete_workflow(request: Request, workflow_name: str):
     """
     특정 workflow를 삭제합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        user_id = extract_user_id_from_request(request)
-        app_db = get_db_manager(request)
+        backend_log.info("Starting workflow deletion",
+                        metadata={"workflow_name": workflow_name})
 
         existing_data = app_db.find_by_condition(
             WorkflowMeta,
@@ -344,6 +456,32 @@ async def delete_workflow(request: Request, workflow_name: str):
             limit=1
         )
 
+        if not existing_data:
+            backend_log.warn("Workflow metadata not found for deletion",
+                           metadata={"workflow_name": workflow_name})
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+        deploy_meta = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_id": existing_data[0].workflow_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+
+        if deploy_meta and not deploy_meta[0].is_accepted:
+            backend_log.warn("Workflow deletion denied - permissions revoked",
+                           metadata={"workflow_name": workflow_name})
+            raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
+
+        if deploy_meta and deploy_meta[0].is_deployed:
+            backend_log.warn("Cannot delete deployed workflow",
+                           metadata={"workflow_name": workflow_name, "is_deployed": True})
+            raise HTTPException(status_code=400, detail="배포된 워크플로우는 삭제할 수 없습니다. 배포를 해제한 후 다시 시도하세요.")
+
+        # 데이터베이스에서 메타데이터 삭제
         app_db.delete(WorkflowMeta, existing_data[0].id if existing_data else None)
         app_db.delete_by_condition(DeployMeta, {
             "user_id": user_id,
@@ -351,15 +489,26 @@ async def delete_workflow(request: Request, workflow_name: str):
             "workflow_name": workflow_name,
         })
 
+        # 파일 시스템에서 파일 삭제
         downloads_path = os.path.join(os.getcwd(), "downloads")
         download_path_id = os.path.join(downloads_path, user_id)
         filename = f"{workflow_name}.json"
         file_path = os.path.join(download_path_id, filename)
 
         if not os.path.exists(file_path):
+            backend_log.warn("Workflow file not found on filesystem",
+                           metadata={"workflow_name": workflow_name, "file_path": file_path})
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
+        file_size = os.path.getsize(file_path)
         os.remove(file_path)
+
+        backend_log.success("Workflow deleted successfully",
+                          metadata={"workflow_name": workflow_name,
+                                  "workflow_id": existing_data[0].workflow_id,
+                                  "filename": filename,
+                                  "file_size": file_size,
+                                  "was_deployed": deploy_meta[0].is_deployed if deploy_meta else False})
 
         logger.info(f"Workflow deleted successfully: {filename}")
         return JSONResponse(content={
@@ -368,8 +517,14 @@ async def delete_workflow(request: Request, workflow_name: str):
         })
 
     except FileNotFoundError:
+        backend_log.error("Workflow file not found for deletion",
+                         metadata={"workflow_name": workflow_name})
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+    except HTTPException:
+        raise
     except Exception as e:
+        backend_log.error("Workflow deletion failed", exception=e,
+                         metadata={"workflow_name": workflow_name})
         logger.error(f"Error deleting workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete workflow: {str(e)}")
 
@@ -379,12 +534,20 @@ async def list_workflows_detail(request: Request):
     downloads 폴더에 있는 모든 workflow 파일들의 상세 정보를 반환합니다.
     각 워크플로우에 대해 파일명, workflow_id, 노드 수, 마지막 수정일자를 포함합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        user_id = extract_user_id_from_request(request)
-        app_db = get_db_manager(request)
         user = app_db.find_by_id(User, user_id)
         groups = user.groups
         user_name = user.username if user else "Unknown User"
+
+        backend_log.info("Starting detailed workflow list retrieval",
+                        metadata={"user_name": user_name, "groups": groups, "groups_count": len(groups) if groups else 0})
 
         # 직접 SQL 쿼리로 워크플로우와 사용자 정보 조인
         # 자신의 워크플로우
@@ -394,16 +557,20 @@ async def list_workflows_detail(request: Request):
                 wm.user_id, wm.workflow_id, wm.workflow_name,
                 wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                 wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                u.username, u.full_name
+                u.username, u.full_name,
+                dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
             FROM workflow_meta wm
             LEFT JOIN users u ON wm.user_id = u.id
+            LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
             WHERE wm.user_id = %s
             ORDER BY wm.updated_at DESC
             LIMIT 10000
         """
         existing_data = app_db.config_db_manager.execute_query(own_workflows_query, (user_id,))
+        own_workflow_count = len(existing_data) if existing_data else 0
 
         # 그룹 공유 워크플로우 추가
+        shared_workflow_count = 0
         if groups and groups != None and groups != [] and len(groups) > 0:
             for group_name in groups:
                 shared_workflows_query = """
@@ -412,9 +579,11 @@ async def list_workflows_detail(request: Request):
                         wm.user_id, wm.workflow_id, wm.workflow_name,
                         wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
                         wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                        u.username, u.full_name
+                        u.username, u.full_name,
+                        dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
                     FROM workflow_meta wm
                     LEFT JOIN users u ON wm.user_id = u.id
+                    LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
                     WHERE wm.share_group = %s AND wm.is_shared = true
                     ORDER BY wm.updated_at DESC
                     LIMIT 10000
@@ -422,6 +591,7 @@ async def list_workflows_detail(request: Request):
                 shared_data = app_db.config_db_manager.execute_query(shared_workflows_query, (group_name,))
                 if shared_data:
                     existing_data.extend(shared_data)
+                    shared_workflow_count += len(shared_data)
 
         seen_ids = set()
         unique_data = []
@@ -435,11 +605,20 @@ async def list_workflows_detail(request: Request):
                     item_dict['updated_at'] = item_dict['updated_at'].isoformat() if hasattr(item_dict['updated_at'], 'isoformat') else str(item_dict['updated_at'])
                 unique_data.append(item_dict)
 
+        backend_log.success("Detailed workflow list retrieved successfully",
+                          metadata={"own_workflows": own_workflow_count,
+                                  "shared_workflows": shared_workflow_count,
+                                  "total_unique_workflows": len(unique_data),
+                                  "user_name": user_name,
+                                  "groups_count": len(groups) if groups else 0})
+
         logger.info(f"Found {len(unique_data)} workflow files with detailed information")
 
         return JSONResponse(content={"workflows": unique_data})
 
     except Exception as e:
+        backend_log.error("Failed to retrieve detailed workflow list", exception=e,
+                         metadata={"user_name": user_name if 'user_name' in locals() else None})
         logger.error(f"Error listing workflow details: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
 

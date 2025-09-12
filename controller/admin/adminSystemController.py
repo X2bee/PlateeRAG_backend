@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from controller.admin.adminBaseController import validate_superuser
+from service.database.logger_helper import create_logger
 
 try:
     import pynvml
@@ -233,6 +234,9 @@ async def get_system_status(request: Request):
             detail="Admin privileges required"
         )
 
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+
     try:
         # Gather all system information
         cpu_info = get_cpu_info()
@@ -241,6 +245,9 @@ async def get_system_status(request: Request):
         network_info = get_network_info()
         disk_info = get_disk_info()
         uptime = get_system_uptime()
+
+        backend_log.success("Successfully retrieved system status",
+                          metadata={"cpu_usage": cpu_info.usage_percent, "memory_usage": memory_info.percent})
 
         return SystemMonitorResponse(
             cpu=cpu_info,
@@ -251,6 +258,7 @@ async def get_system_status(request: Request):
             uptime=uptime
         )
     except Exception as e:
+        backend_log.error("Failed to get system monitor info", exception=e)
         logger.error(f"Failed to get system monitor info: {e}")
         raise HTTPException(
             status_code=500,

@@ -11,11 +11,12 @@ from fastapi.responses import StreamingResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_db_manager
 from controller.workflow.models.requests import WorkflowRequest
-from controller.workflow.utils.auth_helpers import workflow_user_id_extractor
-from controller.workflow.utils.workflow_helpers import workflow_parameter_helper, default_workflow_parameter_helper
+from controller.helper.utils.auth_helpers import workflow_user_id_extractor
+from controller.helper.utils.workflow_helpers import workflow_parameter_helper, default_workflow_parameter_helper
 from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
 from service.database.models.executor import ExecutionIO
 from editor.async_workflow_executor import execution_manager
+from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("execution-endpoints")
 router = APIRouter()
@@ -25,11 +26,22 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     """
     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
-        user_id = extract_user_id_from_request(request)
-        app_db = get_db_manager(request)
+        backend_log.info("Starting workflow execution",
+                        metadata={"workflow_name": request_body.workflow_name,
+                                "workflow_id": request_body.workflow_id,
+                                "interaction_id": request_body.interaction_id,
+                                "input_data_length": len(str(request_body.input_data)) if request_body.input_data else 0})
+
         extracted_user_id = workflow_user_id_extractor(app_db, user_id, request_body.user_id, request_body.workflow_name)
-        
+
         ## 일반채팅인 경우 미리 정의된 워크플로우를 이용하여 일반 채팅에 사용.
         if request_body.workflow_name == 'default_mode':
             default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
@@ -37,6 +49,8 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
             with open(file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
             workflow_data = await default_workflow_parameter_helper(request, request_body, workflow_data)
+            backend_log.info("Using default mode workflow",
+                           metadata={"file_path": file_path})
 
         ## 워크플로우 실행인 경우, 해당하는 워크플로우 파일을 찾아서 사용.
         else:
@@ -51,9 +65,18 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
             with open(file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
             workflow_data = await workflow_parameter_helper(request_body, workflow_data)
+            backend_log.info("Loaded custom workflow",
+                           metadata={"file_path": file_path, "extracted_user_id": extracted_user_id})
 
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
+            backend_log.error("Invalid workflow data structure",
+                            metadata={"file_path": file_path, "has_nodes": 'nodes' in workflow_data if workflow_data else False,
+                                    "has_edges": 'edges' in workflow_data if workflow_data else False})
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
+
+        # 워크플로우 메타데이터 추출
+        nodes = workflow_data.get('nodes', [])
+        edges = workflow_data.get('edges', [])
 
         print("--- 워크플로우 실행 시작 ---")
         print(f"실행 워크플로우: {request_body.workflow_name} ({request_body.workflow_id})")
@@ -107,16 +130,34 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
                 "workflow_name": execution_meta.workflow_name
             }
 
+        backend_log.success("Workflow execution completed successfully",
+                          metadata={"workflow_name": request_body.workflow_name,
+                                  "workflow_id": request_body.workflow_id,
+                                  "interaction_id": request_body.interaction_id,
+                                  "node_count": len(nodes),
+                                  "edge_count": len(edges),
+                                  "output_count": len(final_outputs),
+                                  "is_interactive": execution_meta is not None,
+                                  "interaction_count": execution_meta.interaction_count + 1 if execution_meta else 0})
+
         return response_data
 
     except ValueError as e:
+        backend_log.error("Workflow execution validation error", exception=e,
+                         metadata={"workflow_name": request_body.workflow_name,
+                                 "workflow_id": request_body.workflow_id})
         logging.error(f"Workflow execution error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        backend_log.error("Workflow execution failed", exception=e,
+                         metadata={"workflow_name": request_body.workflow_name,
+                                 "workflow_id": request_body.workflow_id,
+                                 "interaction_id": request_body.interaction_id})
         logging.error(f"An unexpected error occurred: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
     finally:
         # 완료된 실행들 정리
+        pass
         execution_manager.cleanup_completed_executions()
 
 @router.post("/based_id/stream")
@@ -125,14 +166,27 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
     주어진 ID를 기반으로 워크플로우를 스트리밍 방식으로 실행합니다.
     """
     user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
     app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    backend_log.info("Starting streaming workflow execution with ID",
+                    metadata={"workflow_name": request_body.workflow_name,
+                            "workflow_id": request_body.workflow_id,
+                            "interaction_id": request_body.interaction_id,
+                            "input_data_length": len(str(request_body.input_data)) if request_body.input_data else 0})
+
     extracted_user_id = workflow_user_id_extractor(app_db, user_id, request_body.user_id, request_body.workflow_name)
 
     async def stream_generator(async_result_generator, db_manager, user_id, workflow_req):
         """결과 제너레이터를 SSE 형식으로 변환하는 비동기 제너레이터"""
         full_response_chunks = []
+        chunk_count = 0
         try:
             async for chunk in async_result_generator:
+                chunk_count += 1
                 full_response_chunks.append(str(chunk))
                 response_chunk = {"type": "data", "content": chunk}
                 yield f"data: {json.dumps(response_chunk, ensure_ascii=False)}\n\n"
@@ -141,7 +195,19 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             end_message = {"type": "end", "message": "Stream finished"}
             yield f"data: {json.dumps(end_message)}\n\n"
 
+            backend_log.success("Streaming workflow execution completed",
+                              metadata={"workflow_name": workflow_req.workflow_name,
+                                      "workflow_id": workflow_req.workflow_id,
+                                      "interaction_id": workflow_req.interaction_id,
+                                      "chunk_count": chunk_count,
+                                      "total_output_length": len("".join(full_response_chunks))})
+
         except Exception as e:
+            backend_log.error("Streaming workflow execution failed", exception=e,
+                            metadata={"workflow_name": workflow_req.workflow_name,
+                                    "workflow_id": workflow_req.workflow_id,
+                                    "interaction_id": workflow_req.interaction_id,
+                                    "chunk_count": chunk_count})
             logger.error(f"스트리밍 중 오류 발생: {e}", exc_info=True)
             error_message = {"type": "error", "detail": f"스트리밍 중 오류가 발생했습니다: {str(e)}"}
             yield f"data: {json.dumps(error_message)}\n\n"
@@ -149,6 +215,9 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             # 스트림 완료 후 DB 로그 업데이트
             final_text = "".join(full_response_chunks)
             if not final_text:
+                backend_log.warn("Empty stream results, skipping log update",
+                               metadata={"workflow_name": workflow_req.workflow_name,
+                                       "interaction_id": workflow_req.interaction_id})
                 logger.info("스트림 결과가 비어있어 로그를 업데이트하지 않습니다.")
                 return
 
@@ -167,6 +236,9 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 )
 
                 if not log_to_update_list:
+                    backend_log.warn("ExecutionIO log not found for update",
+                                   metadata={"workflow_name": workflow_req.workflow_name,
+                                           "interaction_id": workflow_req.interaction_id})
                     logger.warning(f"업데이트할 ExecutionIO 로그를 찾지 못했습니다. Interaction ID: {workflow_req.interaction_id}")
                     return
 
@@ -185,9 +257,16 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 log_to_update.output_data = json.dumps(output_data_dict, ensure_ascii=False)
                 db_manager.update(log_to_update)
 
+                backend_log.info("ExecutionIO log updated with streaming results",
+                               metadata={"workflow_name": workflow_req.workflow_name,
+                                       "interaction_id": workflow_req.interaction_id,
+                                       "final_text_length": len(final_text)})
                 logger.info(f"Interaction ID [{workflow_req.interaction_id}]의 로그가 최종 스트림 결과로 업데이트되었습니다.")
 
             except Exception as db_error:
+                backend_log.error("ExecutionIO log update failed", exception=db_error,
+                                metadata={"workflow_name": workflow_req.workflow_name,
+                                        "interaction_id": workflow_req.interaction_id})
                 logger.error(f"ExecutionIO 로그 업데이트 중 DB 오류 발생: {db_error}", exc_info=True)
             finally:
                 execution_manager.cleanup_completed_executions()
@@ -199,6 +278,8 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             with open(file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
             workflow_data = await default_workflow_parameter_helper(request, request_body, workflow_data)
+            backend_log.info("Using default mode workflow for streaming",
+                           metadata={"file_path": file_path})
         else:
             downloads_path = os.path.join(os.getcwd(), "downloads")
             download_path_id = os.path.join(downloads_path, extracted_user_id)
@@ -207,9 +288,18 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             with open(file_path, 'r', encoding='utf-8') as f:
                 workflow_data = json.load(f)
             workflow_data = await workflow_parameter_helper(request_body, workflow_data)
+            backend_log.info("Loaded custom workflow for streaming",
+                           metadata={"file_path": file_path, "extracted_user_id": extracted_user_id})
 
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
+            backend_log.error("Invalid workflow data structure for streaming",
+                            metadata={"file_path": file_path, "has_nodes": 'nodes' in workflow_data if workflow_data else False,
+                                    "has_edges": 'edges' in workflow_data if workflow_data else False})
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
+
+        # 워크플로우 메타데이터 추출
+        nodes = workflow_data.get('nodes', [])
+        edges = workflow_data.get('edges', [])
 
         if request_body.input_data is not None and request_body.input_data != "" and len(request_body.input_data) > 0:
             for node in workflow_data.get('nodes', []):
@@ -237,6 +327,14 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             user_id=user_id
         )
 
+        backend_log.info("Starting workflow streaming execution",
+                        metadata={"workflow_name": request_body.workflow_name,
+                                "workflow_id": request_body.workflow_id,
+                                "interaction_id": request_body.interaction_id,
+                                "node_count": len(nodes),
+                                "edge_count": len(edges),
+                                "is_interactive": execution_meta is not None})
+
         # 비동기 제너레이터 시작 (스트리밍용)
         result_generator = executor.execute_workflow_async_streaming()
 
@@ -247,40 +345,80 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
         )
 
     except ValueError as e:
+        backend_log.error("Streaming workflow execution validation error", exception=e,
+                         metadata={"workflow_name": request_body.workflow_name,
+                                 "workflow_id": request_body.workflow_id})
         logger.error(f"Workflow execution error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        backend_log.error("Streaming workflow execution setup failed", exception=e,
+                         metadata={"workflow_name": request_body.workflow_name,
+                                 "workflow_id": request_body.workflow_id,
+                                 "interaction_id": request_body.interaction_id})
         logger.error(f"An unexpected error occurred during workflow setup: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/status")
-async def get_all_execution_status():
+async def get_all_execution_status(request: Request):
     """
     현재 실행 중인 모든 워크플로우의 상태를 반환합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
+        backend_log.info("Retrieving all workflow execution status")
+
         status_data = execution_manager.get_all_execution_status()
+
+        backend_log.success("Successfully retrieved execution status",
+                          metadata={"active_executions": len(status_data)})
+
         return {
             "active_executions": len(status_data),
             "executions": status_data
         }
     except Exception as e:
+        backend_log.error("Failed to retrieve execution status", exception=e)
         logger.error(f"실행 상태 조회 중 오류: {e}")
         raise HTTPException(status_code=500, detail="실행 상태 조회 실패")
 
 @router.get("/status/{execution_id}")
-async def get_execution_status(execution_id: str):
+async def get_execution_status(request: Request, execution_id: str):
     """
     특정 워크플로우 실행의 상태를 반환합니다.
     """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
+        backend_log.info("Retrieving workflow execution status",
+                        metadata={"execution_id": execution_id})
+
         status = execution_manager.get_execution_status(execution_id)
         if status is None:
+            backend_log.warn("Execution not found",
+                           metadata={"execution_id": execution_id})
             raise HTTPException(status_code=404, detail="실행을 찾을 수 없습니다")
+
+        backend_log.success("Successfully retrieved execution status",
+                          metadata={"execution_id": execution_id,
+                                  "status": status.get("status", "unknown")})
+
         return status
     except HTTPException:
         raise
     except Exception as e:
+        backend_log.error("Failed to retrieve execution status", exception=e,
+                         metadata={"execution_id": execution_id})
         logger.error(f"실행 상태 조회 중 오류: {e}")
         raise HTTPException(status_code=500, detail="실행 상태 조회 실패")
 

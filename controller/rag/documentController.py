@@ -17,6 +17,7 @@ import urllib.parse
 from controller.authController import verify_token, get_user_by_token
 from service.database.models.user import User
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_document_info_generator
+from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("document-controller")
 security = HTTPBearer(auto_error=False)
@@ -205,6 +206,10 @@ async def fetch_document(
         # 사용자 ID 추출
         user_id = await get_user_id_from_request(request, document_request, credentials)
 
+        # Backend logging 초기화
+        app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
         dir_part, file_part = os.path.split(decoded_path)
@@ -222,18 +227,23 @@ async def fetch_document(
             safe_path = safe_original_path
 
         # 접근 권한 확인
-        app_db = get_db_manager(request)
         access_check = await check_document_access(app_db, user_id, joined_path)
         if not access_check["has_access"]:
+            backend_log.warn("Document access denied",
+                           metadata={"file_path": decoded_path, "reason": access_check.get("reason")})
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
 
         # 파일 존재 여부 확인
         if not os.path.exists(safe_path):
+            backend_log.warn("Document not found",
+                           metadata={"file_path": decoded_path, "safe_path": safe_path})
             raise HTTPException(status_code=404, detail="Document not found")
 
         # 파일 크기 확인
         file_size = os.path.getsize(safe_path)
         if file_size > MAX_FILE_SIZE:
+            backend_log.warn("File too large for fetch",
+                           metadata={"file_path": decoded_path, "file_size": file_size, "max_size": MAX_FILE_SIZE})
             raise HTTPException(status_code=413, detail="File too large")
 
         # 접근 로깅
@@ -250,6 +260,11 @@ async def fetch_document(
             encoded_filename = urllib.parse.quote(filename)
             content_disposition = f"inline; filename*=UTF-8''{encoded_filename}"
 
+        backend_log.success("Document fetched successfully",
+                          metadata={"file_path": decoded_path, "filename": filename, "file_size": file_size,
+                                  "access_level": access_check.get("access_level"),
+                                  "permissions": access_check.get("permissions")})
+
         return StreamingResponse(
             stream_file(safe_path),
             media_type="application/pdf",
@@ -263,6 +278,10 @@ async def fetch_document(
     except HTTPException:
         raise
     except Exception as e:
+        backend_log = create_logger(get_db_manager(request),
+                                  document_request.user_id or "unknown", request)
+        backend_log.error("Document fetch error", exception=e,
+                         metadata={"file_path": document_request.file_path})
         logger.error(f"Document fetch error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -281,6 +300,10 @@ async def fetch_document_deploy(
 
         user_id = document_request.user_id
 
+        # Backend logging 초기화
+        app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
         dir_part, file_part = os.path.split(decoded_path)
@@ -298,18 +321,23 @@ async def fetch_document_deploy(
             safe_path = safe_original_path
 
         # 접근 권한 확인
-        app_db = get_db_manager(request)
         access_check = await check_document_access(app_db, user_id, joined_path)
         if not access_check["has_access"]:
+            backend_log.warn("Document access denied (deploy mode)",
+                           metadata={"file_path": decoded_path, "reason": access_check.get("reason")})
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
 
         # 파일 존재 여부 확인
         if not os.path.exists(safe_path):
+            backend_log.warn("Document not found (deploy mode)",
+                           metadata={"file_path": decoded_path, "safe_path": safe_path})
             raise HTTPException(status_code=404, detail="Document not found")
 
         # 파일 크기 확인
         file_size = os.path.getsize(safe_path)
         if file_size > MAX_FILE_SIZE:
+            backend_log.warn("File too large for fetch (deploy mode)",
+                           metadata={"file_path": decoded_path, "file_size": file_size, "max_size": MAX_FILE_SIZE})
             raise HTTPException(status_code=413, detail="File too large")
 
         # 접근 로깅
@@ -326,6 +354,11 @@ async def fetch_document_deploy(
             encoded_filename = urllib.parse.quote(filename)
             content_disposition = f"inline; filename*=UTF-8''{encoded_filename}"
 
+        backend_log.success("Document fetched successfully (deploy mode)",
+                          metadata={"file_path": decoded_path, "filename": filename, "file_size": file_size,
+                                  "access_level": access_check.get("access_level"),
+                                  "permissions": access_check.get("permissions"), "mode": "deploy"})
+
         return StreamingResponse(
             stream_file(safe_path),
             media_type="application/pdf",
@@ -339,6 +372,10 @@ async def fetch_document_deploy(
     except HTTPException:
         raise
     except Exception as e:
+        backend_log = create_logger(get_db_manager(request),
+                                  document_request.user_id or "unknown", request)
+        backend_log.error("Document fetch deploy error", exception=e,
+                         metadata={"file_path": document_request.file_path})
         logger.error(f"Document fetch deploy error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -355,29 +392,48 @@ async def get_document_metadata_endpoint(
         # 사용자 ID 추출
         user_id = await get_user_id_from_request(request, document_request, credentials)
 
+        # Backend logging 초기화
+        app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
         safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
 
         # 접근 권한 확인
-        app_db = get_db_manager(request)
         access_check = await check_document_access(app_db, user_id, decoded_path)
         if not access_check["has_access"]:
+            backend_log.warn("Document metadata access denied",
+                           metadata={"file_path": decoded_path, "reason": access_check.get("reason")})
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
 
         # 파일 존재 여부 확인
         if not os.path.exists(safe_path):
+            backend_log.warn("Document not found for metadata",
+                           metadata={"file_path": decoded_path, "safe_path": safe_path})
             raise HTTPException(status_code=404, detail="Document not found")
 
         # 접근 로깅
         await log_document_access(user_id, decoded_path, "metadata")
 
         # 메타데이터 반환
-        return await get_document_metadata(safe_path, access_check["permissions"])
+        metadata_response = await get_document_metadata(safe_path, access_check["permissions"])
+
+        backend_log.success("Document metadata retrieved successfully",
+                          metadata={"file_path": decoded_path, "file_name": metadata_response.file_name,
+                                  "file_size": metadata_response.file_size, "content_type": metadata_response.content_type,
+                                  "access_level": access_check.get("access_level"),
+                                  "permissions": access_check.get("permissions")})
+
+        return metadata_response
 
     except HTTPException:
         raise
     except Exception as e:
+        backend_log = create_logger(get_db_manager(request),
+                                  document_request.user_id or "unknown", request)
+        backend_log.error("Document metadata error", exception=e,
+                         metadata={"file_path": document_request.file_path})
         logger.error(f"Document metadata error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -396,29 +452,48 @@ async def get_document_metadata_deploy(
 
         user_id = document_request.user_id
 
+        # Backend logging 초기화
+        app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
         # 파일 경로
         decoded_path = urllib.parse.unquote(document_request.file_path)
         safe_path = validate_file_path(decoded_path, DOCUMENTS_BASE_DIR)
 
         # 접근 권한 확인
-        app_db = get_db_manager(request)
         access_check = await check_document_access(app_db, user_id, decoded_path)
         if not access_check["has_access"]:
+            backend_log.warn("Document metadata access denied (deploy mode)",
+                           metadata={"file_path": decoded_path, "reason": access_check.get("reason")})
             raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
 
         # 파일 존재 여부 확인
         if not os.path.exists(safe_path):
+            backend_log.warn("Document not found for metadata (deploy mode)",
+                           metadata={"file_path": decoded_path, "safe_path": safe_path})
             raise HTTPException(status_code=404, detail="Document not found")
 
         # 접근 로깅
         await log_document_access(user_id, decoded_path, "metadata_deploy")
 
         # 메타데이터 반환
-        return await get_document_metadata(safe_path, access_check["permissions"])
+        metadata_response = await get_document_metadata(safe_path, access_check["permissions"])
+
+        backend_log.success("Document metadata retrieved successfully (deploy mode)",
+                          metadata={"file_path": decoded_path, "file_name": metadata_response.file_name,
+                                  "file_size": metadata_response.file_size, "content_type": metadata_response.content_type,
+                                  "access_level": access_check.get("access_level"),
+                                  "permissions": access_check.get("permissions"), "mode": "deploy"})
+
+        return metadata_response
 
     except HTTPException:
         raise
     except Exception as e:
+        backend_log = create_logger(get_db_manager(request),
+                                  document_request.user_id or "unknown", request)
+        backend_log.error("Document metadata deploy error", exception=e,
+                         metadata={"file_path": document_request.file_path})
         logger.error(f"Document metadata deploy error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -435,23 +510,38 @@ async def check_document_access_endpoint(
         # 사용자 ID 추출
         user_id = await get_user_id_from_request(request, document_request, credentials)
 
-        # 접근 권한 확인
+        # Backend logging 초기화
         app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
+        # 접근 권한 확인
         decoded_path = urllib.parse.unquote(document_request.file_path)
         access_check = await check_document_access(app_db, user_id, decoded_path)
 
         # 접근 로깅
         await log_document_access(user_id, decoded_path, "access_check")
 
-        return DocumentAccessResponse(
+        access_response = DocumentAccessResponse(
             has_access=access_check["has_access"],
             permissions=access_check.get("permissions", {}),
             access_level=access_check.get("access_level", "none")
         )
 
+        backend_log.success("Document access check completed",
+                          metadata={"file_path": decoded_path, "has_access": access_check["has_access"],
+                                  "access_level": access_check.get("access_level"),
+                                  "permissions": access_check.get("permissions"),
+                                  "reason": access_check.get("reason") if not access_check["has_access"] else None})
+
+        return access_response
+
     except HTTPException:
         raise
     except Exception as e:
+        backend_log = create_logger(get_db_manager(request),
+                                  document_request.user_id or "unknown", request)
+        backend_log.error("Document access check error", exception=e,
+                         metadata={"file_path": document_request.file_path})
         logger.error(f"Document access check error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -470,22 +560,38 @@ async def check_document_access_deploy(
 
         user_id = document_request.user_id
 
-        # 접근 권한 확인
+        # Backend logging 초기화
         app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
+        # 접근 권한 확인
         decoded_path = urllib.parse.unquote(document_request.file_path)
         access_check = await check_document_access(app_db, user_id, decoded_path)
 
         # 접근 로깅
         await log_document_access(user_id, decoded_path, "access_check_deploy")
 
-        return DocumentAccessResponse(
+        access_response = DocumentAccessResponse(
             has_access=access_check["has_access"],
             permissions=access_check.get("permissions", {}),
             access_level=access_check.get("access_level", "none")
         )
 
+        backend_log.success("Document access check completed (deploy mode)",
+                          metadata={"file_path": decoded_path, "has_access": access_check["has_access"],
+                                  "access_level": access_check.get("access_level"),
+                                  "permissions": access_check.get("permissions"),
+                                  "reason": access_check.get("reason") if not access_check["has_access"] else None,
+                                  "mode": "deploy"})
+
+        return access_response
+
     except HTTPException:
         raise
     except Exception as e:
+        backend_log = create_logger(get_db_manager(request),
+                                  document_request.user_id or "unknown", request)
+        backend_log.error("Document access check deploy error", exception=e,
+                         metadata={"file_path": document_request.file_path})
         logger.error(f"Document access check deploy error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -14,12 +14,13 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import os
-from controller.helper.controllerHelper import extract_user_id_from_request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from service.database.models.train import TrainMeta
 from controller.vastController import CreateInstanceRequest, get_vast_service, _broadcast_status_change
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
+from controller.helper.controllerHelper import extract_user_id_from_request
+from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("train-controller")
 router = APIRouter(prefix="/api/train", tags=["training"])
@@ -255,10 +256,15 @@ def make_external_api_call(url: str, method: str = "GET", data: Dict[str, Any] =
 @router.post("/start")
 async def start_training(request: Request, training_params: TrainingStartRequest):
     """훈련 작업 시작"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         config = get_train_node_config(request)
         url = f"{config['base_url']}/api/train/start"
-        user_id = extract_user_id_from_request(request)
 
         # 요청 파라미터를 딕셔너리로 변환
         params_dict = training_params.dict()
@@ -291,6 +297,9 @@ async def start_training(request: Request, training_params: TrainingStartRequest
             if insert_result and insert_result.get("result") == "success":
                 logger.info(f"Training metadata saved successfully: {workflow_meta}")
             logger.info(f"Training started successfully: {result['data']}")
+            backend_log.success("Training started successfully",
+                                metadata={"job_id": job_id, "model_name_or_path": params_dict["model_name_or_path"],
+                                            "train_data": params_dict["train_data"], "test_data": params_dict["test_data"]})
             return result["data"]
         else:
             logger.error(f"Failed to start training: {result['error']}")
@@ -309,6 +318,10 @@ async def start_training(request: Request, training_params: TrainingStartRequest
 
             if insert_result and insert_result.get("result") == "success":
                 logger.info(f"Training metadata saved successfully: {workflow_meta}")
+
+            backend_log.error("Training start failed",
+                              metadata={"job_id": job_id, "model_name_or_path": params_dict["model_name_or_path"],
+                                        "train_data": params_dict["train_data"], "test_data": params_dict["test_data"]})
             raise HTTPException(
                 status_code=result["status_code"],
                 detail=f"Training start failed: {result['error']}"
@@ -321,6 +334,11 @@ async def start_training(request: Request, training_params: TrainingStartRequest
 @router.post("/mlflow")
 async def get_mlflow(request: Request, params: MLFlowParams):
     """MLflow 정보 조회"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
     try:
         config = get_train_node_config(request)
         url = f"{config['base_url']}/api/train/mlflow"
@@ -336,8 +354,16 @@ async def get_mlflow(request: Request, params: MLFlowParams):
         )
 
         if result["success"]:
+            backend_log.success("MLflow info retrieved successfully",
+                              metadata={"mlflow_url": params_dict["mlflow_url"],
+                                        "mlflow_exp_id": params_dict["mlflow_exp_id"],
+                                        "mlflow_run_id": params_dict["mlflow_run_id"]})
             return result["data"]
         else:
+            backend_log.error("Failed to get MLflow info",
+                            metadata={"mlflow_url": params_dict["mlflow_url"],
+                                      "mlflow_exp_id": params_dict["mlflow_exp_id"],
+                                      "mlflow_run_id": params_dict["mlflow_run_id"]})
             raise HTTPException(
                 status_code=result["status_code"],
                 detail=f"Failed to get MLflow info: {result['error']}"

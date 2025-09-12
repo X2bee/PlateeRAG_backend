@@ -15,6 +15,8 @@ import asyncio
 from urllib import request as urllib_request
 from service.vast.vast_service import VastService
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_vast_service
+from controller.helper.controllerHelper import extract_user_id_from_request
+from service.database.logger_helper import create_logger
 
 router = APIRouter(prefix="/api/vast", tags=["vastAI"])
 logger = logging.getLogger("vast-controller")
@@ -252,10 +254,18 @@ async def health_check(request: Request):
         500: {"description": "검색 실패"}
     })
 async def search_offers(request: Request, search_request: OfferSearchRequest) -> OfferSearchResponse:
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+
     try:
         service = get_vast_service(request)
 
         if not service.vast_manager.setup_api_key():
+            backend_log.error("VastAI API 키 설정 오류")
             raise HTTPException(status_code=400, detail="API 키가 설정되지 않았거나 잘못되었습니다")
 
         # 검색 쿼리 구성
@@ -279,6 +289,8 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
         offers = service.vast_manager.search_offers(search_query)
 
         if not offers:
+            backend_log.warning("No offers found",
+                                metadata={"search_query": search_query})
             return OfferSearchResponse(
                 offers=[],
                 total=0,
@@ -292,7 +304,9 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
         sort_key = sort_key_map.get(search_request.sort_by, "dph_total")
         sorted_offers = sorted(offers, key=lambda x: x.get(sort_key, 999))
         limited_offers = sorted_offers[:search_request.limit] if search_request.limit else sorted_offers
-
+        backend_log.success("Offers searched successfully",
+                            metadata={"search_query": search_query, "total_offers": len(offers), "filtered_offers": len(limited_offers),
+                                      "sort_by": search_request.sort_by, "sort_key": sort_key})
         return OfferSearchResponse(
             offers=[OfferInfo(**offer) for offer in limited_offers],
             total=len(offers),
@@ -303,7 +317,8 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"오퍼 검색 실패: {e}")
+        backend_log.error("Error searching offers", exception=e,
+                         metadata={"search_request": search_request.model_dump()})
         raise HTTPException(status_code=500, detail="오퍼 검색 실패")
 
 @router.post("/instances",
@@ -315,6 +330,12 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
         500: {"description": "서버 오류"}
     })
 async def create_instance(request: Request, create_request: CreateInstanceRequest, background_tasks: BackgroundTasks):
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         service = get_vast_service(request)
         config_composer = get_config_composer(request)
@@ -351,6 +372,8 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
         )
 
         if not instance_id:
+            backend_log.error("인스턴스 생성 실패",
+                              metadata={"template_name": create_request.template_name, "offer_id": create_request.offer_id})
             raise HTTPException(status_code=400, detail="인스턴스 생성 실패")
 
         # 인스턴스 생성 후 즉시 상태 확인
@@ -358,6 +381,8 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
             # 인스턴스가 실제로 생성되었는지 확인
             db_instance = service.get_instance_from_db(instance_id)
             if not db_instance:
+                backend_log.error("인스턴스 생성 후 DB에서 찾을 수 없음",
+                                  metadata={"instance_id": instance_id})
                 raise HTTPException(status_code=400, detail="인스턴스 생성 후 DB에서 찾을 수 없음")
 
             # VastAI에서 인스턴스 상태 확인
@@ -366,6 +391,8 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
                 # 인스턴스가 VastAI에 존재하지 않으면 실패로 처리
                 service._update_instance(instance_id, updates={"status": "failed"})
                 await _broadcast_status_change(instance_id, "failed")
+                backend_log.error("VastAI에서 인스턴스를 찾을 수 없음",
+                                  metadata={"instance_id": instance_id})
                 raise HTTPException(
                     status_code=400,
                     detail=f"인스턴스 {instance_id} 생성 실패: VastAI에서 인스턴스를 찾을 수 없습니다"
@@ -376,6 +403,8 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
             if vast_status in ["exited", "failed", "error"]:
                 service._update_instance(instance_id, updates={"status": "failed"})
                 await _broadcast_status_change(instance_id, "failed")
+                backend_log.error("인스턴스 생성 후 상태가 실패로 확인됨",
+                                  metadata={"instance_id": instance_id, "vast_status": vast_status})
                 raise HTTPException(
                     status_code=400,
                     detail=f"인스턴스 {instance_id} 생성 실패: 상태가 {vast_status}입니다"
@@ -384,9 +413,10 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"인스턴스 {instance_id} 상태 확인 실패: {e}")
             service._update_instance(instance_id, updates={"status": "failed"})
             await _broadcast_status_change(instance_id, "failed")
+            backend_log.error("인스턴스 생성 후 상태 확인 실패",
+                              metadata={"instance_id": instance_id, "exception": str(e)})
             raise HTTPException(
                 status_code=400,
                 detail=f"인스턴스 {instance_id} 생성 후 상태 확인 실패: {str(e)}"
@@ -400,7 +430,8 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
 
         # 상태 브로드캐스트
         await _broadcast_status_change(instance_id, "creating")
-
+        backend_log.success("인스턴스 생성 시작",
+                            metadata={"instance_id": instance_id, "template_name": create_request.template_name})
         return {
             "success": True,
             "instance_id": instance_id,
@@ -421,7 +452,8 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"인스턴스 생성 실패: {e}")
+        backend_log.error("인스턴스 생성 오류", exception=e,
+                         metadata={"create_request": create_request.model_dump()})
         raise HTTPException(status_code=500, detail="인스턴스 생성 실패")
 
 @router.get("/instances",
@@ -434,6 +466,12 @@ async def list_instances(
     include_destroyed: bool = Query(False, description="삭제된 인스턴스 포함"),
     sort_by: str = Query("created_at", description="정렬 기준")
 ) -> InstanceListResponse:
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         service = get_vast_service(request)
 
@@ -447,9 +485,8 @@ async def list_instances(
                     if isinstance(vast_inst, dict) and vast_inst.get("id"):
                         my_active_instance_ids.add(str(vast_inst["id"]))
         except Exception as e:
-            logger.warning(f"VastAI 인스턴스 목록 조회 중 오류: {e}")
+            backend_log.warning("VastAI 인스턴스 목록 조회 중 오류")
 
-        # DB에서 VastAI에 없는 인스턴스들을 deleted로 업데이트
         updated_count = 0
         if service.db_manager:
             from service.database.models.vast import VastInstance
@@ -464,7 +501,8 @@ async def list_instances(
                         service.db_manager.update(db_inst)
                         updated_count += 1
                     except Exception as e:
-                        logger.error(f"인스턴스 {instance_id} 상태 업데이트 실패: {e}")
+                        backend_log.error("인스턴스 상태 업데이트 실패", exception=e,
+                                         metadata={"instance_id": instance_id})
 
         # 로그 출력
         if updated_count > 0:
@@ -489,9 +527,11 @@ async def list_instances(
         elif sort_by == "cost":
             instances.sort(key=lambda x: x.get("cost_per_hour", 0))
 
+        backend_log.info("인스턴스 목록 조회 성공",
+                            metadata={"total_instances": len(instances), "status_filter": status_filter, "include_destroyed": include_destroyed, "sort_by": sort_by})
         return InstanceListResponse(instances=instances, total=len(instances))
     except Exception as e:
-        logger.error(f"인스턴스 목록 조회 실패: {e}")
+        backend_log.error("인스턴스 목록 조회 실패", exception=e)
         raise HTTPException(status_code=500, detail="인스턴스 목록 조회 실패")
 
 @router.get("/instances/{instance_id}/status-stream",
@@ -570,14 +610,21 @@ async def stream_instance_status(request: Request, instance_id: str):
         500: {"description": "서버 오류"}
     })
 async def get_instance_status(request: Request, instance_id: str):
-    """인스턴스 상태 조회"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         service = get_vast_service(request)
         db_instance = service.get_instance_from_db(instance_id)
 
         if not db_instance:
+            backend_log.warning("인스턴스 상태 조회 실패", metadata={"instance_id": instance_id})
             raise HTTPException(status_code=404, detail=f"인스턴스 '{instance_id}'를 찾을 수 없습니다")
 
+        backend_log.info("인스턴스 상태 조회 성공", metadata={"instance_id": instance_id, "status": db_instance.status})
         return {
             "instance_id": instance_id,
             "status": db_instance.status
@@ -586,7 +633,7 @@ async def get_instance_status(request: Request, instance_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"인스턴스 상태 조회 실패: {e}")
+        backend_log.error("인스턴스 상태 조회 실패", metadata={"instance_id": instance_id, "error": str(e)})
         raise HTTPException(status_code=500, detail="인스턴스 상태 조회 실패")
 
 @router.delete("/instances/{instance_id}",
@@ -598,16 +645,24 @@ async def get_instance_status(request: Request, instance_id: str):
         500: {"description": "서버 오류"}
     })
 async def destroy_instance(request: Request, instance_id: str):
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         service = get_vast_service(request)
         success = service.destroy_instance(instance_id)
 
         if not success:
+            backend_log.error("인스턴스 삭제 실패", metadata={"instance_id": instance_id})
             raise HTTPException(status_code=400, detail="인스턴스 삭제 실패")
 
         # 상태 업데이트 및 SSE 브로드캐스트
         await _broadcast_status_change(instance_id, "deleted")
 
+        backend_log.success("인스턴스 삭제 성공", metadata={"instance_id": instance_id})
         return {
             "success": True,
             "message": f"인스턴스 {instance_id}가 삭제되었습니다",
@@ -616,7 +671,7 @@ async def destroy_instance(request: Request, instance_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"인스턴스 삭제 실패: {e}")
+        backend_log.error("인스턴스 삭제 실패", metadata={"instance_id": instance_id, "error": str(e)})
         raise HTTPException(status_code=500, detail="인스턴스 삭제 실패")
 
 
@@ -625,6 +680,12 @@ async def destroy_instance(request: Request, instance_id: str):
     description="인스턴스의 포트 매핑 정보를 VastAI에서 가져와 DB에 업데이트합니다. 개선된 IP 추출 로직을 사용하여 정확한 공인 IP를 식별합니다.",
     response_model=Dict[str, Any])
 async def update_instance_ports(request: Request, instance_id: str):
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         service = get_vast_service(request)
         logger.info(f"인스턴스 {instance_id} 포트 매핑 업데이트 시작")
@@ -642,6 +703,9 @@ async def update_instance_ports(request: Request, instance_id: str):
             logger.info(f"  - 공인 IP: {public_ip}")
             logger.info(f"  - 포트 매핑 개수: {len(port_mappings)}")
 
+            backend_log.success("포트 매핑 정보 업데이트 성공",
+                                metadata={"instance_id": instance_id, "public_ip": public_ip, "port_count": len(port_mappings)})
+
             return {
                 "success": True,
                 "instance_id": instance_id,
@@ -652,6 +716,9 @@ async def update_instance_ports(request: Request, instance_id: str):
                 "port_count": len(port_mappings)
             }
         else:
+            backend_log.error("포트 매핑 정보 업데이트 실패",
+                              metadata={"instance_id": instance_id})
+
             return {
                 "success": False,
                 "instance_id": instance_id,
@@ -665,7 +732,7 @@ async def update_instance_ports(request: Request, instance_id: str):
             }
 
     except Exception as e:
-        logger.error(f"포트 매핑 업데이트 실패: {e}")
+        backend_log.error("포트 매핑 업데이트 실패", metadata={"instance_id": instance_id, "error": str(e)})
         raise HTTPException(status_code=500, detail="포트 매핑 업데이트 실패")
 
 @router.post("/instances/{instance_id}/vllm-serve",
@@ -673,6 +740,12 @@ async def update_instance_ports(request: Request, instance_id: str):
     description="인스턴스의 VLLM 서비스를 시작합니다. VLLM 설정을 기반으로 VLLM 서버를 실행합니다.",
     response_model=Dict[str, Any])
 async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMServeConfigRequest):
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         service = get_vast_service(request)
         db_instance = service.get_instance_from_db(instance_id)
@@ -703,7 +776,8 @@ async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMServeC
             }
             service._update_instance(instance_id, updates=updates)
             await _broadcast_status_change(instance_id, "running_vllm")
-
+            backend_log.success("VLLM 서비스 시작 성공",
+                                metadata={"instance_id": instance_id, "model_name": vllm_config.model_id})
             return {
                 "success": True,
                 "message": response_data.get("message", "VLLM 서비스가 성공적으로 시작되었습니다"),
@@ -711,7 +785,7 @@ async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMServeC
             }
 
     except Exception as e:
-        logger.error(f"VLLM 서비스 시작 실패: {e}")
+        backend_log.error("VLLM 서비스 시작 실패", metadata={"instance_id": instance_id, "error": str(e)})
         raise HTTPException(status_code=500, detail="VLLM 서비스 시작 실패")
 
 @router.post("/instances/{instance_id}/vllm-down",
@@ -719,6 +793,12 @@ async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMServeC
     description="인스턴스의 VLLM을 다운시킵니다.",
     response_model=Dict[str, Any])
 async def vllm_down(request: Request, instance_id: str):
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         service = get_vast_service(request)
         db_instance = service.get_instance_from_db(instance_id)
@@ -741,6 +821,7 @@ async def vllm_down(request: Request, instance_id: str):
                 "model_name": "None",
                 "max_model_length": 0,
             })
+            backend_log.success("VLLM 다운 성공", metadata={"instance_id": instance_id})
 
             return {
                 "success": True,
@@ -749,7 +830,7 @@ async def vllm_down(request: Request, instance_id: str):
             }
 
     except Exception as e:
-        logger.error(f"VLLM 다운 실패: {e}")
+        backend_log.error("VLLM 다운 실패", metadata={"instance_id": instance_id, "error": str(e)})
         raise HTTPException(status_code=500, detail="VLLM 다운 실패")
 
 @router.put("/set-vllm",
@@ -763,6 +844,12 @@ async def vllm_down(request: Request, instance_id: str):
     })
 async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
     """VLLM API Base URL과 모델명 설정 업데이트"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
     try:
         # appController의 update_persistent_config 함수를 import
         from controller.appController import update_persistent_config, ConfigUpdateRequest
@@ -774,10 +861,9 @@ async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
             api_base_url_request = ConfigUpdateRequest(value=vllm_config.api_base_url)
             api_base_url_result = await update_persistent_config("VLLM_API_BASE_URL", api_base_url_request, request)
 
-            logger.info(f"VLLM_API_BASE_URL 업데이트: {old_api_base_url} -> {vllm_config.api_base_url}")
-
+            backend_log.info(f"VLLM_API_BASE_URL 업데이트: {old_api_base_url} -> {vllm_config.api_base_url}")
         except KeyError:
-            logger.warning("VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
+            backend_log.warning("VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
             raise HTTPException(status_code=404, detail="VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
 
         try:
@@ -786,24 +872,22 @@ async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
             model_name_request = ConfigUpdateRequest(value=vllm_config.model_name)
             model_name_result = await update_persistent_config("VLLM_MODEL_NAME", model_name_request, request)
 
-            logger.info(f"VLLM_MODEL_NAME 업데이트: {old_model_name} -> {vllm_config.model_name}")
+            backend_log.info(f"VLLM_MODEL_NAME 업데이트: {old_model_name} -> {vllm_config.model_name}")
 
         except KeyError:
-            logger.warning("VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
+            backend_log.warning("VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
             raise HTTPException(status_code=404, detail="VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
         try:
             provider_request = ConfigUpdateRequest(value='vllm')
             provider_response = await update_persistent_config("DEFAULT_LLM_PROVIDER", provider_request, request)
 
-            logger.info(f"DEFAULT_LLM_PROVIDER 업데이트: {provider_request.value}")
+            backend_log.info(f"DEFAULT_LLM_PROVIDER 업데이트: {provider_request.value}")
 
         except KeyError:
-            logger.warning("DEFAULT_LLM_PROVIDER 설정을 찾을 수 없습니다")
+            backend_log.warning("DEFAULT_LLM_PROVIDER 설정을 찾을 수 없습니다")
             raise HTTPException(status_code=404, detail="DEFAULT_LLM_PROVIDER 설정을 찾을 수 없습니다")
 
-
-        logger.info("Successfully updated VLLM configuration using update_persistent_config")
-        logger.info(f"VLLM 설정 업데이트: API Base URL = {api_base_url_result}, 모델명 = {model_name_result}")
+        backend_log.info(f"VLLM 설정 업데이트", metadata={"api_base_url": api_base_url_result, "model_name": model_name_result})
 
         return {
             "success": True,
@@ -816,7 +900,7 @@ async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"VLLM 설정 업데이트 실패: {e}")
+        backend_log.error("VLLM 설정 업데이트 실패", metadata={"error": str(e)})
         raise HTTPException(status_code=500, detail=f"VLLM 설정 업데이트 실패: {str(e)}")
 
 @router.post("/instances/vllm-health",

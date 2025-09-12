@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
 from controller.workflow.models.requests import ScoreModelParser
-from controller.workflow.utils.data_parsers import clean_llm_output
+from controller.helper.utils.data_parsers import clean_llm_output
 from service.database.models.executor import ExecutionIO
 
 logger = logging.getLogger("llm-evaluators")
@@ -95,7 +95,7 @@ async def evaluate_with_llm(
 위 실제 답변이 레퍼런스 정답과 얼마나 정확히 일치하는지 0.00~1.00 사이의 점수로 평가해주세요.
 **답변 형식**
 {parser.get_format_instructions()}"""
-        
+
         human_msg = HumanMessage(content=evaluation_prompt)
 
         # LLM 호출
