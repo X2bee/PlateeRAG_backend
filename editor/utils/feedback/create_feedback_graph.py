@@ -8,13 +8,13 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from editor.type_model.feedback_state import FeedbackState
 
-from editor.utils.helper.agent_helper import NonStreamingAgentHandlerWithToolOutput
+from editor.utils.helper.agent_helper import NonStreamingAgentHandlerWithToolOutput, NonStreamingAgentHandler
 
 logger = logging.getLogger(__name__)
 
 memory = MemorySaver()
 
-def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_context, feedback_criteria):
+def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_context, feedback_criteria, return_intermediate_steps=True, feedback_threshold=8, enable_auto_feedback=True):
         """LangGraph 피드백 루프 그래프 생성"""
         
         def execute_task(state: FeedbackState) -> FeedbackState:
@@ -47,7 +47,10 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                         max_iterations=3,
                         max_execution_time=300,
                     )
-                    handler = NonStreamingAgentHandlerWithToolOutput()
+                    if return_intermediate_steps:
+                        handler = NonStreamingAgentHandlerWithToolOutput()
+                    else:
+                        handler = NonStreamingAgentHandler()
                     response = agent_executor.invoke(inputs, {"callbacks": [handler]})
                     result = handler.get_formatted_output(response["output"])
                 else:
@@ -88,9 +91,27 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
         def evaluate_feedback(state: FeedbackState) -> FeedbackState:
             """결과에 대한 피드백 평가"""
             try:
+                # enable_auto_feedback가 False인 경우 피드백 평가를 건너뛰고 기본 점수 설정
+                if not enable_auto_feedback:
+                    if not state["tool_results"]:
+                        return {**state, "feedback_score": 0}
+
+                    latest_result = state["tool_results"][-1]
+                    updated_tool_results = state["tool_results"][:-1] + [{
+                        **latest_result,
+                        "feedback_score": 5,  # 중간 점수로 설정
+                        "evaluation": {"score": 5, "reasoning": "자동 피드백이 비활성화됨", "improvements": "", "strengths": ""}
+                    }]
+
+                    return {
+                        **state,
+                        "feedback_score": 5,
+                        "tool_results": updated_tool_results
+                    }
+
                 if not state["tool_results"]:
                     return {**state, "feedback_score": 0}
-                
+
                 latest_result = state["tool_results"][-1]
                 if latest_result.get("error"):
                     return {**state, "feedback_score": 1}
@@ -164,20 +185,22 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
 
         def check_completion(state: FeedbackState) -> str:
             """완료 조건 확인"""
-            feedback_threshold = 8  # 기본값, 실제로는 파라미터로 전달받아야 함
-            
             # 최대 반복 횟수 확인
             if state["iteration_count"] >= state["max_iterations"]:
                 return "finalize"
-            
-            # 피드백 점수 확인
-            if state["feedback_score"] >= feedback_threshold:
+
+            # 피드백 점수 확인 (enable_auto_feedback가 True일 때만)
+            if enable_auto_feedback and state["feedback_score"] >= feedback_threshold:
                 return "finalize"
-            
+
             # 에러가 발생한 경우
             if state["tool_results"] and state["tool_results"][-1].get("error"):
                 return "finalize"
-            
+
+            # enable_auto_feedback가 False인 경우, 최대 반복 횟수에만 의존
+            if not enable_auto_feedback and state["iteration_count"] >= state["max_iterations"]:
+                return "finalize"
+
             return "continue"
 
         def increment_iteration(state: FeedbackState) -> FeedbackState:
@@ -201,7 +224,7 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                         default=state["tool_results"][-1]
                     )
                     final_result = best_result["result"]
-                    requirements_met = best_result.get("feedback_score", 0) >= 8
+                    requirements_met = best_result.get("feedback_score", 0) >= feedback_threshold
                 
                 return {
                     **state,

@@ -110,7 +110,8 @@ class AgentFeedbackLoopNode(Node):
 
             # LangGraph 워크플로우 생성
             workflow = create_feedback_graph(
-                llm, tools_list, prompt_template, additional_rag_context, feedback_criteria
+                llm, tools_list, prompt_template, additional_rag_context, feedback_criteria,
+                return_intermediate_steps, feedback_threshold, enable_auto_feedback
             )
 
             # 초기 상태 설정
@@ -136,7 +137,7 @@ class AgentFeedbackLoopNode(Node):
             # 결과 구성
             iteration_log = []
             feedback_scores = []
-            
+
             for result in final_state["tool_results"]:
                 iteration_log.append({
                     "iteration": result["iteration"],
@@ -147,25 +148,40 @@ class AgentFeedbackLoopNode(Node):
                 })
                 feedback_scores.append(result.get("feedback_score", 0))
 
-            return {
-                    "result": final_state["final_result"] or "No final result generated",
-                    "iteration_log": iteration_log,
-                    "feedback_scores": feedback_scores,
-                    "total_iterations": len(iteration_log),
-                    "final_score": feedback_scores[-1] if feedback_scores else 0,
-                    "average_score": sum(feedback_scores) / len(feedback_scores) if feedback_scores else 0 
+            # return_intermediate_steps에 따라 결과 구조 결정
+            result_dict = {
+                "result": final_state["final_result"] or "No final result generated",
+                "total_iterations": len(iteration_log),
+                "final_score": feedback_scores[-1] if feedback_scores else 0,
+                "average_score": sum(feedback_scores) / len(feedback_scores) if feedback_scores else 0
             }
+
+            # return_intermediate_steps가 True인 경우에만 중간 단계 정보 포함
+            if return_intermediate_steps:
+                result_dict.update({
+                    "iteration_log": iteration_log,
+                    "feedback_scores": feedback_scores
+                })
+
+            return result_dict
 
         except Exception as e:
             logger.error(f"[FEEDBACK_LOOP_EXECUTE] Feedback Loop Agent 실행 중 오류 발생: {str(e)}")
             logger.exception(f"[FEEDBACK_LOOP_EXECUTE] 상세 스택 트레이스:")
-            return {
+
+            # 에러 시에도 return_intermediate_steps에 따라 결과 구조 결정
+            error_result = {
                 "result": f"죄송합니다. 피드백 루프 실행 중 오류가 발생했습니다: {str(e)}",
-                "iteration_log": [],
-                "feedback_scores": [],
                 "total_iterations": 0,
                 "final_score": 0,
                 "average_score": 0,
                 "error": True
-                
             }
+
+            if return_intermediate_steps:
+                error_result.update({
+                    "iteration_log": [],
+                    "feedback_scores": []
+                })
+
+            return error_result
