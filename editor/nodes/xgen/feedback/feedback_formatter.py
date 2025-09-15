@@ -125,8 +125,8 @@ class FeedbackLoopFormatterNode(Node):
                 score = log_entry.get('score', 0)
                 
                 # 결과 자르기
-                if len(iteration_result) > truncate_len:
-                    iteration_result = iteration_result[:truncate_len] + "..."
+                # if len(iteration_result) > truncate_len:
+                #     iteration_result = iteration_result[:truncate_len] + "..."
                 
                 markdown += f"### 반복 {iteration_num}"
                 if show_scores:
@@ -195,12 +195,13 @@ class FeedbackLoopFormatterNode(Node):
                 output += "\n"
                 
                 # 결과 표시
-                if len(iteration_result) > truncate_len:
-                    truncated_result = iteration_result[:truncate_len] + "..."
-                    output += f"결과: {truncated_result}\n"
-                else:
-                    output += f"결과: {iteration_result}\n"
+                # if len(iteration_result) > truncate_len:
+                #     truncated_result = iteration_result[:truncate_len] + "..."
+                #     output += f"결과: {truncated_result}\n"
+                # else:
+                #     output += f"결과: {iteration_result}\n"
                 
+                output += f"결과: {iteration_result}\n"
                 # 평가 정보
                 if 'evaluation' in log_entry:
                     eval_info = log_entry['evaluation']
