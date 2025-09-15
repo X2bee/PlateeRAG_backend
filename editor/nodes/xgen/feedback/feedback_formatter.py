@@ -18,7 +18,7 @@ class FeedbackLoopFormatterNode(Node):
         {"id": "feedback_result", "name": "Feedback Loop Result", "type": "FeedbackDICT", "multi": False, "required": True, "stream": False},
     ]
     outputs = [
-        {"id": "formatted_output", "name": "Formatted Output", "type": "STR", "required": True, "multi": False, "stream": False},
+        {"id": "formatted_output", "name": "Formatted Output", "type": "FormattedSTR", "required": True, "multi": False, "stream": False},
     ]
     parameters = [
         {

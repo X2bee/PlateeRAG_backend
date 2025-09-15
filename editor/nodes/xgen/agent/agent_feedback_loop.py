@@ -1,6 +1,8 @@
 import logging
 import asyncio
 from typing import Dict, Any, Optional
+from urllib.request import Request
+from controller.helper.singletonHelper import get_config_composer
 from editor.type_model.feedback_state import FeedbackState
 from editor.utils.feedback.create_feedback_graph import create_feedback_graph
 from pydantic import BaseModel
@@ -54,6 +56,14 @@ class AgentFeedbackLoopNode(Node):
 
     def __init__(self):
         super().__init__()
+
+    def api_vllm_model_name(self, request: Request) -> Dict[str, Any]:
+        config_composer = get_config_composer(request)
+        return config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+
+    def api_vllm_api_base_url(self, request: Request) -> Dict[str, Any]:
+        config_composer = get_config_composer(request)
+        return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
         
     def execute(
         self,

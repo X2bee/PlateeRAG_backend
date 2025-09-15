@@ -1,25 +1,18 @@
 import logging
 import asyncio
 from typing import Dict, Any, Optional, List
+from controller.helper.singletonHelper import get_config_composer
 from editor.type_model.feedback_state import FeedbackState
 from editor.utils.feedback.create_feedback_graph import create_feedback_graph
 from pydantic import BaseModel
+
+from fastapi import Request
 from editor.node_composer import Node
-from langchain.schema.output_parser import StrOutputParser
-from langchain_core.output_parsers import JsonOutputParser
 from editor.nodes.xgen.agent.functions import (
     prepare_llm_components, rag_context_builder, 
     create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 )
-from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput
 from editor.utils.prefix_prompt import prefix_prompt
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-
-# LangGraph imports
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
-from typing_extensions import TypedDict, Annotated
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +22,8 @@ You will execute tasks, evaluate results against user requirements, and iterate 
 class AgentFeedbackLoopNode(Node):
     categoryId = "xgen"
     functionId = "agents"
-    nodeId = "agents/feedback_loop"
-    nodeName = "Agent Feedback Loop"
+    nodeId = "agents/feedback_loop_vllm"
+    nodeName = "Agent VLLM Feedback Loop"
     description = "LangGraph 기반 피드백 루프를 통해 사용자 요구사항에 맞는 결과를 반복적으로 생성하는 Agent 노드"
     tags = ["agent", "feedback", "loop", "langgraph", "iterative", "evaluation"]
 
@@ -61,6 +54,15 @@ class AgentFeedbackLoopNode(Node):
 
     def __init__(self):
         super().__init__()
+
+    def api_vllm_model_name(self, request: Request) -> Dict[str, Any]:
+        config_composer = get_config_composer(request)
+        return config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+
+    def api_vllm_api_base_url(self, request: Request) -> Dict[str, Any]:
+        config_composer = get_config_composer(request)
+        return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
+
         
     def execute(
         self,
