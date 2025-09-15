@@ -1,16 +1,25 @@
 import logging
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from editor.type_model.feedback_state import FeedbackState
 from editor.utils.feedback.create_feedback_graph import create_feedback_graph
 from pydantic import BaseModel
 from editor.node_composer import Node
+from langchain.schema.output_parser import StrOutputParser
+from langchain_core.output_parsers import JsonOutputParser
 from editor.nodes.xgen.agent.functions import (
     prepare_llm_components, rag_context_builder, 
     create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 )
 from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput
 from editor.utils.prefix_prompt import prefix_prompt
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+
+# LangGraph imports
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+from typing_extensions import TypedDict, Annotated
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +46,11 @@ class AgentFeedbackLoopNode(Node):
         {"id": "feedback_result", "name": "Feedback Loop Result", "type": "FeedbackDICT", "required": True, "multi": False, "stream": False},
     ]
     parameters = [
-        {
-            "id": "model", "name": "Model", "type": "STR", "value": "gpt-4.1-mini", "required": True, "description": "사용할 LLM 모델 이름 (예: gpt-4, gpt-3.5-turbo 등)"
-        },
+        {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": True},
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
-        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "required": False, "optional": True},
+        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "중간 단계를 반환할지 여부입니다."},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
@@ -63,11 +70,11 @@ class AgentFeedbackLoopNode(Node):
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
         feedback_criteria: str = "",
-        model: str = "gpt-4",
+        model: str = "x2bee/Polar-14B",
         temperature: float = 0.7,
         max_tokens: int = 8192,
         n_messages: int = 3,
-        base_url: str = "https://api.openai.com/v1",
+        base_url: str = "",
         strict_citation: bool = True,
         return_intermediate_steps: bool = True,
         default_prompt: str = default_prompt,
