@@ -78,14 +78,12 @@ class FeedbackLoopFormatterNode(Node):
         """요약 형태로 포매팅"""
         error_indicator = "⚠️ 오류 발생 " if has_error else ""
         
-        return f"""{error_indicator}=== 피드백 루프 실행 요약 ===
-
+        return f"""<FEEDBACK_LOOP>{error_indicator}=== 피드백 루프 실행 요약 ===
 📊 실행 통계:
 - 총 반복 횟수: {total_iterations}회
 - 최종 점수: {final_score}/10
 - 평균 점수: {average_score:.1f}/10
-
-✅ 최종 결과:
+</FEEDBACK_LOOP>
 {str(result)}
 """
 
@@ -95,16 +93,15 @@ class FeedbackLoopFormatterNode(Node):
         score_info = f" (점수: {' → '.join(map(str, feedback_scores))})" if show_scores and feedback_scores else ""
         error_indicator = "⚠️ " if has_error else "🔄 "
         
-        return f"""{error_indicator}피드백 루프 완료: {total_iterations}회 반복{score_info}
-
-📝 결과: {str(result)}"""
+        return f"""<FEEDBACK_LOOP>{error_indicator}피드백 루프 완료: {total_iterations}회 반복{score_info}</FEEDBACK_LOOP>
+{str(result)}"""
 
     def _format_markdown(self, result: str, iteration_log: List[Dict], feedback_scores: List[int], 
                         show_scores: bool, show_timestamps: bool, max_iterations: int, truncate_len: int,
                         total_iterations: int, final_score: int, average_score: float, has_error: bool) -> str:
         """마크다운 형태로 포매팅"""
         error_indicator = "⚠️ " if has_error else "🔄 "
-        markdown = f"# {error_indicator}피드백 루프 실행 결과\n\n"
+        markdown = f"<FEEDBACK_LOOP># {error_indicator}피드백 루프 실행 결과\n\n"
         
         markdown += "## 📊 실행 통계\n\n"
         markdown += f"- **총 반복 횟수**: {total_iterations}회\n"
@@ -143,7 +140,7 @@ class FeedbackLoopFormatterNode(Node):
                 markdown += f"*... 및 {len(iteration_log) - max_iterations}개의 추가 반복*\n\n"
         
         # 최종 결과
-        markdown += "## ✅ 최종 결과\n\n"
+        markdown += "</FEEDBACK_LOOP>"
         markdown += f"```\n{str(result)}\n```\n"
         
         return markdown
@@ -153,7 +150,7 @@ class FeedbackLoopFormatterNode(Node):
                         total_iterations: int, final_score: int, average_score: float, has_error: bool) -> str:
         """상세한 형태로 포매팅"""
         error_indicator = "⚠️ 오류 발생 - " if has_error else ""
-        output = "=" * 60 + "\n"
+        output = "<FEEDBACK_LOOP>\n"
         output += f"{error_indicator}🔄 피드백 루프 실행 결과\n"
         output += "=" * 60 + "\n\n"
         
@@ -221,9 +218,8 @@ class FeedbackLoopFormatterNode(Node):
                 output += f"... 및 {len(iteration_log) - max_iterations}개의 추가 반복\n\n"
         
         # 최종 결과
-        output += "=" * 60 + "\n"
-        output += "✅ 최종 결과:\n"
         output += "=" * 60 + "\n\n"
+        output += "</FEEDBACK_LOOP>"
         output += str(result)
         
         return output
