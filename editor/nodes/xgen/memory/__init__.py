@@ -1,1 +1,1 @@
-from .db_chat_memory import DBMemoryNode
+from .db_chat_memory_v2 import DBMemoryNode

@@ -216,7 +216,7 @@ def prepare_optimized_chat_history(memory, current_input, n_messages, llm):
         return []
 
     try:
-        from editor.nodes.xgen.memory.db_chat_memory import DBMemoryNode
+        from editor.nodes.xgen.memory.db_chat_memory_v2 import DBMemoryNode
 
         # 메모리에서 모든 대화 기록 추출
         memory_vars = memory.load_memory_variables({})

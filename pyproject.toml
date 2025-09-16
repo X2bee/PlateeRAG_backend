@@ -130,4 +130,5 @@ dependencies = [
     "sudachipy>=0.6.10",
     "sudachidict-full>=20241021",
     "soundfile>=0.13.1",
+    "langgraph>=0.6.7",
 ]
