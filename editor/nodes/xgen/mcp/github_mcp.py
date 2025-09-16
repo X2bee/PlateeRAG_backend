@@ -1,7 +1,8 @@
 import logging
 import os
 from editor.node_composer import Node
-from .github_mcp_helper import GitHubMCPTool
+from langchain_community.agent_toolkits.github.toolkit import GitHubToolkit
+from langchain_community.utilities.github import GitHubAPIWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -20,32 +21,36 @@ class GitHubMCP(Node):
     ]
 
     parameters = [
-        {"id": "github_access_token", "name": "GitHub Access Token", "type": "STR", "value": "", "required": True, "description": "GitHub API에 접근하기 위한 Personal Access Token입니다."},
-        {"id": "github_repository", "name": "GitHub Repository", "type": "STR", "value": "", "required": False, "optional": True, "description": "작업할 GitHub 리포지토리 (형식: owner/repo)"},
-        {"id": "github_branch", "name": "GitHub Branch", "type": "STR", "value": "main", "required": False, "optional": True, "description": "작업할 GitHub 브랜치"},
+        {"id": "github_app_id", "name": "GitHub App ID", "type": "STR", "value": "", "required": True, "description": "GitHub App ID입니다."},
+        {"id": "github_app_private_key", "name": "GitHub App Private Key", "type": "STR", "value": "", "required": True, "expandable": True, "description": "GitHub App Private Key입니다."},
+        {"id": "github_repository", "name": "GitHub Repository", "type": "STR", "value": "", "required": True, "description": "작업할 GitHub 리포지토리 (형식: owner/repo)"}
     ]
 
     def execute(self, *args, **kwargs):
         try:
             # 파라미터 추출
-            github_access_token = kwargs.get("github_access_token", "")
+            github_app_id = kwargs.get("github_app_id", "")
+            github_app_private_key = kwargs.get("github_app_private_key", "")
             github_repository = kwargs.get("github_repository", "")
-            github_branch = kwargs.get("github_branch", "main")
 
-            # GitHub Access Token을 환경 변수로 설정
-            os.environ["GITHUB_TOKEN"] = github_access_token
-            os.environ["GITHUB_PERSONAL_ACCESS_TOKEN"] = github_access_token
+            if not github_app_id:
+                raise ValueError("GitHub App ID가 필요합니다.")
+            if not github_app_private_key:
+                raise ValueError("GitHub App Private Key가 필요합니다.")
 
-            # GitHub MCP 도구 생성
-            github_tool = GitHubMCPTool(
-                access_token=github_access_token,
-                repository=github_repository,
-                branch=github_branch
-            )
 
-            logger.info("GitHub MCP 도구가 성공적으로 생성되었습니다. (repository: %s, branch: %s)",
-                       github_repository or "지정되지 않음", github_branch)
-            return github_tool
+            os.environ["GITHUB_APP_ID"] = github_app_id
+            os.environ["GITHUB_APP_PRIVATE_KEY"] = github_app_private_key
+            os.environ["GITHUB_REPOSITORY"] = github_repository
+
+            github = GitHubAPIWrapper()
+
+            toolkit = GitHubToolkit.from_github_api_wrapper(github)
+            tools = toolkit.get_tools()
+            for tool in tools:
+                print(tool.name)
+            logger.info("GitHub MCP 도구가 성공적으로 생성되었습니다. (repository: %s)", github_repository or "지정되지 않음")
+            return tools
 
         except Exception as e:
             logger.error("GitHub MCP 도구 생성 중 오류 발생: %s", str(e))
