@@ -8,19 +8,25 @@ class PostgreSQLInput(BaseModel):
     query: str = Field(description="실행할 SQL 쿼리")
 
 class PostgreSQLMCPTool(BaseTool):
-    name: str = "postgresql_mcp"
-    description: str = "PostgreSQL 데이터베이스에 대한 읽기 전용 접근을 제공합니다."
+    name: str = Field(default="postgresql_mcp", description="도구 이름")
+    description: str = Field(default="PostgreSQL 데이터베이스에 대한 읽기 전용 접근을 제공합니다.", description="도구 설명")
     args_schema: Type[BaseModel] = PostgreSQLInput
     postgres_url: str = Field(default="", description="PostgreSQL 연결 URL")
     db: SQLDatabase = Field(description="SQLDatabase 인스턴스")
     sql_tool: QuerySQLDataBaseTool = Field(description="QuerySQLDataBaseTool 인스턴스")
     db_prompt: str = Field(default="", description="데이터베이스 프롬프트")
 
-    def __init__(self, postgres_url: str, db_prompt: str):
+    def __init__(self, postgres_url: str, db_prompt: str, name: str = None, description: str = None):
         db = SQLDatabase.from_uri(postgres_url)
         sql_tool = QuerySQLDataBaseTool(db=db)
 
+        # name과 description이 제공되면 사용, 아니면 기본값 사용
+        tool_name = name if name is not None else "postgresql_mcp"
+        tool_description = description if description is not None else "PostgreSQL 데이터베이스에 대한 읽기 전용 접근을 제공합니다."
+
         super().__init__(
+            name=tool_name,
+            description=tool_description,
             postgres_url=postgres_url,
             db=db,
             sql_tool=sql_tool,
