@@ -33,7 +33,6 @@ class PostgreSQLMCP(Node):
 
     def execute(self, host: str, port: int = 5432, username: str = 'postgres', password: str = '', database: str = 'postgres', db_prompt: str = '', name: str = 'postgresql_mcp', description: str = 'PostgreSQL 데이터베이스에 대한 읽기 전용 접근을 제공합니다.', *args, **kwargs):
         try:
-            include_tables = kwargs.get("include_tables", "")
             sample_rows = kwargs.get("sample_rows_in_table_info", 3)
 
             # 필수 파라미터 검증

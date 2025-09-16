@@ -3,6 +3,7 @@ from langchain_community.utilities import SQLDatabase
 from langchain_core.tools import BaseTool
 from typing import Type
 from pydantic import BaseModel, Field
+import re
 
 class PostgreSQLInput(BaseModel):
     query: str = Field(description="실행할 SQL 쿼리")
@@ -39,14 +40,15 @@ class PostgreSQLMCPTool(BaseTool):
             # 읽기 전용 쿼리만 허용
             query_upper = query.upper().strip()
 
-            # 위험한 쿼리 방지
-            dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'CREATE', 'ALTER', 'TRUNCATE']
-            if any(keyword in query_upper for keyword in dangerous_keywords):
-                return "보안상의 이유로 읽기 전용 쿼리(SELECT)만 허용됩니다."
-
-            # SELECT 쿼리만 허용
             if not query_upper.startswith('SELECT'):
                 return "읽기 전용 접근을 위해 SELECT 쿼리만 허용됩니다."
+
+            # 위험한 쿼리 방지 (단어 경계를 고려한 정확한 매칭)
+
+            dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'CREATE', 'ALTER', 'TRUNCATE']
+            for keyword in dangerous_keywords:
+                if re.search(rf'\b{keyword}\b', query_upper):
+                    return f"보안상의 이유로 읽기 전용 쿼리(SELECT)만 허용됩니다. 감지된 키워드: {keyword}"
 
             # SQL 쿼리 실행
             if self.sql_tool is None:
