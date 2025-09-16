@@ -11,16 +11,21 @@ class PostgreSQLMCPTool(BaseTool):
     name: str = "postgresql_mcp"
     description: str = "PostgreSQL 데이터베이스에 대한 읽기 전용 접근을 제공합니다."
     args_schema: Type[BaseModel] = PostgreSQLInput
+    postgres_url: str = Field(default="", description="PostgreSQL 연결 URL")
+    db: SQLDatabase = Field(description="SQLDatabase 인스턴스")
+    sql_tool: QuerySQLDataBaseTool = Field(description="QuerySQLDataBaseTool 인스턴스")
+    db_prompt: str = Field(default="", description="데이터베이스 프롬프트")
 
-    def __init__(self, postgres_url: str):
-        super().__init__()
-        self.postgres_url = postgres_url
+    def __init__(self, postgres_url: str, db_prompt: str):
+        db = SQLDatabase.from_uri(postgres_url)
+        sql_tool = QuerySQLDataBaseTool(db=db)
 
-        # SQLDatabase 초기화
-        self.db = SQLDatabase.from_uri(postgres_url)
-
-        # QuerySQLDataBaseTool 초기화
-        self.sql_tool = QuerySQLDataBaseTool(db=self.db)
+        super().__init__(
+            postgres_url=postgres_url,
+            db=db,
+            sql_tool=sql_tool,
+            db_prompt=db_prompt
+        )
 
     def _run(self, query: str, **kwargs) -> str:
         """PostgreSQL 쿼리를 실행합니다."""
@@ -38,7 +43,13 @@ class PostgreSQLMCPTool(BaseTool):
                 return "읽기 전용 접근을 위해 SELECT 쿼리만 허용됩니다."
 
             # SQL 쿼리 실행
+            if self.sql_tool is None:
+                return "SQL 도구가 초기화되지 않았습니다."
+
             result = self.sql_tool.run(query)
+
+            if self.db_prompt and len(self.db_prompt.strip()) > 0:
+                result = f"{self.db_prompt}\n\n{result}"
             return result
 
         except Exception as e:
