@@ -31,6 +31,7 @@ class QdrantRetrievalTool(Node):
     nodeName = "Qdrant Retrieval Tool V4"
     description = "VectorDB 검색 Tool을 전달"
     tags = ["document_loader", "qdrant", "vector_db", "rag", "setup"]
+    disable = True
 
     inputs = []
     outputs = [

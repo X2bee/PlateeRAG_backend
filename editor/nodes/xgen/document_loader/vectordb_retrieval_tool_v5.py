@@ -32,6 +32,7 @@ class QdrantRetrievalToolV5(Node):
     nodeName = "Qdrant Retrieval Tool V5 (Advanced Tree Search)"
     description = "고도화된 트리 서치 알고리즘을 사용한 VectorDB 검색 Tool"
     tags = ["document_loader", "qdrant", "vector_db", "rag", "tree_search", "advanced"]
+    disable = True
 
     inputs = []
     outputs = [

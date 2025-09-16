@@ -30,6 +30,7 @@ class GraphEnhancedRetrievalTool(Node):
     nodeName = "Graph Enhanced Retrieval Tool"
     description = "그래프 네트워크를 활용한 향상된 VectorDB 검색 Tool"
     tags = ["document_loader", "qdrant", "vector_db", "rag", "graph", "enhancement"]
+    disable = True
 
     inputs = []
     outputs = [
