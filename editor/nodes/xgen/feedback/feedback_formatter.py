@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
+#deprecated
 class FeedbackLoopFormatterNode(Node):
     categoryId = "xgen" 
     functionId = "feedback"
@@ -13,6 +13,7 @@ class FeedbackLoopFormatterNode(Node):
     nodeName = "Feedback Loop Formatter"
     description = "피드백 루프 노드의 출력을 가독성 좋게 포매팅하여 하나의 문자열로 반환하는 노드"
     tags = ["format", "feedback", "display", "output"]
+    disable = True  # 이 노드는 더 이상 사용되지 않음
 
     inputs = [
         {"id": "feedback_result", "name": "Feedback Loop Result", "type": "FeedbackDICT", "multi": False, "required": True, "stream": False},
