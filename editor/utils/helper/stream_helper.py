@@ -240,7 +240,8 @@ def execute_agent_streaming(
 
     except Exception as e:
         logger.error(f"스트리밍 중 오류: {str(e)}", exc_info=True)
-        yield f"\n❌ 오류 발생: {str(e)}\n"
+        pass
+        # yield f"\n❌ 오류 발생: {str(e)}\n"
     finally:
         # 스레드 정리
         if thread.is_alive():

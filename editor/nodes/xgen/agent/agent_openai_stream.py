@@ -91,7 +91,6 @@ class AgentOpenAIStreamNode(Node):
                     handle_parsing_errors=True,
                     max_iterations=10,
                     max_execution_time=300,
-                    early_stopping_method="generate",
                 )
                 if return_intermediate_steps:
                     handler = EnhancedAgentStreamingHandlerWithToolOutput()
