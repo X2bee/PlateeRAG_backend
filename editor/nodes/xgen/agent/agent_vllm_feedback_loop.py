@@ -127,14 +127,14 @@ class AgentFeedbackLoopNode(Node):
             all_results = []
             todo_execution_log = []
 
+            # TODO별 워크플로우 생성
+            workflow = create_feedback_graph(
+                llm, tools_list, prompt_template, additional_rag_context,
+                feedback_criteria, return_intermediate_steps, feedback_threshold, enable_auto_feedback
+            )
+
             for i, todo in enumerate(todos):
                 logger.info(f"Executing TODO {i+1}/{len(todos)}: {todo.get('title', 'Untitled')}")
-
-                # TODO별 워크플로우 생성
-                workflow = create_feedback_graph(
-                    llm, tools_list, prompt_template, additional_rag_context,
-                    feedback_criteria, return_intermediate_steps, feedback_threshold, enable_auto_feedback
-                )
 
                 # TODO 실행을 위한 상태 설정
                 todo_text = f"TODO: {todo.get('title', '')}\n설명: {todo.get('description', '')}\n\n원본 요청 컨텍스트: {text}"
