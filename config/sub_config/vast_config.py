@@ -26,23 +26,23 @@ class VastConfig(BaseConfig):
         self.VAST_IMAGE_NAME = self.create_persistent_config(
             env_name="VAST_IMAGE_NAME",
             config_path="vast.image.name",
-            default_value="cocorof/vllm-openai-praque",
+            default_value="cocorof/vllm-openai-xgen",
         )
         self.VAST_IMAGE_TAG = self.create_persistent_config(
             env_name="VAST_IMAGE_TAG",
             config_path="vast.image.tag",
-            default_value="v0.10.0",
+            default_value="v0.10.2",
         )
         # ‣ 트레인 인스턴스 템플릿(컨테이너) ─────────────────────
         self.VAST_TRAIN_IMAGE_NAME = self.create_persistent_config(
             env_name="VAST_TRAIN_IMAGE_NAME",
             config_path="vast.train.image.name",
-            default_value="cocorof/vllm-openai-praque",
+            default_value="",
         )
         self.VAST_TRAIN_IMAGE_TAG = self.create_persistent_config(
             env_name="VAST_TRAIN_IMAGE_TAG",
             config_path="vast.train.image.tag",
-            default_value="v0.10.0",
+            default_value="",
         )
 
         # ‣ 자원/가격 한계 ───────────────────────────────
