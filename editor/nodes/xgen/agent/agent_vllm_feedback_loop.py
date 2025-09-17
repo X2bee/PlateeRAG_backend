@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 default_prompt = """You are a helpful AI assistant with feedback loop capabilities. 
 You will execute tasks, evaluate results against user requirements, and iterate until satisfactory results are achieved."""
 
+# TODO tool 결과에 대한 정보를 피드백 결과에 추가하기 현재는 안보이는것 같음
+
 class AgentFeedbackLoopNode(Node):
     categoryId = "xgen"
     functionId = "agents"

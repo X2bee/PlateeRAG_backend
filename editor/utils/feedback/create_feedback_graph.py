@@ -140,28 +140,72 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
 }}
 """
                 
-                evaluation_inputs = {
-                    "input": evaluation_prompt,
-                    "chat_history": [],
-                    "additional_rag_context": additional_rag_context,
-                    "agent_scratchpad": ""
-                }
-                
                 # 평가용 간단한 프롬프트 직접 처리
-                formatted_evaluation_prompt = f"{additional_rag_context}\n\n{evaluation_prompt}"
+                formatted_evaluation_prompt = f"추가 컨텍스트: {additional_rag_context}\n\n{evaluation_prompt}"
                 
                 # 직접 LLM 호출
                 from langchain.schema import HumanMessage
                 messages = [HumanMessage(content=formatted_evaluation_prompt)]
                 llm_response = llm.invoke(messages)
                 
-                try:
-                    # JSON 파싱 시도
+                def parse_evaluation_result(content):
+                    """평가 결과를 파싱하는 함수 - 여러 fallback 방법 포함"""
                     import json
-                    evaluation_result = json.loads(llm_response.content)
-                except:
-                    # JSON 파싱 실패시 기본값
-                    evaluation_result = {"score": 5, "reasoning": "평가 파싱 실패", "improvements": "", "strengths": ""}
+                    import re
+
+                    # 1차 시도: 정상적인 JSON 파싱
+                    try:
+                        result = json.loads(content)
+                        return result
+                    except Exception as e:
+                        print(f"[FEEDBACK DEBUG] 1차 JSON 파싱 실패: {e}")
+
+                    # 2차 시도: 잘린 JSON 수정 (마지막 }가 없는 경우)
+                    try:
+                        if content.strip().endswith('"') or content.strip().endswith(']'):
+                            fixed_content = content.strip() + "}"
+                            result = json.loads(fixed_content)
+                            return result
+                    except Exception as e:
+                        print(f"[FEEDBACK DEBUG] 2차 JSON 파싱 실패: {e}")
+
+                    # 3차 시도: 정규식으로 필드 추출
+                    try:
+                        score_match = re.search(r'"score":\s*(\d+)', content)
+                        reasoning_match = re.search(r'"reasoning":\s*"([^"]*)"', content)
+                        improvements_match = re.search(r'"improvements":\s*\[(.*?)\]', content, re.DOTALL)
+                        strengths_match = re.search(r'"strengths":\s*\[(.*?)\]', content, re.DOTALL)
+
+                        result = {
+                            "score": int(score_match.group(1)) if score_match else 5,
+                            "reasoning": reasoning_match.group(1) if reasoning_match else "정규식 파싱으로 추출",
+                            "improvements": [],
+                            "strengths": []
+                        }
+
+                        # improvements와 strengths 배열 파싱
+                        if improvements_match:
+                            improvements_text = improvements_match.group(1)
+                            result["improvements"] = re.findall(r'"([^"]*)"', improvements_text)
+
+                        if strengths_match:
+                            strengths_text = strengths_match.group(1)
+                            result["strengths"] = re.findall(r'"([^"]*)"', strengths_text)
+
+                        return result
+
+                    except Exception as e:
+                        print(f"[FEEDBACK DEBUG] 3차 정규식 파싱 실패: {e}")
+
+                    # 최종 fallback: 기본값
+                    return {
+                        "score": 5,
+                        "reasoning": f"파싱 실패 - 원본: {content[:200]}...",
+                        "improvements": ["파싱 실패로 인한 기본값"],
+                        "strengths": ["파싱 실패로 인한 기본값"]
+                    }
+
+                evaluation_result = parse_evaluation_result(llm_response.content)
                 
                 score = evaluation_result.get("score", 0)
                 

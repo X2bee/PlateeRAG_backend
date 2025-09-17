@@ -4,6 +4,8 @@ from editor.node_composer import Node
 
 logger = logging.getLogger(__name__)
 
+# TODO 실제 TOOL 결과에 대한 정보도 필요
+
 class FeedbackCriteriaGeneratorNode(Node):
     categoryId = "xgen"
     functionId = "feedback"
