@@ -265,7 +265,8 @@ class AppDatabaseManager:
                          orderby_asc: bool = False,
                          return_list: bool = False,
                          select_columns: List[str] = None,
-                         ignore_columns: List[str] = None) -> List[BaseModel]:
+                         ignore_columns: List[str] = None,
+                         join_user: bool = False) -> List[BaseModel]:
         """조건으로 레코드 조회"""
         try:
             table_name = model_class().get_table_name()
@@ -279,22 +280,22 @@ class AppDatabaseManager:
                 if key.endswith("__like__"):
                     real_key = key.removesuffix("__like__")
                     if db_type == "postgresql":
-                        where_clauses.append(f"{real_key} ILIKE %s")
+                        where_clauses.append(f"{table_name}.{real_key} ILIKE %s")
                     else:
-                        where_clauses.append(f"{real_key} LIKE ?")
+                        where_clauses.append(f"{table_name}.{real_key} LIKE ?")
                     values.append(f"%{value}%")
                 elif key.endswith("__notlike__"):
                     real_key = key.removesuffix("__notlike__")
                     if db_type == "postgresql":
-                        where_clauses.append(f"{real_key} NOT ILIKE %s")
+                        where_clauses.append(f"{table_name}.{real_key} NOT ILIKE %s")
                     else:
-                        where_clauses.append(f"{real_key} NOT LIKE ?")
+                        where_clauses.append(f"{table_name}.{real_key} NOT LIKE ?")
                     values.append(f"%{value}%")
                 else:
                     if db_type == "postgresql":
-                        where_clauses.append(f"{key} = %s")
+                        where_clauses.append(f"{table_name}.{key} = %s")
                     else:
-                        where_clauses.append(f"{key} = ?")
+                        where_clauses.append(f"{table_name}.{key} = ?")
                     values.append(value)
 
             where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
@@ -308,17 +309,37 @@ class AppDatabaseManager:
             values.extend([limit, offset])
             orderby_type = "ASC" if orderby_asc else "DESC"
 
-            # SELECT 컬럼 설정
-            if select_columns:
-                columns_str = ", ".join(select_columns)
-            elif ignore_columns:
-                all_columns = ['id'] + list(model_class().get_schema().keys())
-                filtered_columns = [col for col in all_columns if col not in ignore_columns]
-                columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
-            else:
-                columns_str = "*"
+            # SELECT 컬럼 및 JOIN 설정
+            if join_user:
+                # users 테이블과 JOIN하는 경우
+                if select_columns:
+                    columns_str = ", ".join([f"{table_name}.{col}" for col in select_columns])
+                    columns_str += ", u.username, u.full_name"
+                elif ignore_columns:
+                    all_columns = ['id'] + list(model_class().get_schema().keys())
+                    filtered_columns = [col for col in all_columns if col not in ignore_columns]
+                    columns_str = ", ".join([f"{table_name}.{col}" for col in filtered_columns]) if filtered_columns else f"{table_name}.*"
+                    columns_str += ", u.username, u.full_name"
+                else:
+                    columns_str = f"{table_name}.*, u.username, u.full_name"
 
-            query = f"SELECT {columns_str} FROM {table_name} WHERE {where_clause} ORDER BY {orderby} {orderby_type} {limit_clause}"
+                from_clause = f"FROM {table_name} LEFT JOIN users u ON {table_name}.user_id = u.id"
+                orderby_field = f"{table_name}.{orderby}"
+            else:
+                # 일반적인 경우
+                if select_columns:
+                    columns_str = ", ".join(select_columns)
+                elif ignore_columns:
+                    all_columns = ['id'] + list(model_class().get_schema().keys())
+                    filtered_columns = [col for col in all_columns if col not in ignore_columns]
+                    columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
+                else:
+                    columns_str = "*"
+
+                from_clause = f"FROM {table_name}"
+                orderby_field = orderby
+
+            query = f"SELECT {columns_str} {from_clause} WHERE {where_clause} ORDER BY {orderby_field} {orderby_type} {limit_clause}"
 
             results = self.config_db_manager.execute_query(query, tuple(values))
 

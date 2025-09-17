@@ -94,8 +94,6 @@ class VastConfig(BaseConfig):
             type_converter=convert_to_int_list,
         )
 
-
-
         self.VLLM_HOST_IP = self.create_persistent_config(
             env_name="VLLM_HOST_IP",
             config_path="vast.vllm.host_ip",
