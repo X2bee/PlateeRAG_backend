@@ -45,10 +45,16 @@ class Node(ABC):
     inputs: List[Port] = []
     outputs: List[Port] = []
     parameters: List[Parameter] = []
+    disable: bool = False
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if cls.__name__ == 'Node':
+            return
+
+        # disable이 True인 경우 노드 등록을 건너뜀
+        if hasattr(cls, 'disable') and cls.disable:
+            print(f"[Node Registration Skipped] Node '{cls.__name__}' is disabled.")
             return
 
         is_valid = True

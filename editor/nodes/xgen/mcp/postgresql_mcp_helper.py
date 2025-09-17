@@ -3,24 +3,36 @@ from langchain_community.utilities import SQLDatabase
 from langchain_core.tools import BaseTool
 from typing import Type
 from pydantic import BaseModel, Field
+import re
 
 class PostgreSQLInput(BaseModel):
     query: str = Field(description="실행할 SQL 쿼리")
 
 class PostgreSQLMCPTool(BaseTool):
-    name: str = "postgresql_mcp"
-    description: str = "PostgreSQL 데이터베이스에 대한 읽기 전용 접근을 제공합니다."
+    name: str = Field(default="postgresql_mcp", description="도구 이름")
+    description: str = Field(default="PostgreSQL 데이터베이스에 대한 읽기 전용 접근을 제공합니다.", description="도구 설명")
     args_schema: Type[BaseModel] = PostgreSQLInput
+    postgres_url: str = Field(default="", description="PostgreSQL 연결 URL")
+    db: SQLDatabase = Field(description="SQLDatabase 인스턴스")
+    sql_tool: QuerySQLDataBaseTool = Field(description="QuerySQLDataBaseTool 인스턴스")
+    db_prompt: str = Field(default="", description="데이터베이스 프롬프트")
 
-    def __init__(self, postgres_url: str):
-        super().__init__()
-        self.postgres_url = postgres_url
+    def __init__(self, postgres_url: str, db_prompt: str, name: str = None, description: str = None):
+        db = SQLDatabase.from_uri(postgres_url)
+        sql_tool = QuerySQLDataBaseTool(db=db)
 
-        # SQLDatabase 초기화
-        self.db = SQLDatabase.from_uri(postgres_url)
+        # name과 description이 제공되면 사용, 아니면 기본값 사용
+        tool_name = name if name is not None else "postgresql_mcp"
+        tool_description = description if description is not None else "PostgreSQL 데이터베이스에 대한 읽기 전용 접근을 제공합니다."
 
-        # QuerySQLDataBaseTool 초기화
-        self.sql_tool = QuerySQLDataBaseTool(db=self.db)
+        super().__init__(
+            name=tool_name,
+            description=tool_description,
+            postgres_url=postgres_url,
+            db=db,
+            sql_tool=sql_tool,
+            db_prompt=db_prompt
+        )
 
     def _run(self, query: str, **kwargs) -> str:
         """PostgreSQL 쿼리를 실행합니다."""
@@ -28,17 +40,24 @@ class PostgreSQLMCPTool(BaseTool):
             # 읽기 전용 쿼리만 허용
             query_upper = query.upper().strip()
 
-            # 위험한 쿼리 방지
-            dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'CREATE', 'ALTER', 'TRUNCATE']
-            if any(keyword in query_upper for keyword in dangerous_keywords):
-                return "보안상의 이유로 읽기 전용 쿼리(SELECT)만 허용됩니다."
-
-            # SELECT 쿼리만 허용
             if not query_upper.startswith('SELECT'):
                 return "읽기 전용 접근을 위해 SELECT 쿼리만 허용됩니다."
 
+            # 위험한 쿼리 방지 (단어 경계를 고려한 정확한 매칭)
+
+            dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'CREATE', 'ALTER', 'TRUNCATE']
+            for keyword in dangerous_keywords:
+                if re.search(rf'\b{keyword}\b', query_upper):
+                    return f"보안상의 이유로 읽기 전용 쿼리(SELECT)만 허용됩니다. 감지된 키워드: {keyword}"
+
             # SQL 쿼리 실행
+            if self.sql_tool is None:
+                return "SQL 도구가 초기화되지 않았습니다."
+
             result = self.sql_tool.run(query)
+
+            if self.db_prompt and len(self.db_prompt.strip()) > 0:
+                result = f"{self.db_prompt}\n\n{result}"
             return result
 
         except Exception as e:

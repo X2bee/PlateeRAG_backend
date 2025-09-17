@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 class DBMemoryNode(Node):
     categoryId = "xgen"
     functionId = "memory"
-    nodeId = "memory/db_memory"
-    nodeName = "DB Memory"
+    nodeId = "memory/db_memory_v2"
+    nodeName = "DB Memory V2"
     description = "DB에서 대화 기록을 로드하여 ConversationBufferMemory로 반환하는 노드입니다."
     tags = ["memory", "database", "chat_history", "xgen"]
 

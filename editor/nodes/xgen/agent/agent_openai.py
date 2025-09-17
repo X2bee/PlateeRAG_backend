@@ -90,7 +90,7 @@ class AgentOpenAINode(Node):
                     tools=tools,
                     verbose=True,
                     handle_parsing_errors=True,
-                    max_iterations=3,
+                    max_iterations=10,
                 )
                 if return_intermediate_steps:
                     handler = NonStreamingAgentHandlerWithToolOutput()
