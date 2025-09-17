@@ -233,8 +233,8 @@ class PrintAnyNode(Node):
                 
                 output += "\n"
             
-            if len(iteration_log) > max_iterations:
-                output += f"... 및 {len(iteration_log) - max_iterations}개의 추가 반복\n\n"
+            # if len(iteration_log) > max_iterations:
+            #     output += f"... 및 {len(iteration_log) - max_iterations}개의 추가 반복\n\n"
         
         # 최종 결과
         output += "=" * 60 + "\n\n"
