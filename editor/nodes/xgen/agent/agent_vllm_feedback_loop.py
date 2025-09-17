@@ -119,6 +119,7 @@ class AgentFeedbackLoopNode(Node):
 1. 각 TODO는 구체적이고 실행 가능해야 합니다
 2. 복잡한 작업은 여러 단계로 나누어주세요
 3. 순서대로 실행되도록 배열해주세요
+4. 마지막은 최종 결과를 생성하는 TODO로 마무리해주세요
 
 응답 형식:
 {{
@@ -240,10 +241,12 @@ class AgentFeedbackLoopNode(Node):
             completed_todos = [todo for todo in todo_execution_log if todo.get("requirements_met", False)]
 
             # 최종 결과 구성
-            final_summary = ""
-            
-            for todo_log in todo_execution_log:
-                final_summary += f"\n- {todo_log['todo_title']}: {todo_log['result']}"
+            # final_summary = ""
+
+            # for todo_log in todo_execution_log:
+            #     final_summary += f"\n- {todo_log['todo_title']}: {todo_log['result']}"
+
+            final_summary=todo_execution_log[-1]['result'] if todo_execution_log else "No TODOs executed."
 
             result_dict = {
                 "result": final_summary,
