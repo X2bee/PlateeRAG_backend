@@ -139,10 +139,9 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
     "strengths": "<잘된 부분들>"
 }}
 """
-                
                 # 평가용 간단한 프롬프트 직접 처리
                 formatted_evaluation_prompt = f"추가 컨텍스트: {additional_rag_context}\n\n{evaluation_prompt}"
-                
+
                 # 직접 LLM 호출
                 from langchain.schema import HumanMessage
                 messages = [HumanMessage(content=formatted_evaluation_prompt)]
