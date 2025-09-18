@@ -75,15 +75,22 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
     Frontend에서 받은 workflow 정보를 파일로 저장합니다.
     파일명: {workflow_name}.json
     """
-    user_id = extract_user_id_from_request(request)
-    if not user_id:
+    login_user_id = extract_user_id_from_request(request)
+    if not login_user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    if workflow_request.user_id and str(workflow_request.user_id) != str(login_user_id):
+        user_id = str(workflow_request.user_id)
+    else:
+        user_id = login_user_id
+
+    logger.info(f"Saving workflow for user: {user_id}, workflow name: {workflow_request.workflow_name}")
 
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, user_id, request)
 
     try:
-        workflow_data = workflow_request.content.dict()
+        workflow_data = workflow_request.content.model_dump()
 
         backend_log.info("Starting workflow save operation",
                         metadata={"workflow_name": workflow_request.workflow_name,
@@ -148,6 +155,8 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             has_startnode=has_startnode,
             has_endnode=has_endnode,
             is_completed=(has_startnode and has_endnode),
+            is_shared=existing_data[0].is_shared if existing_data else False,
+            share_group=existing_data[0].share_group if existing_data else None,
             workflow_data=workflow_data,
         )
 
