@@ -13,6 +13,11 @@ todo_generation_prompt = """
 2. 복잡한 작업은 여러 단계로 나누어주세요
 3. 순서대로 실행되도록 배열해주세요
 4. 마지막은 최종 결과를 생성하는 TODO로 마무리해주세요
+5. 각 TODO가 도구 사용이 필요한지 판단해주세요
+
+tool_required 판단 기준:
+- "simple": 간단한 답변, 설명, 정보 제공 (도구 불필요)
+- "complex": 계산, 검색, 파일 작업, API 호출 등 (도구 필요)
 
 응답 형식:
 {{
@@ -21,7 +26,8 @@ todo_generation_prompt = """
             "id": 1,
             "title": "TODO 제목",
             "description": "구체적인 작업 설명",
-            "priority": "high|medium|low"
+            "priority": "high|medium|low",
+            "tool_required": "simple|complex"
         }},
         ...
     ]

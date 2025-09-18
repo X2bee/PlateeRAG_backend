@@ -105,10 +105,9 @@ class AgentFeedbackLoopNode(Node):
                 enhanced_prompt = create_json_output_prompt(args_schema, enhanced_prompt)
 
             # 프롬프트 템플릿 생성
-            if tools_list and len(tools_list) > 0:
-                prompt_template = create_tool_context_prompt(additional_rag_context, enhanced_prompt, n_messages)
-            else:
-                prompt_template = create_context_prompt(additional_rag_context, enhanced_prompt, n_messages, strict_citation)
+            prompt_template_with_tool = create_tool_context_prompt(additional_rag_context, enhanced_prompt, n_messages)
+            prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, n_messages, strict_citation)
+            
 
             # 사용자 요청을 TODO로 분해
             todos = create_todos(llm, text)
@@ -129,12 +128,13 @@ class AgentFeedbackLoopNode(Node):
 
             # TODO별 워크플로우 생성
             workflow = create_feedback_graph(
-                llm, tools_list, prompt_template, additional_rag_context,
+                llm, tools_list, prompt_template_with_tool, prompt_template_without_tool, additional_rag_context,
                 feedback_criteria, return_intermediate_steps, feedback_threshold, enable_auto_feedback
             )
 
             for i, todo in enumerate(todos):
-                logger.info(f"Executing TODO {i+1}/{len(todos)}: {todo.get('title', 'Untitled')}")
+                todo_requires_tools = todo.get('tool_required', 'complex') == 'complex'
+                logger.info(f"Executing TODO {i+1}/{len(todos)}: {todo.get('title', 'Untitled')} [{'with tools' if todo_requires_tools else 'without tools'}]")
 
                 # TODO 실행을 위한 상태 설정
                 todo_text = f"TODO: {todo.get('title', '')}\n설명: {todo.get('description', '')}\n\n원본 요청 컨텍스트: {text}"
@@ -147,7 +147,8 @@ class AgentFeedbackLoopNode(Node):
                     iteration_count=1,
                     final_result=None,
                     requirements_met=False,
-                    max_iterations=max_iterations  # 개별 TODO의 sub-task iterations
+                    max_iterations=max_iterations,  # 개별 TODO의 sub-task iterations
+                    todo_requires_tools=todo_requires_tools  # 도구 필요성 전달
                 )
 
                 # TODO 실행

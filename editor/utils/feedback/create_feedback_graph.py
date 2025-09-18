@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 memory = MemorySaver()
 
-def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_context, feedback_criteria, return_intermediate_steps=True, feedback_threshold=8, enable_auto_feedback=True):
+def create_feedback_graph(llm, tools_list, prompt_template_with_tool, prompt_template_without_tool, additional_rag_context, feedback_criteria, return_intermediate_steps=True, feedback_threshold=8, enable_auto_feedback=True):
         """LangGraph 피드백 루프 그래프 생성"""
         
         def execute_task(state: FeedbackState) -> FeedbackState:
@@ -22,23 +22,28 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
             try:
                 user_input = state["user_input"]
                 iteration = state["iteration_count"]
-                
+
+                # TODO의 tool_required 정보 추출 (state에서 가져오기)
+                todo_requires_tools = state.get("todo_requires_tools", True)  # 기본값은 True (하위 호환성)
+
                 # 이전 시도들의 컨텍스트 생성
                 previous_attempts = ""
                 if state["tool_results"]:
                     previous_attempts = f"\n\nPrevious attempts:\n"
                     for i, result in enumerate(state["tool_results"][-3:]):  # 최근 3개만
                         previous_attempts += f"Attempt {i+1}: {result.get('result', '')}\nScore: {result.get('feedback_score', 'N/A')}\n\n"
-                
-                enhanced_input = f"{user_input}{previous_attempts}"
+
+                enhanced_input = f"현재 시도: {user_input}{previous_attempts}"
                 inputs = {
                     "input": enhanced_input,
                     "chat_history": state["messages"][-5:] if state["messages"] else [],
                     "additional_rag_context": additional_rag_context
                 }
 
-                if tools_list and len(tools_list) > 0:
-                    agent = create_tool_calling_agent(llm, tools_list, prompt_template)
+                # 도구 필요성에 따른 처리 분기
+                if todo_requires_tools and tools_list and len(tools_list) > 0:
+                    # 복잡한 작업: 도구 사용
+                    agent = create_tool_calling_agent(llm, tools_list, prompt_template_with_tool)
                     agent_executor = AgentExecutor(
                         agent=agent,
                         tools=tools_list,
@@ -54,7 +59,7 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                     response = agent_executor.invoke(inputs, {"callbacks": [handler]})
                     result = handler.get_formatted_output(response["output"])
                 else:
-                    chain = prompt_template | llm | StrOutputParser()
+                    chain = prompt_template_without_tool | llm | StrOutputParser()
                     result = chain.invoke(inputs)
 
                 # 도구 실행 결과 저장
