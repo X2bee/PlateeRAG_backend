@@ -5,6 +5,8 @@ from urllib.request import Request
 from controller.helper.singletonHelper import get_config_composer
 from editor.type_model.feedback_state import FeedbackState
 from editor.utils.feedback.create_feedback_graph import create_feedback_graph
+from editor.utils.feedback.create_todos import create_todos
+from editor.utils.feedback.todo_executor import todo_executor
 from pydantic import BaseModel
 from editor.node_composer import Node
 from editor.nodes.xgen.agent.functions import (
@@ -57,14 +59,6 @@ class AgentFeedbackLoopNode(Node):
     def __init__(self):
         super().__init__()
 
-    def api_vllm_model_name(self, request: Request) -> Dict[str, Any]:
-        config_composer = get_config_composer(request)
-        return config_composer.get_config_by_name("VLLM_MODEL_NAME").value
-
-    def api_vllm_api_base_url(self, request: Request) -> Dict[str, Any]:
-        config_composer = get_config_composer(request)
-        return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
-        
     def execute(
         self,
         text: str,
@@ -103,11 +97,12 @@ class AgentFeedbackLoopNode(Node):
                 enhanced_prompt = create_json_output_prompt(args_schema, enhanced_prompt)
 
             # 프롬프트 템플릿 생성
-            if tools_list and len(tools_list) > 0:
-                prompt_template = create_tool_context_prompt(additional_rag_context, enhanced_prompt, n_messages)
-            else:
-                prompt_template = create_context_prompt(additional_rag_context, enhanced_prompt, n_messages, strict_citation)
+            prompt_template_with_tool = create_tool_context_prompt(additional_rag_context, enhanced_prompt, n_messages)
+            prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, n_messages, strict_citation)
 
+            # 사용자 요청을 TODO로 분해
+            todos = create_todos(llm, text)
+            
             # 피드백 기준 설정
             if not feedback_criteria:
                 feedback_criteria = f"""
@@ -120,57 +115,44 @@ class AgentFeedbackLoopNode(Node):
 
             # LangGraph 워크플로우 생성
             workflow = create_feedback_graph(
-                llm, tools_list, prompt_template, additional_rag_context, feedback_criteria,
+                llm, tools_list, chat_history, prompt_template_with_tool, prompt_template_without_tool, additional_rag_context, feedback_criteria,
                 return_intermediate_steps, feedback_threshold, enable_auto_feedback
             )
 
-            # 초기 상태 설정
-            initial_state = FeedbackState(
-                messages=[{"role": "user", "content": text}],
-                user_input=text,
-                tool_results=[],
-                feedback_score=0,
-                iteration_count=1,
-                final_result=None,
-                requirements_met=False,
-                max_iterations=max_iterations
-            )
+            # 2단계: 각 TODO를 순차적으로 실행
+            all_results = []
+            todo_execution_log = []
 
-            # 워크플로우 실행
-            import time
-            thread_id = f"feedback_loop_{hash(text)}_{int(time.time())}"
-            final_state = workflow.invoke(
-                initial_state,
-                config={"configurable": {"thread_id": thread_id}}
-            )
+            all_results, todo_execution_log = todo_executor(todos, text, max_iterations, workflow, return_intermediate_steps)
 
-            # 결과 구성
-            iteration_log = []
-            feedback_scores = []
+            all_scores = [result["score"] for result in all_results if "score" in result]
+            completed_todos = [todo for todo in todo_execution_log if todo.get("requirements_met", False)]
 
-            for result in final_state["tool_results"]:
-                iteration_log.append({
-                    "iteration": result["iteration"],
-                    "result": result["result"],
-                    "score": result.get("feedback_score", 0),
-                    "evaluation": result.get("evaluation", {}),
-                    "timestamp": result["timestamp"]
-                })
-                feedback_scores.append(result.get("feedback_score", 0))
+            # 최종 결과 구성
+            # final_summary = ""
 
-            # return_intermediate_steps에 따라 결과 구조 결정
+            # for todo_log in todo_execution_log:
+            #     final_summary += f"\n- {todo_log['todo_title']}: {todo_log['result']}"
+
+            final_summary=todo_execution_log[-1]['result'] if todo_execution_log else "No TODOs executed."
+
             result_dict = {
-                "result": final_state["final_result"] or "No final result generated",
-                "total_iterations": len(iteration_log),
-                "final_score": feedback_scores[-1] if feedback_scores else 0,
-                "average_score": sum(feedback_scores) / len(feedback_scores) if feedback_scores else 0
+                "result": final_summary,
+                "todos_generated": len(todos),
+                "todos_completed": len(completed_todos),
+                "total_iterations": len(all_results),
+                "final_score": all_scores[-1] if all_scores else 0,
+                "average_score": sum(all_scores) / len(all_scores) if all_scores else 0,
+                "completion_rate": len(completed_todos) / len(todos) if todos else 0
             }
 
-            # return_intermediate_steps가 True인 경우에만 중간 단계 정보 포함
+            # return_intermediate_steps가 True인 경우에만 상세 정보 포함
             if return_intermediate_steps:
                 result_dict.update({
-                    "iteration_log": iteration_log,
-                    "feedback_scores": feedback_scores
+                    "todos_list": todos,
+                    "todo_execution_log": todo_execution_log,
+                    "iteration_log": all_results,
+                    "feedback_scores": all_scores
                 })
 
             return result_dict
@@ -181,15 +163,20 @@ class AgentFeedbackLoopNode(Node):
 
             # 에러 시에도 return_intermediate_steps에 따라 결과 구조 결정
             error_result = {
-                "result": f"죄송합니다. 피드백 루프 실행 중 오류가 발생했습니다: {str(e)}",
+                "result": f"죄송합니다. TODO 기반 피드백 루프 실행 중 오류가 발생했습니다: {str(e)}",
+                "todos_generated": 0,
+                "todos_completed": 0,
                 "total_iterations": 0,
                 "final_score": 0,
                 "average_score": 0,
+                "completion_rate": 0,
                 "error": True
             }
 
             if return_intermediate_steps:
                 error_result.update({
+                    "todos_list": [],
+                    "todo_execution_log": [],
                     "iteration_log": [],
                     "feedback_scores": []
                 })
