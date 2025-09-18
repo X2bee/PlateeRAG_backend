@@ -75,15 +75,22 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
     Frontend에서 받은 workflow 정보를 파일로 저장합니다.
     파일명: {workflow_name}.json
     """
-    user_id = extract_user_id_from_request(request)
-    if not user_id:
+    login_user_id = extract_user_id_from_request(request)
+    if not login_user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    if workflow_request.user_id and str(workflow_request.user_id) != str(login_user_id):
+        user_id = str(workflow_request.user_id)
+    else:
+        user_id = login_user_id
+
+    logger.info(f"Saving workflow for user: {user_id}, workflow name: {workflow_request.workflow_name}")
 
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, user_id, request)
 
     try:
-        workflow_data = workflow_request.content.dict()
+        workflow_data = workflow_request.content.model_dump()
 
         backend_log.info("Starting workflow save operation",
                         metadata={"workflow_name": workflow_request.workflow_name,
@@ -148,6 +155,8 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             has_startnode=has_startnode,
             has_endnode=has_endnode,
             is_completed=(has_startnode and has_endnode),
+            is_shared=existing_data[0].is_shared if existing_data else False,
+            share_group=existing_data[0].share_group if existing_data else None,
             workflow_data=workflow_data,
         )
 
@@ -307,7 +316,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
 
         copy_workflow_name = f"{workflow_name}_copy"
         copy_file_name = f"{copy_workflow_name}.json"
-        target_path = os.path.join(target_path_id, filename)
+        target_path = os.path.join(copy_workflow_name, filename)
 
         if os.path.exists(target_path):
             logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
@@ -392,6 +401,7 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
 
         existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
         existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
+        existing_data.share_permissions = update_dict.get("share_permissions", existing_data.share_permissions)
 
         deploy_enabled = update_dict.get("enable_deploy", deploy_meta.is_deployed)
         deploy_meta.is_deployed = deploy_enabled

@@ -9,12 +9,29 @@ from langgraph.checkpoint.memory import MemorySaver
 from editor.type_model.feedback_state import FeedbackState
 
 from editor.utils.helper.agent_helper import NonStreamingAgentHandlerWithToolOutput, NonStreamingAgentHandler
+from editor.utils.helper.stream_helper import (
+    EnhancedAgentStreamingHandler,
+    EnhancedAgentStreamingHandlerWithToolOutput,
+    execute_agent_streaming,
+)
 
 logger = logging.getLogger(__name__)
 
 memory = MemorySaver()
 
-def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_context, feedback_criteria, return_intermediate_steps=True, feedback_threshold=8, enable_auto_feedback=True):
+def create_feedback_graph(
+    llm,
+    tools_list,
+    chat_history,
+    prompt_template_with_tool,
+    prompt_template_without_tool,
+    additional_rag_context,
+    feedback_criteria,
+    return_intermediate_steps=True,
+    feedback_threshold=8,
+    enable_auto_feedback=True,
+    stream_emitter=None,
+):
         """LangGraph 피드백 루프 그래프 생성"""
         
         def execute_task(state: FeedbackState) -> FeedbackState:
@@ -22,23 +39,37 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
             try:
                 user_input = state["user_input"]
                 iteration = state["iteration_count"]
-                
+
+                # TODO의 tool_required 정보 추출 (state에서 가져오기)
+                todo_requires_tools = state.get("todo_requires_tools", True)  # 기본값은 True (하위 호환성)
+                todo_title = state.get("current_todo_title", "")
+                todo_index = state.get("current_todo_index")
+                total_todos = state.get("total_todos")
+
+                if stream_emitter:
+                    stream_emitter.emit_iteration_start(todo_index, total_todos, iteration, todo_title)
+
                 # 이전 시도들의 컨텍스트 생성
                 previous_attempts = ""
                 if state["tool_results"]:
                     previous_attempts = f"\n\nPrevious attempts:\n"
                     for i, result in enumerate(state["tool_results"][-3:]):  # 최근 3개만
                         previous_attempts += f"Attempt {i+1}: {result.get('result', '')}\nScore: {result.get('feedback_score', 'N/A')}\n\n"
-                
-                enhanced_input = f"{user_input}{previous_attempts}"
+
+                enhanced_input = f"현재 시도: {user_input}{previous_attempts}"
                 inputs = {
                     "input": enhanced_input,
-                    "chat_history": state["messages"][-5:] if state["messages"] else [],
+                    "chat_history": chat_history,
                     "additional_rag_context": additional_rag_context
                 }
 
-                if tools_list and len(tools_list) > 0:
-                    agent = create_tool_calling_agent(llm, tools_list, prompt_template)
+                result = ""
+                streaming_error = None
+
+                # 도구 필요성에 따른 처리 분기
+                if todo_requires_tools and tools_list and len(tools_list) > 0:
+                    # 복잡한 작업: 도구 사용
+                    agent = create_tool_calling_agent(llm, tools_list, prompt_template_with_tool)
                     agent_executor = AgentExecutor(
                         agent=agent,
                         tools=tools_list,
@@ -47,15 +78,88 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                         max_iterations=3,
                         max_execution_time=300,
                     )
-                    if return_intermediate_steps:
-                        handler = NonStreamingAgentHandlerWithToolOutput()
+                    if stream_emitter:
+                        if return_intermediate_steps:
+                            handler = EnhancedAgentStreamingHandlerWithToolOutput()
+                        else:
+                            handler = EnhancedAgentStreamingHandler()
+
+                        async_executor = lambda: agent_executor.ainvoke(inputs, {"callbacks": [handler]})
+                        collected_chunks = []
+                        try:
+                            for chunk in execute_agent_streaming(async_executor, handler):
+                                if chunk:
+                                    stream_emitter.emit_llm_chunk(todo_index, iteration, chunk)
+                                    collected_chunks.append(chunk)
+                        except Exception as streaming_exc:  # pragma: no cover - runtime safety
+                            streaming_error = streaming_exc
+                            logger.error(
+                                f"Streaming agent execution failed (iteration {iteration}): {streaming_exc}",
+                                exc_info=True,
+                            )
+                            stream_emitter.emit_iteration_error(todo_index, iteration, streaming_exc)
+
+                        raw_output = "".join(handler.streamed_tokens).strip()
+                        if return_intermediate_steps and handler.tool_logs:
+                            tool_log_text = "\n".join(handler.tool_logs)
+                            if tool_log_text and raw_output:
+                                result = f"{tool_log_text}\n\n{raw_output}"
+                            else:
+                                result = tool_log_text or raw_output
+                        else:
+                            result = raw_output
+
+                        if streaming_error:
+                            raise streaming_error
+
+                        # 스트리밍 중 수집된 결과가 비어있는 경우 안전한 fallback 수행
+                        if not result:
+                            fallback_handler = (
+                                NonStreamingAgentHandlerWithToolOutput()
+                                if return_intermediate_steps
+                                else NonStreamingAgentHandler()
+                            )
+                            response = agent_executor.invoke(inputs, {"callbacks": [fallback_handler]})
+                            result = fallback_handler.get_formatted_output(response["output"])
                     else:
-                        handler = NonStreamingAgentHandler()
-                    response = agent_executor.invoke(inputs, {"callbacks": [handler]})
-                    result = handler.get_formatted_output(response["output"])
+                        if return_intermediate_steps:
+                            handler = NonStreamingAgentHandlerWithToolOutput()
+                        else:
+                            handler = NonStreamingAgentHandler()
+                        response = agent_executor.invoke(inputs, {"callbacks": [handler]})
+                        result = handler.get_formatted_output(response["output"])
                 else:
-                    chain = prompt_template | llm | StrOutputParser()
-                    result = chain.invoke(inputs)
+                    if stream_emitter:
+                        chain = prompt_template_without_tool | llm
+                        collected_text = []
+                        try:
+                            for chunk in chain.stream(inputs):
+                                content = getattr(chunk, "content", "") or ""
+                                if content:
+                                    stream_emitter.emit_llm_chunk(todo_index, iteration, content)
+                                    collected_text.append(content)
+                        except Exception as streaming_exc:  # pragma: no cover - runtime safety
+                            streaming_error = streaming_exc
+                            logger.error(
+                                f"Streaming simple response failed (iteration {iteration}): {streaming_exc}",
+                                exc_info=True,
+                            )
+                            stream_emitter.emit_iteration_error(todo_index, iteration, streaming_exc)
+
+                        result = "".join(collected_text).strip()
+
+                        if streaming_error:
+                            raise streaming_error
+
+                        if not result:
+                            chain_sync = prompt_template_without_tool | llm | StrOutputParser()
+                            result = chain_sync.invoke(inputs)
+                    else:
+                        chain = prompt_template_without_tool | llm | StrOutputParser()
+                        result = chain.invoke(inputs)
+
+                if stream_emitter:
+                    stream_emitter.emit_iteration_complete(todo_index, iteration, result)
 
                 # 도구 실행 결과 저장
                 import time
@@ -75,6 +179,12 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                 
             except Exception as e:
                 logger.error(f"Task execution failed: {str(e)}")
+                if stream_emitter:
+                    stream_emitter.emit_iteration_error(
+                        state.get("current_todo_index"),
+                        state.get("iteration_count"),
+                        e,
+                    )
                 import time
                 error_result = {
                     "iteration": state["iteration_count"],
@@ -91,9 +201,20 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
         def evaluate_feedback(state: FeedbackState) -> FeedbackState:
             """결과에 대한 피드백 평가"""
             try:
+                todo_index = state.get("current_todo_index")
+                iteration = state.get("iteration_count")
+                todo_title = state.get("current_todo_title", "")
+
                 # enable_auto_feedback가 False인 경우 피드백 평가를 건너뛰고 기본 점수 설정
                 if not enable_auto_feedback:
                     if not state["tool_results"]:
+                        if stream_emitter:
+                            stream_emitter.emit_feedback_score(todo_index, iteration, {
+                                "score": 0,
+                                "reasoning": "자동 피드백이 비활성화됨",
+                                "improvements": [],
+                                "strengths": []
+                            })
                         return {**state, "feedback_score": 0}
 
                     latest_result = state["tool_results"][-1]
@@ -103,6 +224,14 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                         "evaluation": {"score": 5, "reasoning": "자동 피드백이 비활성화됨", "improvements": "", "strengths": ""}
                     }]
 
+                    if stream_emitter:
+                        stream_emitter.emit_feedback_score(todo_index, iteration, {
+                            "score": 5,
+                            "reasoning": "자동 피드백이 비활성화됨",
+                            "improvements": "",
+                            "strengths": ""
+                        })
+
                     return {
                         **state,
                         "feedback_score": 5,
@@ -110,10 +239,24 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                     }
 
                 if not state["tool_results"]:
+                    if stream_emitter:
+                        stream_emitter.emit_feedback_score(todo_index, iteration, {
+                            "score": 0,
+                            "reasoning": "평가할 결과가 없습니다.",
+                            "improvements": [],
+                            "strengths": []
+                        })
                     return {**state, "feedback_score": 0}
 
                 latest_result = state["tool_results"][-1]
                 if latest_result.get("error"):
+                    if stream_emitter:
+                        stream_emitter.emit_feedback_score(todo_index, iteration, {
+                            "score": 1,
+                            "reasoning": "도중에 오류가 발생했습니다.",
+                            "improvements": [str(latest_result.get("result", ""))],
+                            "strengths": []
+                        })
                     return {**state, "feedback_score": 1}
                 
                 # 피드백 평가 프롬프트 생성
@@ -207,6 +350,9 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                 evaluation_result = parse_evaluation_result(llm_response.content)
                 
                 score = evaluation_result.get("score", 0)
+
+                if stream_emitter:
+                    stream_emitter.emit_feedback_score(todo_index, iteration, evaluation_result)
                 
                 # 결과 업데이트
                 updated_tool_results = state["tool_results"][:-1] + [{
@@ -268,6 +414,13 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                     )
                     final_result = best_result["result"]
                     requirements_met = best_result.get("feedback_score", 0) >= feedback_threshold
+                if stream_emitter:
+                    stream_emitter.emit_todo_finalization(
+                        state.get("current_todo_index"),
+                        state.get("current_todo_title", ""),
+                        final_result,
+                        requirements_met,
+                    )
                 
                 return {
                     **state,
@@ -277,6 +430,13 @@ def create_feedback_graph(llm, tools_list, prompt_template, additional_rag_conte
                 
             except Exception as e:
                 logger.error(f"Result finalization failed: {str(e)}")
+                if stream_emitter:
+                    stream_emitter.emit_todo_finalization(
+                        state.get("current_todo_index"),
+                        state.get("current_todo_title", ""),
+                        f"Error during finalization: {str(e)}",
+                        False,
+                    )
                 return {
                     **state,
                     "final_result": f"Error during finalization: {str(e)}",

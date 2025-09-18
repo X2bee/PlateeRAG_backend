@@ -137,9 +137,6 @@ class FeedbackLoopFormatterNode(Node):
                 
                 markdown += f"```\n{iteration_result}\n```\n\n"
             
-            if len(iteration_log) > max_iterations:
-                markdown += f"*... 및 {len(iteration_log) - max_iterations}개의 추가 반복*\n\n"
-        
         # 최종 결과
         markdown += "</FEEDBACK_LOOP>"
         markdown += f"```\n{str(result)}\n```\n"
@@ -214,9 +211,6 @@ class FeedbackLoopFormatterNode(Node):
                                 output += f"개선사항: {str(improvements)}\n"
                 
                 output += "\n"
-            
-            if len(iteration_log) > max_iterations:
-                output += f"... 및 {len(iteration_log) - max_iterations}개의 추가 반복\n\n"
         
         # 최종 결과
         output += "=" * 60 + "\n\n"

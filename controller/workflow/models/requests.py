@@ -21,6 +21,7 @@ class WorkflowData(BaseModel):
 class SaveWorkflowRequest(BaseModel):
     workflow_name: str
     content: WorkflowData
+    user_id: Optional[int | str] = None
 
 class ConversationRequest(BaseModel):
     """통합 대화/워크플로우 실행 요청 모델"""
@@ -63,8 +64,8 @@ class TesterTestResult(BaseModel):
 
 class ScoreModelParser(BaseModel):
     llm_eval_score: float = Field(
-        description="주어진 데이터를 평가하여 0~1점의 점수로 반환합니다. 소수점 2째 자리까지 표현하십시오 (0.00 ~ 1.00)", 
-        ge=0.00, 
+        description="주어진 데이터를 평가하여 0~1점의 점수로 반환합니다. 소수점 2째 자리까지 표현하십시오 (0.00 ~ 1.00)",
+        ge=0.00,
         le=1.00
     )
 
