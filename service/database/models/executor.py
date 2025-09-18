@@ -24,7 +24,7 @@ class ExecutionIO(BaseModel):
     def get_schema(self) -> Dict[str, str]:
         return {
             'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
-            'interaction_id': 'VARCHAR(100) NOT NULL DEFAULT \'default\'',
+            'interaction_id': 'VARCHAR(500) NOT NULL DEFAULT \'default\'',
             'workflow_id': 'VARCHAR(100) NOT NULL',
             'workflow_name': 'VARCHAR(200) NOT NULL',
             'input_data': 'TEXT',
@@ -51,7 +51,7 @@ class ExecutionMeta(BaseModel):
     def get_schema(self) -> Dict[str, str]:
         return {
             'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
-            'interaction_id': 'VARCHAR(100) NOT NULL DEFAULT \'default\'',
+            'interaction_id': 'VARCHAR(500) NOT NULL DEFAULT \'default\'',
             'workflow_id': 'VARCHAR(100) NOT NULL',
             'workflow_name': 'VARCHAR(200) NOT NULL',
             'interaction_count': 'INTEGER DEFAULT 0',
