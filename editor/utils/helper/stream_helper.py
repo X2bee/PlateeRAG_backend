@@ -102,6 +102,7 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
         self.current_step = 0
         self.tool_outputs = []
         self.streamed_tokens = []
+        self.tool_logs = []
 
     def put_token(self, token):
         if not self.is_done and token:
@@ -137,7 +138,9 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
         # pass
         tool_name = action.tool
         tool_input = str(action.tool_input)
-        self.put_status(f"<TOOLUSELOG>{tool_name}\n{tool_input}</TOOLUSELOG>\n")
+        log_entry = f"<TOOLUSELOG>{tool_name}\n{tool_input}</TOOLUSELOG>"
+        self.tool_logs.append(log_entry)
+        self.put_status(f"{log_entry}\n")
 
     async def on_tool_start(self, serialized, input_str, **kwargs) -> None:
         """도구 실행 시작 시"""
@@ -150,8 +153,10 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
         self.tool_outputs.append(output)
 
         parsed_output = _parse_document_citations(tool_output)
+        log_entry = f"<TOOLOUTPUTLOG>{parsed_output}</TOOLOUTPUTLOG>"
+        self.tool_logs.append(log_entry)
 
-        self.put_status(f"<TOOLOUTPUTLOG>{parsed_output}</TOOLOUTPUTLOG>")
+        self.put_status(log_entry)
 
     async def on_tool_error(self, error, **kwargs) -> None:
         self.put_status(f"❌ 도구 실행 오류: {str(error)}\n")
