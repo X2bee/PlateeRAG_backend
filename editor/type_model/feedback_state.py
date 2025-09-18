@@ -12,3 +12,7 @@ class FeedbackState(TypedDict):
     requirements_met: bool
     max_iterations: int
     todo_requires_tools: Optional[bool]  # TODO가 도구 사용이 필요한지 여부
+    current_todo_id: Optional[int]
+    current_todo_title: Optional[str]
+    current_todo_index: Optional[int]
+    total_todos: Optional[int]

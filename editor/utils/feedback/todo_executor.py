@@ -3,7 +3,7 @@ from editor.type_model.feedback_state import FeedbackState
 
 logger = logging.getLogger(__name__)
 
-def todo_executor(todos, text, max_iterations, workflow, return_intermediate_steps=False):
+def todo_executor(todos, text, max_iterations, workflow, return_intermediate_steps=False, stream_emitter=None):
     # 2단계: 각 TODO를 순차적으로 실행
     all_results = []
     todo_execution_log = []
@@ -12,6 +12,9 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
     for i, todo in enumerate(todos):
         todo_requires_tools = todo.get('tool_required', 'complex') == 'complex'
         logger.info(f"Executing TODO {i+1}/{len(todos)}: {todo.get('title', 'Untitled')} [{'with tools' if todo_requires_tools else 'without tools'}]")
+
+        if stream_emitter:
+            stream_emitter.emit_todo_start(i + 1, len(todos), todo)
 
         # 이전 TODO 결과들을 컨텍스트로 구성
         previous_context = ""
@@ -32,7 +35,11 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             final_result=None,
             requirements_met=False,
             max_iterations=max_iterations,  # 개별 TODO의 sub-task iterations
-            todo_requires_tools=todo_requires_tools  # 도구 필요성 전달
+            todo_requires_tools=todo_requires_tools,  # 도구 필요성 전달
+            current_todo_id=todo.get('id', i + 1),
+            current_todo_title=todo.get('title', 'Untitled'),
+            current_todo_index=i + 1,
+            total_todos=len(todos)
         )
 
         # TODO 실행
@@ -87,6 +94,7 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             'requirements_met': todo_final_state.get("requirements_met", False)
         })
 
-    return all_results, todo_execution_log
+        if stream_emitter:
+            stream_emitter.emit_todo_summary(todo_log)
 
-        
+    return all_results, todo_execution_log
