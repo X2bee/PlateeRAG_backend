@@ -11,8 +11,8 @@
       "id": "memory/db_memory-1752938015689",
       "data": {
         "functionId": "memory",
-        "id": "memory/db_memory",
-        "nodeName": "DB Memory",
+        "id": "memory/db_memory_v2",
+        "nodeName": "DB Memory V2",
         "description": "DB에서 대화 기록을 로드하여 ConversationBufferMemory로 반환하는 노드입니다.",
         "tags": [
           "memory",
@@ -38,6 +38,22 @@
           {
             "id": "include_thinking",
             "name": "Include Thinking",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "top_n_messages",
+            "name": "Top N Messages",
+            "type": "INT",
+            "value": 10,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "enable_similarity_filter",
+            "name": "Enable Similarity Filter",
             "type": "BOOL",
             "value": false,
             "required": false,

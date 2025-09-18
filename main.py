@@ -21,6 +21,7 @@ from controller.huggingface.huggingfaceController import router as huggingfaceRo
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
+from controller.dataManagerController import router as dataManagerRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
@@ -34,6 +35,7 @@ from service.vast.vast_service import VastService
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
+from service.data_manager.data_manager_register import DataManagerRegistry
 from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
 from controller.helper.utils.workflow_helpers import workflow_data_synchronizer
 
@@ -179,6 +181,12 @@ async def lifespan(app: FastAPI):
         app.state.execution_manager = execution_manager
         logger.info("✅ Step 7: Workflow execution manager initialized successfully!")
 
+        # 7.5. Data Manager Registry 초기화
+        print_step_banner(7.5, "DATA MANAGER REGISTRY SETUP", "Setting up data manager registry")
+        logger.info("⚙️  Step 7.5: Data manager registry initialization starting...")
+        app.state.data_manager_registry = DataManagerRegistry()
+        logger.info("✅ Step 7.5: Data manager registry initialized successfully!")
+
         print_step_banner(8, "SYSTEM VALIDATION", "Validating configurations and directories")
         logger.info("⚙️  Step 8: System validation starting...")
 
@@ -259,6 +267,12 @@ async def lifespan(app: FastAPI):
     └─────────────────────────────────────────────────────┘
     """)
     try:
+        # Data Manager Registry 정리
+        if hasattr(app.state, 'data_manager_registry') and app.state.data_manager_registry:
+            logger.info("🔄 Cleaning up data manager registry...")
+            app.state.data_manager_registry.cleanup()
+            logger.info("✅ Data manager registry cleanup complete")
+
         # 워크플로우 실행 매니저 정리
         if hasattr(app.state, 'execution_manager') and app.state.execution_manager:
             logger.info("🔄 Shutting down workflow execution manager...")
@@ -327,6 +341,7 @@ app.include_router(interactionRouter)
 app.include_router(appRouter)
 app.include_router(vastRouter)
 app.include_router(huggingfaceRouter)
+app.include_router(dataManagerRouter)
 
 if __name__ == "__main__":
     try:
