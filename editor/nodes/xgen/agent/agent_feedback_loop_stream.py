@@ -1,7 +1,7 @@
 import logging
 import queue
 import threading
-from typing import Any, Dict, Generator, Optional
+from typing import Any, Dict, Generator, Optional, Tuple
 
 from pydantic import BaseModel
 
@@ -226,9 +226,21 @@ class AgentFeedbackLoopStreamNode(Node):
         worker_thread = threading.Thread(target=worker, daemon=True)
         worker_thread.start()
 
+        loop_open = False
+
+        def split_feedback_output(text: str) -> Tuple[str, str]:
+            if "<FEEDBACK_LOOP>" in text and "</FEEDBACK_LOOP>" in text:
+                _, after_open = text.split("<FEEDBACK_LOOP>", 1)
+                inside, after_close = after_open.split("</FEEDBACK_LOOP>", 1)
+                return inside, after_close
+            return text, ""
+
         while True:
             msg_type, payload = stream_queue.get()
             if msg_type == "token":
+                if not loop_open:
+                    yield "<FEEDBACK_LOOP>"
+                    loop_open = True
                 yield payload
             elif msg_type == "final":
                 formatted_output = printer.execute(
@@ -239,11 +251,34 @@ class AgentFeedbackLoopStreamNode(Node):
                     max_iteration_display=max_iteration_display,
                     show_todo_details=show_todo_details,
                 )
-                for chunk in chunk_output(formatted_output):
-                    yield chunk
+                loop_body, remainder = split_feedback_output(formatted_output)
+
+                if loop_body:
+                    if not loop_open:
+                        yield "<FEEDBACK_LOOP>"
+                        loop_open = True
+                    for chunk in chunk_output(loop_body):
+                        yield chunk
+
+                if loop_open:
+                    yield "</FEEDBACK_LOOP>"
+                    loop_open = False
+
+                if remainder:
+                    yield remainder
             elif msg_type == "error":
-                yield f"<FEEDBACK_STATUS>{payload}</FEEDBACK_STATUS>\n"
+                if payload:
+                    if not loop_open:
+                        yield "<FEEDBACK_LOOP>"
+                        loop_open = True
+                    yield f"<FEEDBACK_STATUS>{payload}</FEEDBACK_STATUS>\n"
+                if loop_open:
+                    yield "</FEEDBACK_LOOP>"
+                    loop_open = False
             elif msg_type == "done":
+                if loop_open:
+                    yield "</FEEDBACK_LOOP>"
+                    loop_open = False
                 break
 
         if worker_thread.is_alive():
