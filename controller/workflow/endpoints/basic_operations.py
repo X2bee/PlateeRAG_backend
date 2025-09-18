@@ -307,7 +307,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
 
         copy_workflow_name = f"{workflow_name}_copy"
         copy_file_name = f"{copy_workflow_name}.json"
-        target_path = os.path.join(target_path_id, filename)
+        target_path = os.path.join(copy_workflow_name, filename)
 
         if os.path.exists(target_path):
             logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
