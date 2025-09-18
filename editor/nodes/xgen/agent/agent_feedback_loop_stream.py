@@ -16,7 +16,7 @@ from editor.nodes.xgen.agent.functions import (
 from editor.nodes.xgen.tool.print_format import PrintAnyNode
 from editor.utils.feedback.create_feedback_graph import create_feedback_graph
 from editor.utils.feedback.create_todos import create_todos
-from editor.utils.feedback.feedback_stream_helper import FeedbackStreamEmitter
+from editor.utils.helper.feedback_stream_helper import FeedbackStreamEmitter
 from editor.utils.feedback.todo_executor import todo_executor
 from editor.utils.prefix_prompt import prefix_prompt
 
