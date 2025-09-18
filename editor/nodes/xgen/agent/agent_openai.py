@@ -87,7 +87,7 @@ class AgentOpenAINode(Node):
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(
                     agent=agent,
-                    tools=tools,
+                    tools=tools_list,
                     verbose=True,
                     handle_parsing_errors=True,
                     max_iterations=10,
