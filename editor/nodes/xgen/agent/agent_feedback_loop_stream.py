@@ -58,16 +58,17 @@ class AgentFeedbackLoopStreamNode(Node):
         {"id": "max_iterations", "name": "Max Iterations", "type": "INT", "value": 5, "min": 1, "max": 20, "step": 1, "optional": True, "description": "최대 반복 횟수"},
         {"id": "feedback_threshold", "name": "Feedback Threshold", "type": "INT", "value": 8, "min": 1, "max": 10, "step": 1, "optional": True, "description": "만족스러운 결과로 간주할 점수 임계값 (1-10)"},
         {"id": "enable_auto_feedback", "name": "Enable Auto Feedback", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "자동 피드백 평가 활성화"},
+        {"id": "enable_formatted_output", "name": "Enable Formatted Output", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "형식화된 출력 활성화"},
         {"id": "format_style", "name": "Format Style", "type": "STR", "value": "detailed", "required": False, "optional": True, "options": [
             {"value": "summary", "label": "요약만 표시"},
             {"value": "detailed", "label": "상세 정보 표시"},
             {"value": "compact", "label": "압축된 형태"},
             {"value": "markdown", "label": "마크다운 형식"}
-        ]},
-        {"id": "show_scores", "name": "Show Scores", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "점수 정보를 표시할지 여부"},
-        {"id": "show_timestamps", "name": "Show Timestamps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "타임스탬프를 표시할지 여부"},
-        {"id": "max_iteration_display", "name": "Max Iterations Display", "type": "INT", "value": 5, "min": 1, "max": 20, "step": 1, "optional": True, "description": "표시할 최대 반복 횟수"},
-        {"id": "show_todo_details", "name": "Show TODO Details", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "TODO 실행 과정을 상세히 표시할지 여부"},
+        ], "dependency": "enable_formatted_output"},
+        {"id": "show_scores", "name": "Show Scores", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "점수 정보를 표시할지 여부", "dependency": "enable_formatted_output"},
+        {"id": "show_timestamps", "name": "Show Timestamps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "타임스탬프를 표시할지 여부", "dependency": "enable_formatted_output"},
+        {"id": "max_iteration_display", "name": "Max Iterations Display", "type": "INT", "value": 5, "min": 1, "max": 20, "step": 1, "optional": True, "description": "표시할 최대 반복 횟수", "dependency": "enable_formatted_output"},
+        {"id": "show_todo_details", "name": "Show TODO Details", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "TODO 실행 과정을 상세히 표시할지 여부", "dependency": "enable_formatted_output"},
     ]
 
     def __init__(self):
