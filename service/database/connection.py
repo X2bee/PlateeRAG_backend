@@ -479,19 +479,18 @@ class AppDatabaseManager:
 
             # 위험한 키워드 체크 (기본적인 보안)
             dangerous_keywords = [
-                'DROP', 'DELETE', 'TRUNCATE', 'INSERT', 'UPDATE',
-                'CREATE', 'ALTER', 'GRANT', 'REVOKE'
+                'DROP', 'DELETE', 'TRUNCATE',
             ]
 
             query_upper = query.upper().strip()
 
-            # SELECT 쿼리만 허용하는 기본 보안 체크
-            if not query_upper.startswith('SELECT'):
-                return {
-                    "success": False,
-                    "error": "Only SELECT queries are allowed",
-                    "data": []
-                }
+            # # SELECT 쿼리만 허용하는 기본 보안 체크
+            # if not query_upper.startswith('SELECT'):
+            #     return {
+            #         "success": False,
+            #         "error": "Only SELECT queries are allowed",
+            #         "data": []
+            #     }
 
             # 위험한 키워드가 포함되어 있는지 체크
             for keyword in dangerous_keywords:
