@@ -8,6 +8,7 @@ from service.retrieval.document_info_generator.document_info_generator import Do
 from service.retrieval.rag_service import RAGService
 from service.database.performance_controller_helper import PerformanceControllerHelper
 from service.stt.huggingface_stt import HuggingFaceSTT
+from service.data_manager.data_manager_register import DataManagerRegistry
 
 def get_db_manager(request: Request) -> AppDatabaseManager:
     """데이터베이스 매니저 의존성 주입"""
@@ -90,3 +91,10 @@ def get_rag_service(request: Request) -> RAGService:
         return rag_service
     else:
         raise HTTPException(status_code=500, detail="RAG service not available")
+
+def get_data_manager_registry(request: Request) -> DataManagerRegistry:
+    """request에서 DataManagerRegistry 가져오기"""
+    if hasattr(request.app.state, 'data_manager_registry') and request.app.state.data_manager_registry:
+        return request.app.state.data_manager_registry
+    else:
+        raise HTTPException(status_code=500, detail="DataManagerRegistry가 초기화되지 않았습니다")
