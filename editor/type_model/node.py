@@ -27,6 +27,7 @@ class Parameter(TypedDict):
     expandable: Optional[bool] = False  # True이면 확장 가능한 파라미터
     description: Optional[str] = None  # 파라미터 설명
     is_added: Optional[bool] = False  # True이면 추가된
+    dependency: Optional[str] = None  # 다른 파라미터에 의존하는 경우 그 파라미터의 id
 
 
 class NodeSpec(TypedDict):
