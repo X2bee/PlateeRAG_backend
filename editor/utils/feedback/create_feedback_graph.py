@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 memory = MemorySaver()
 
-def create_feedback_graph(llm, tools_list, prompt_template_with_tool, prompt_template_without_tool, additional_rag_context, feedback_criteria, return_intermediate_steps=True, feedback_threshold=8, enable_auto_feedback=True):
+def create_feedback_graph(llm, tools_list, chat_history, prompt_template_with_tool, prompt_template_without_tool, additional_rag_context, feedback_criteria, return_intermediate_steps=True, feedback_threshold=8, enable_auto_feedback=True):
         """LangGraph 피드백 루프 그래프 생성"""
         
         def execute_task(state: FeedbackState) -> FeedbackState:
@@ -36,7 +36,7 @@ def create_feedback_graph(llm, tools_list, prompt_template_with_tool, prompt_tem
                 enhanced_input = f"현재 시도: {user_input}{previous_attempts}"
                 inputs = {
                     "input": enhanced_input,
-                    "chat_history": state["messages"][-5:] if state["messages"] else [],
+                    "chat_history": chat_history,
                     "additional_rag_context": additional_rag_context
                 }
 

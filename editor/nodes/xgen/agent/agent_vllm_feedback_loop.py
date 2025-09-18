@@ -125,7 +125,7 @@ class AgentFeedbackLoopNode(Node):
 
             # TODO별 워크플로우 생성
             workflow = create_feedback_graph(
-                llm, tools_list, prompt_template_with_tool, prompt_template_without_tool, additional_rag_context,
+                llm, tools_list, chat_history, prompt_template_with_tool, prompt_template_without_tool, additional_rag_context,
                 feedback_criteria, return_intermediate_steps, feedback_threshold, enable_auto_feedback
             )
 
