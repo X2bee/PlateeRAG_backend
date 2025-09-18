@@ -7,13 +7,14 @@ from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import Response, StreamingResponse
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import os
 import aiofiles
 import hashlib
 import logging
 from datetime import datetime
 import urllib.parse
+import mimetypes
 from controller.authController import verify_token, get_user_by_token
 from service.database.models.user import User
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_document_info_generator
@@ -189,6 +190,22 @@ async def log_document_access(user_id: str, file_path: str, action: str):
     """
     logger.info(f"User {user_id} performed {action} on {file_path}")
 
+def resolve_safe_document_path(decoded_path: str) -> Tuple[str, str]:
+    """입력 경로를 안전한 실제 경로로 변환하고 접근 검사용 경로를 함께 반환"""
+    dir_part, file_part = os.path.split(decoded_path)
+
+    joined_path = os.path.join(dir_part, file_part)
+    safe_original_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
+
+    if not os.path.exists(safe_original_path):
+        normalized_file = unicodedata.normalize('NFD', file_part)
+        joined_path = os.path.join(dir_part, normalized_file)
+        safe_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
+    else:
+        safe_path = safe_original_path
+
+    return safe_path, joined_path
+
 # =============================================================================
 # API 엔드포인트
 # =============================================================================
@@ -212,19 +229,7 @@ async def fetch_document(
 
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
-        dir_part, file_part = os.path.split(decoded_path)
-
-        # 먼저 원본 경로로 파일 존재 확인
-        joined_path = os.path.join(dir_part, file_part)
-        safe_original_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
-
-        # 파일이 존재하지 않으면 NFD 정규화 시도
-        if not os.path.exists(safe_original_path):
-            normalized_file = unicodedata.normalize('NFD', file_part)
-            joined_path = os.path.join(dir_part, normalized_file)
-            safe_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
-        else:
-            safe_path = safe_original_path
+        safe_path, joined_path = resolve_safe_document_path(decoded_path)
 
         # 접근 권한 확인
         access_check = await check_document_access(app_db, user_id, joined_path)
@@ -306,19 +311,7 @@ async def fetch_document_deploy(
 
         # 파일 경로 검증
         decoded_path = urllib.parse.unquote(document_request.file_path)
-        dir_part, file_part = os.path.split(decoded_path)
-
-        # 먼저 원본 경로로 파일 존재 확인
-        joined_path = os.path.join(dir_part, file_part)
-        safe_original_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
-
-        # 파일이 존재하지 않으면 NFD 정규화 시도
-        if not os.path.exists(safe_original_path):
-            normalized_file = unicodedata.normalize('NFD', file_part)
-            joined_path = os.path.join(dir_part, normalized_file)
-            safe_path = validate_file_path(joined_path, DOCUMENTS_BASE_DIR)
-        else:
-            safe_path = safe_original_path
+        safe_path, joined_path = resolve_safe_document_path(decoded_path)
 
         # 접근 권한 확인
         access_check = await check_document_access(app_db, user_id, joined_path)
@@ -379,6 +372,104 @@ async def fetch_document_deploy(
         logger.error(f"Document fetch deploy error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/download")
+async def download_document(
+    request: Request,
+    document_request: DocumentRequest,
+    credentials = Depends(security)
+):
+    """문서를 attachment 형태로 다운로드"""
+    try:
+        user_id = await get_user_id_from_request(request, document_request, credentials)
+
+        app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
+        decoded_path = urllib.parse.unquote(document_request.file_path)
+        safe_path, joined_path = resolve_safe_document_path(decoded_path)
+
+        access_check = await check_document_access(app_db, user_id, joined_path)
+        if not access_check.get("has_access"):
+            backend_log.warn(
+                "Document download denied",
+                metadata={"file_path": decoded_path, "reason": access_check.get("reason")},
+            )
+            raise HTTPException(status_code=403, detail=access_check.get("reason", "Access denied"))
+
+        permissions = access_check.get("permissions", {})
+        if not permissions.get("download", False):
+            backend_log.warn(
+                "Document download not permitted",
+                metadata={"file_path": decoded_path, "permissions": permissions},
+            )
+            raise HTTPException(status_code=403, detail="Download not permitted")
+
+        if not os.path.exists(safe_path):
+            backend_log.warn(
+                "Document not found for download",
+                metadata={"file_path": decoded_path, "safe_path": safe_path},
+            )
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        file_size = os.path.getsize(safe_path)
+        if file_size > MAX_FILE_SIZE:
+            backend_log.warn(
+                "File too large for download",
+                metadata={"file_path": decoded_path, "file_size": file_size, "max_size": MAX_FILE_SIZE},
+            )
+            raise HTTPException(status_code=413, detail="File too large")
+
+        await log_document_access(user_id, decoded_path, "download")
+
+        filename = os.path.basename(safe_path)
+        mime_type, _ = mimetypes.guess_type(filename)
+        if not mime_type:
+            mime_type = "application/octet-stream"
+
+        try:
+            filename.encode("ascii")
+            content_disposition = f"attachment; filename={filename}"
+        except UnicodeEncodeError:
+            encoded_filename = urllib.parse.quote(filename)
+            content_disposition = f"attachment; filename*=UTF-8''{encoded_filename}"
+
+        backend_log.success(
+            "Document download prepared",
+            metadata={
+                "file_path": decoded_path,
+                "filename": filename,
+                "file_size": file_size,
+                "access_level": access_check.get("access_level"),
+                "permissions": permissions,
+            },
+        )
+
+        return StreamingResponse(
+            stream_file(safe_path),
+            media_type=mime_type,
+            headers={
+                "Content-Disposition": content_disposition,
+                "Cache-Control": f"private, max-age={CACHE_TTL}",
+                "Content-Length": str(file_size),
+            },
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        backend_log = create_logger(
+            get_db_manager(request),
+            document_request.user_id or "unknown",
+            request,
+        )
+        backend_log.error(
+            "Document download error",
+            exception=e,
+            metadata={"file_path": document_request.file_path},
+        )
+        logger.error(f"Document download error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 @router.post("/metadata", response_model=DocumentMetadataResponse)
 async def get_document_metadata_endpoint(
     request: Request,
