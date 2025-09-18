@@ -2,7 +2,9 @@ import logging
 import queue
 import threading
 from typing import Any, Dict, Generator, Optional, Tuple
+from urllib.request import Request
 
+from controller.helper.singletonHelper import get_config_composer
 from pydantic import BaseModel
 
 from editor.node_composer import Node
@@ -25,11 +27,11 @@ logger = logging.getLogger(__name__)
 default_prompt = """You are a helpful AI assistant with feedback loop capabilities. \
 You will execute tasks, evaluate results against user requirements, and iterate until satisfactory results are achieved."""
 
-class AgentFeedbackLoopStreamNode(Node):
+class AgentVLLMFeedbackLoopStreamNode(Node):
     categoryId = "xgen"
     functionId = "agents"
-    nodeId = "agents/feedback_loop_stream"
-    nodeName = "Agent Stream Feedback Loop"
+    nodeId = "agents/vllm_feedback_loop_stream"
+    nodeName = "Agent VLLM Stream Feedback Loop"
     description = "LangGraph 기반 피드백 루프를 스트리밍 형태로 제공하는 Agent 노드"
     tags = ["agent", "feedback", "loop", "langgraph", "iterative", "evaluation", "stream"]
 
@@ -47,11 +49,11 @@ class AgentFeedbackLoopStreamNode(Node):
     ]
 
     parameters = [
-        {"id": "model", "name": "Model", "type": "STR", "value": "gpt-4.1-mini", "required": True},
+        {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": True},
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
-        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "required": False, "optional": True},
+        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "중간 단계를 반환할지 여부입니다."},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
@@ -73,6 +75,14 @@ class AgentFeedbackLoopStreamNode(Node):
     def __init__(self):
         super().__init__()
 
+    def api_vllm_model_name(self, request: Request) -> Dict[str, Any]:
+        config_composer = get_config_composer(request)
+        return config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+
+    def api_vllm_api_base_url(self, request: Request) -> Dict[str, Any]:
+        config_composer = get_config_composer(request)
+        return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
+
     def execute(
         self,
         text: str,
@@ -81,11 +91,11 @@ class AgentFeedbackLoopStreamNode(Node):
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
         feedback_criteria: str = "",
-        model: str = "gpt-4",
+        model: str = "x2bee/Polar-14B",
         temperature: float = 0.7,
         max_tokens: int = 8192,
         n_messages: int = 3,
-        base_url: str = "https://api.openai.com/v1",
+        base_url: str = "",
         strict_citation: bool = True,
         return_intermediate_steps: bool = True,
         default_prompt: str = default_prompt,
