@@ -157,6 +157,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             is_completed=(has_startnode and has_endnode),
             is_shared=existing_data[0].is_shared if existing_data else False,
             share_group=existing_data[0].share_group if existing_data else None,
+            share_permissions=existing_data[0].share_permissions if existing_data else 'read',
             workflow_data=workflow_data,
         )
 
