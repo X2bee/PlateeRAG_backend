@@ -2,7 +2,7 @@ import logging
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, Generator
 from editor.node_composer import Node
-from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt, prepare_optimized_chat_history
+from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
 from editor.utils.prefix_prompt import prefix_prompt
 from langchain.agents import create_tool_calling_agent

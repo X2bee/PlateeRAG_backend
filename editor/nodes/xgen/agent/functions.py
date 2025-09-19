@@ -1,5 +1,9 @@
 import re
 import logging
+from typing import Any, List, Optional
+
+from langchain_core.messages import SystemMessage
+
 from editor.utils.helper.async_helper import sync_run_async
 from editor.utils.citation_prompt import citation_prompt
 logger = logging.getLogger(__name__)
@@ -139,85 +143,34 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
     chat_history = []
     if memory:
         try:
-            optimized_chat_history = prepare_optimized_chat_history(memory, text, n_messages, llm)
-            chat_history = optimized_chat_history
-            logger.info(f"Using optimized multiturn memory with {len(chat_history)} messages")
+            summary_window = max(3, (n_messages or 1) * 2)
+            chat_history = prepare_chat_history(
+                memory,
+                current_input=text,
+                llm=llm,
+                summary_message_limit=summary_window,
+            )
+            logger.info(
+                "Using multiturn memory with %s messages (summary window: %s)",
+                len(chat_history),
+                summary_window,
+            )
         except Exception as e:
             logger.warning(f"Failed to use optimized memory, using standard: {e}")
             chat_history = []
 
     return llm, tools_list, chat_history
 
-def _group_messages_into_pairs(chat_history):
-    """연속된 메시지들을 user-ai 쌍으로 그룹핑"""
-    if not chat_history:
-        return []
-
-    grouped_messages = []
-    current_user_messages = []
-    current_ai_messages = []
-
-    for msg in chat_history:
-        if not hasattr(msg, 'type') or not hasattr(msg, 'content'):
-            continue
-
-        msg_type = msg.type
-        content = msg.content.strip()
-
-        if not content:
-            continue
-
-        if msg_type == "human":  # 사용자 메시지
-            # AI 메시지가 쌓여있다면 이전 쌍을 완성
-            if current_ai_messages:
-                if current_user_messages:  # 이전 사용자 메시지가 있었다면
-                    user_content = " ".join(current_user_messages)
-                    ai_content = " ".join(current_ai_messages)
-                    grouped_messages.append({
-                        'role': 'user',
-                        'content': user_content
-                    })
-                    grouped_messages.append({
-                        'role': 'ai',
-                        'content': ai_content
-                    })
-                    current_user_messages = []
-                    current_ai_messages = []
-
-            current_user_messages.append(content)
-
-        elif msg_type == "ai":  # AI 메시지
-            current_ai_messages.append(content)
-
-    # 마지막 메시지들 처리
-    if current_user_messages and current_ai_messages:
-        user_content = " ".join(current_user_messages)
-        ai_content = " ".join(current_ai_messages)
-        grouped_messages.append({
-            'role': 'user',
-            'content': user_content
-        })
-        grouped_messages.append({
-            'role': 'ai',
-            'content': ai_content
-        })
-    elif current_user_messages:  # AI 답변이 없는 사용자 메시지만 있는 경우
-        user_content = " ".join(current_user_messages)
-        grouped_messages.append({
-            'role': 'user',
-            'content': user_content
-        })
-
-    return grouped_messages
-
-def prepare_optimized_chat_history(memory, current_input, n_messages, llm):
+def prepare_chat_history(
+    memory,
+    current_input: Optional[str] = None,
+    llm: Optional[Any] = None,
+    summary_message_limit: int = 6,
+):
     """최적화된 chat_history 생성 - 기존 inputs 구조와 호환"""
     if not memory:
         return []
-
     try:
-        from editor.nodes.xgen.memory.db_chat_memory_v2 import DBMemoryNode
-
         # 메모리에서 모든 대화 기록 추출
         memory_vars = memory.load_memory_variables({})
         full_chat_history = memory_vars.get("chat_history", [])
@@ -225,38 +178,123 @@ def prepare_optimized_chat_history(memory, current_input, n_messages, llm):
         if not full_chat_history:
             return []
 
-        # 메시지를 user-ai 쌍으로 그룹핑
-        historical_messages = _group_messages_into_pairs(full_chat_history)
+        summary_message = None
+        if llm and current_input:
+            try:
+                summary_message = _summarize_chat_history_with_llm(
+                    full_chat_history,
+                    current_input,
+                    llm,
+                )
+            except Exception as summarize_error:
+                logger.warning(f"Failed to summarize chat history: {summarize_error}")
 
-        if not historical_messages:
-            logger.info("No grouped messages found, using original chat history")
-            return full_chat_history[-n_messages:] if n_messages > 0 else []
+        if summary_message:
+            # Append summary as system message while preserving original order
+            return list(full_chat_history) + [summary_message]
 
-        logger.info(f"Grouped {len(full_chat_history)} raw messages into {len(historical_messages)} processed messages")
-
-        # DBMemoryNode 인스턴스 생성하여 최적화된 요약 생성
-        db_memory_node = DBMemoryNode()
-        optimized_summary = db_memory_node._select_and_summarize_relevant_messages(
-            current_input=current_input,
-            historical_messages=historical_messages,
-            n_messages=n_messages,
-            llm=llm
-        )
-
-        # 요약이 있으면 시스템 메시지로 변환하여 반환
-        if optimized_summary and optimized_summary.strip():
-            from langchain_core.messages import SystemMessage
-            return [SystemMessage(content=f"이전 대화 요약: {optimized_summary}")]
-        else:
-            # 요약이 없거나 빈 문자열이면 최근 n_messages만 반환 (기존 방식)
-            return full_chat_history[-n_messages:] if n_messages > 0 else []
+        return full_chat_history
 
     except Exception as e:
-        logger.error(f"Error in prepare_optimized_chat_history: {e}")
+        logger.error(f"Error in prepare_chat_history: {e}")
         # 오류 발생 시 기존 방식으로 fallback
         memory_vars = memory.load_memory_variables({})
         chat_history = memory_vars.get("chat_history", [])
-        return chat_history[-n_messages:] if n_messages > 0 else []
+        if chat_history and llm and current_input:
+            try:
+                summary_message = _summarize_chat_history_with_llm(
+                    chat_history,
+                    current_input,
+                    llm,
+                )
+                if summary_message:
+                    return list(chat_history) + [summary_message]
+            except Exception as summarize_error:
+                logger.warning(f"Failed to summarize chat history after fallback: {summarize_error}")
+
+        return chat_history if memory else []
+
+def _message_role_and_content(message) -> Optional[tuple]:
+    role = None
+    content = None
+
+    if hasattr(message, "type") and hasattr(message, "content"):
+        role_type = message.type
+        if role_type in ("human", "user"):
+            role = "사용자"
+        elif role_type in ("ai", "assistant"):
+            role = "AI"
+        else:
+            role = role_type or "기타"
+        content = message.content if isinstance(message.content, str) else None
+    elif isinstance(message, dict):
+        role_key = message.get("role")
+        if role_key in ("user", "human"):
+            role = "사용자"
+        elif role_key in ("ai", "assistant"):
+            role = "AI"
+        else:
+            role = role_key or "기타"
+        content = message.get("content")
+
+    if content:
+        normalized_content = content.strip()
+        if normalized_content:
+            return role, normalized_content
+    return None
+
+
+def _build_conversation_text(messages: List[Any]) -> str:
+    lines = []
+    for idx, msg in enumerate(messages, 1):
+        normalized = _message_role_and_content(msg)
+        if not normalized:
+            continue
+        role, content = normalized
+        lines.append(f"[{idx}] {role}: {content}")
+
+    return "\n".join(lines)
+
+
+def _summarize_chat_history_with_llm(
+    chat_history,
+    current_input: str,
+    llm: Any
+) -> Optional[SystemMessage]:
+    if not chat_history or not current_input:
+        return None
+
+    conversation_text = _build_conversation_text(chat_history)
+
+    if not conversation_text.strip():
+        return None
+
+    summary_prompt = f"""/no_think 당신은 대화 요약 전문가입니다. 아래 이전 대화 기록을 읽고, 현재 사용자의 질문에 답하는 데 필요한 핵심 정보만 요약하세요.
+
+현재 사용자 입력: {current_input}
+
+이전 대화 기록:
+{conversation_text}
+
+요약 지침:
+1. 현재 질문과 직접적으로 관련된 사실과 맥락만 포함
+2. 사용자와 AI의 의도, 결론, 미해결 항목을 명확히 정리
+3. 3-6문장으로 간결하지만 충분히 정보를 제공
+4. 새로운 정보를 추가하지 말고 원문의 사실만 사용
+
+요약:"""
+
+    result = llm.invoke(summary_prompt)
+    summary_text = getattr(result, "content", None)
+    if not summary_text:
+        return None
+
+    cleaned_summary = summary_text.strip()
+    if not cleaned_summary:
+        return None
+
+    logger.info("Generated chat history summary for current input")
+    return SystemMessage(content=f"이전 대화 요약: {cleaned_summary}")
 
 def create_json_output_prompt(args_schema, original_prompt):
     from langchain_core.output_parsers import JsonOutputParser
@@ -277,13 +315,6 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
     """
     from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-    # 메모리가 있고 최적화 기능을 사용하는 경우
-    if use_optimization and memory and current_input and llm:
-        try:
-            return create_optimized_tool_context_prompt(additional_rag_context, default_prompt, memory, current_input, n_messages, llm)
-        except Exception as e:
-            logger.warning(f"Optimized context creation failed, falling back to standard: {e}")
-
     # 기존 방식 (메모리가 없거나 최적화 비활성화)
     if additional_rag_context and additional_rag_context.strip():
         final_prompt = ChatPromptTemplate.from_messages([
@@ -300,29 +331,6 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
             ("user", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad")
         ])
-    return final_prompt
-
-def create_optimized_tool_context_prompt(additional_rag_context, default_prompt, memory, current_input, n_messages, llm):
-    """최적화된 멀티턴 컨텍스트를 사용한 tool 프롬프트 생성 (기존 구조 유지)"""
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-
-    # 기존 구조를 유지하되, chat_history만 최적화된 것으로 교체
-    if additional_rag_context and additional_rag_context.strip():
-        final_prompt = ChatPromptTemplate.from_messages([
-            ("system", default_prompt),
-            MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-            ("user", "{input}"),
-            ("user", "{additional_rag_context}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad")
-        ])
-    else:
-        final_prompt = ChatPromptTemplate.from_messages([
-            ("system", default_prompt),
-            MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-            ("user", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad")
-        ])
-
     return final_prompt
 
 def create_context_prompt(additional_rag_context, default_prompt, n_messages, strict_citation, memory=None, current_input=None, llm=None, use_optimization=True):
@@ -337,37 +345,7 @@ def create_context_prompt(additional_rag_context, default_prompt, n_messages, st
     """
     from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-    # 메모리가 있고 최적화 기능을 사용하는 경우
-    if use_optimization and memory and current_input and llm:
-        try:
-            return create_optimized_context_prompt(additional_rag_context, default_prompt, memory, current_input, n_messages, llm, strict_citation)
-        except Exception as e:
-            logger.warning(f"Optimized context creation failed, falling back to standard: {e}")
-
     # 기존 방식 (메모리가 없거나 최적화 비활성화)
-    if additional_rag_context and additional_rag_context.strip():
-        if strict_citation:
-            default_prompt = default_prompt + citation_prompt
-        final_prompt = ChatPromptTemplate.from_messages([
-            ("system", default_prompt),
-            MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-            ("user", "{input}"),
-            ("user", "{additional_rag_context}"),
-        ])
-    else:
-        final_prompt = ChatPromptTemplate.from_messages([
-            ("system", default_prompt),
-            MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
-            ("user", "{input}")
-        ])
-
-    return final_prompt
-
-def create_optimized_context_prompt(additional_rag_context, default_prompt, memory, current_input, n_messages, llm, strict_citation):
-    """최적화된 멀티턴 컨텍스트를 사용한 일반 프롬프트 생성 (기존 구조 유지)"""
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-
-    # 기존 구조를 유지하되, chat_history만 최적화된 것으로 교체
     if additional_rag_context and additional_rag_context.strip():
         if strict_citation:
             default_prompt = default_prompt + citation_prompt
