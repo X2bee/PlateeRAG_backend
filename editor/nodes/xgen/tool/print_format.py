@@ -18,6 +18,7 @@ class PrintAnyNode(Node):
     ]
 
     parameters = [
+        {"id": "enable_formatted_output", "name": "Enable Formatted Output", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "형식화된 출력 활성화"},
         {
             "id": "format_style", "name": "Format Style", "type": "STR", "value": "detailed", "required": False,
             "options": [
@@ -38,6 +39,7 @@ class PrintAnyNode(Node):
     def execute(
         self,
         input_print: Dict[str, Any],
+        enable_formatted_output: bool = False,
         format_style: str = "detailed",
         show_scores: bool = True,
         show_timestamps: bool = False,
@@ -65,7 +67,10 @@ class PrintAnyNode(Node):
             else:  # detailed
                 formatted_output = self._format_detailed(result, iteration_log, feedback_scores, show_scores, show_timestamps, max_iteration_display, truncate_results, total_iterations, final_score, average_score, has_error, show_todo_details, input_print)
             
-            return formatted_output
+            if not enable_formatted_output:
+                return str(result)
+            
+            return f"<FEEDBACK_RESULT><FEEDBACK_REPORT>{formatted_output}</FEEDBACK_REPORT></FEEDBACK_RESULT>{self._format_todo_details(input_print)}{str(result)}"
             
         except Exception as e:
             logger.error(f"[FEEDBACK_FORMATTER] 포매팅 중 오류 발생: {str(e)}")
@@ -77,21 +82,13 @@ class PrintAnyNode(Node):
         """요약 형태로 포매팅"""
         error_indicator = "⚠️ 오류 발생 " if has_error else ""
 
-        feedback_output = f"""<FEEDBACK_LOOP>{error_indicator}=== 피드백 루프 실행 요약 ===
+        feedback_output = f"""{error_indicator}=== 피드백 루프 실행 요약 ===
 📊 실행 통계:
 - 총 반복 횟수: {total_iterations}회
 - 최종 점수: {final_score}/10
-- 평균 점수: {average_score:.1f}/10
-</FEEDBACK_LOOP>"""
+- 평균 점수: {average_score:.1f}/10"""
 
-        # TODO 세부 정보 추가
-        todo_output = ""
-        if show_todo_details:
-            todo_output = self._format_todo_details(input_print)
-
-        return f"""{feedback_output}
-{todo_output}
-{str(result)}"""
+        return f"""{feedback_output}"""
 
     def _format_compact(self, result: str, iteration_log: List[Dict], feedback_scores: List[int],
                        show_scores: bool, total_iterations: int, final_score: int, has_error: bool,
@@ -100,7 +97,7 @@ class PrintAnyNode(Node):
         score_info = f" (점수: {' → '.join(map(str, feedback_scores))})" if show_scores and feedback_scores else ""
         error_indicator = "⚠️ " if has_error else "🔄 "
 
-        feedback_output = f"<FEEDBACK_LOOP>{error_indicator}피드백 루프 완료: {total_iterations}회 반복{score_info}</FEEDBACK_LOOP>"
+        feedback_output = f"{error_indicator}피드백 루프 완료: {total_iterations}회 반복{score_info}"
 
         # TODO 세부 정보 추가
         todo_output = ""
@@ -117,7 +114,7 @@ class PrintAnyNode(Node):
                         show_todo_details: bool, input_print: Dict[str, Any]) -> str:
         """마크다운 형태로 포매팅"""
         error_indicator = "⚠️ " if has_error else "🔄 "
-        markdown = f"<FEEDBACK_LOOP># {error_indicator}피드백 루프 실행 결과\n\n"
+        markdown = f"# {error_indicator}피드백 루프 실행 결과\n\n"
         
         markdown += "## 📊 실행 통계\n\n"
         markdown += f"- **총 반복 횟수**: {total_iterations}회\n"
@@ -151,15 +148,6 @@ class PrintAnyNode(Node):
                     markdown += f"**시간**: {timestamp}\n\n"
                 
                 markdown += f"```\n{iteration_result}\n```\n\n"
-        # 최종 결과
-        markdown += "</FEEDBACK_LOOP>"
-
-        # TODO 세부 정보 추가
-        if show_todo_details:
-            todo_output = self._format_todo_details(input_print)
-            markdown += f"\n{todo_output}\n"
-
-        markdown += f"```\n{str(result)}\n```\n"
 
         return markdown
 
@@ -169,7 +157,7 @@ class PrintAnyNode(Node):
                         show_todo_details: bool, input_print: Dict[str, Any]) -> str:
         """상세한 형태로 포매팅"""
         error_indicator = "⚠️ 오류 발생 - " if has_error else ""
-        output = "<FEEDBACK_LOOP>\n"
+        output = ""
         output += f"{error_indicator}🔄 피드백 루프 실행 결과\n"
         output += "=" * 60 + "\n\n"
         
@@ -238,14 +226,6 @@ class PrintAnyNode(Node):
         
         # 최종 결과
         output += "=" * 60 + "\n\n"
-        output += "</FEEDBACK_LOOP>"
-
-        # TODO 세부 정보 추가
-        if show_todo_details:
-            todo_output = self._format_todo_details(input_print)
-            output += f"\n{todo_output}\n"
-
-        output += str(result)
 
         return output
 

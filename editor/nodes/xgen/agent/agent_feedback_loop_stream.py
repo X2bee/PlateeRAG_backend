@@ -91,6 +91,7 @@ class AgentFeedbackLoopStreamNode(Node):
         max_iterations: int = 5,
         feedback_threshold: int = 8,
         enable_auto_feedback: bool = True,
+        enable_formatted_output: bool = False,
         format_style: str = "detailed",
         show_scores: bool = True,
         show_timestamps: bool = False,
@@ -239,8 +240,13 @@ class AgentFeedbackLoopStreamNode(Node):
                     loop_open = True
                 yield payload
             elif msg_type == "final":
+                if loop_open:
+                    yield "</FEEDBACK_LOOP>"
+                    loop_open = False
+
                 formatted_output = printer.execute(
                     payload,
+                    enable_formatted_output=enable_formatted_output,
                     format_style=format_style,
                     show_scores=show_scores,
                     show_timestamps=show_timestamps,
@@ -250,16 +256,8 @@ class AgentFeedbackLoopStreamNode(Node):
                 loop_body, remainder = split_feedback_output(formatted_output)
 
                 if loop_body:
-                    if not loop_open:
-                        yield "<FEEDBACK_LOOP>"
-                        loop_open = True
                     for chunk in chunk_output(loop_body):
                         yield chunk
-
-                if loop_open:
-                    yield "</FEEDBACK_LOOP>"
-                    loop_open = False
-
                 if remainder:
                     yield remainder
             elif msg_type == "error":
