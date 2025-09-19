@@ -13,6 +13,7 @@ from editor.nodes.xgen.agent.functions import (
     prepare_llm_components, rag_context_builder, 
     create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 )
+from editor.type_model.feedback_state import FeedbackState
 from editor.utils.prefix_prompt import prefix_prompt
 
 logger = logging.getLogger(__name__)
@@ -107,8 +108,12 @@ class AgentVLLMFeedbackLoopNode(Node):
             prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, strict_citation)
 
 
-            # 사용자 요청을 TODO로 분해
-            todos = create_todos(llm, text)
+            # 사용자 요청을 TODO로 분해하거나 직접 실행 모드 결정
+            todo_plan = create_todos(llm, text, tools_list)
+            todos = todo_plan.get("todos", [])
+            execution_mode = todo_plan.get("mode", "todo")
+            todo_strategy_reason = todo_plan.get("reason", "")
+            direct_tool_usage = todo_plan.get("tool_usage", "simple")
 
             # 피드백 기준 설정
             if not feedback_criteria:
@@ -122,27 +127,115 @@ class AgentVLLMFeedbackLoopNode(Node):
 
             # TODO별 워크플로우 생성
             workflow = create_feedback_graph(
-                llm, tools_list, chat_history, prompt_template_with_tool, prompt_template_without_tool, additional_rag_context,
-                feedback_criteria, return_intermediate_steps, feedback_threshold, enable_auto_feedback
+                llm,
+                tools_list,
+                chat_history,
+                prompt_template_with_tool,
+                prompt_template_without_tool,
+                additional_rag_context,
+                feedback_criteria,
+                return_intermediate_steps,
+                feedback_threshold,
+                enable_auto_feedback,
             )
 
-            # 2단계: 각 TODO를 순차적으로 실행
-            all_results = []
-            todo_execution_log = []
+            if execution_mode == "direct":
+                direct_requires_tools = direct_tool_usage == "complex" and bool(tools_list)
+                direct_state = FeedbackState(
+                    messages=[{"role": "user", "content": text}],
+                    user_input=text,
+                    tool_results=[],
+                    feedback_score=0,
+                    iteration_count=1,
+                    final_result=None,
+                    requirements_met=False,
+                    max_iterations=1,
+                    todo_requires_tools=direct_requires_tools,
+                    current_todo_id=None,
+                    current_todo_title="Direct Execution",
+                    current_todo_index=1,
+                    total_todos=0,
+                    execution_mode="direct",
+                )
 
-            all_results, todo_execution_log = todo_executor(todos, text, max_iterations, workflow, return_intermediate_steps)
+                import time
+
+                thread_id = f"direct_{hash(text)}_{int(time.time())}"
+                final_state = workflow.invoke(
+                    direct_state,
+                    config={"configurable": {"thread_id": thread_id}},
+                )
+
+                iteration_log = []
+                feedback_scores = []
+                for result in final_state.get("tool_results", []):
+                    iteration_log.append(
+                        {
+                            "iteration": result.get("iteration"),
+                            "result": result.get("result"),
+                            "score": result.get("feedback_score", 0),
+                            "evaluation": result.get("evaluation", {}),
+                            "timestamp": result.get("timestamp"),
+                        }
+                    )
+                    feedback_scores.append(result.get("feedback_score", 0))
+
+                final_summary = final_state.get("final_result") or ""
+
+                raw_todos = todo_plan.get("raw_todos", [])
+
+                result_dict = {
+                    "result": final_summary,
+                    "todos_generated": len(raw_todos),
+                    "todos_completed": 1 if final_state.get("requirements_met") else 0,
+                    "total_iterations": len(iteration_log),
+                    "final_score": feedback_scores[-1] if feedback_scores else 0,
+                    "average_score": sum(feedback_scores) / len(feedback_scores) if feedback_scores else 0,
+                    "completion_rate": 1 if final_state.get("requirements_met") else 0,
+                    "workflow_mode": "direct",
+                    "workflow_reason": todo_strategy_reason,
+                }
+
+                if return_intermediate_steps:
+                    result_dict.update(
+                            {
+                                "todos_list": raw_todos,
+                                "todo_execution_log": [
+                                    {
+                                        "mode": "direct",
+                                    "request": text,
+                                    "result": final_summary,
+                                    "iterations": len(iteration_log),
+                                    "final_score": feedback_scores[-1] if feedback_scores else 0,
+                                    "average_score": result_dict["average_score"],
+                                    "requirements_met": final_state.get("requirements_met", False),
+                                    "reason": todo_strategy_reason,
+                                }
+                            ],
+                            "iteration_log": iteration_log,
+                            "feedback_scores": feedback_scores,
+                            "todo_planner_raw": todo_plan.get("llm_raw", ""),
+                        }
+                    )
+
+                return result_dict
+
+            all_results, todo_execution_log = todo_executor(
+                todos,
+                text,
+                max_iterations,
+                workflow,
+                return_intermediate_steps,
+            )
 
             # 3단계: 전체 결과 종합
             all_scores = [result["score"] for result in all_results if "score" in result]
             completed_todos = [todo for todo in todo_execution_log if todo.get("requirements_met", False)]
 
-            # 최종 결과 구성
-            # final_summary = ""
-
-            # for todo_log in todo_execution_log:
-            #     final_summary += f"\n- {todo_log['todo_title']}: {todo_log['result']}"
-
-            final_summary=todo_execution_log[-1]['result'] if todo_execution_log else "No TODOs executed."
+            if todo_execution_log:
+                final_summary = todo_execution_log[-1].get("result", "No TODOs executed.")
+            else:
+                final_summary = "No TODOs executed."
 
             result_dict = {
                 "result": final_summary,
@@ -151,17 +244,21 @@ class AgentVLLMFeedbackLoopNode(Node):
                 "total_iterations": len(all_results),
                 "final_score": all_scores[-1] if all_scores else 0,
                 "average_score": sum(all_scores) / len(all_scores) if all_scores else 0,
-                "completion_rate": len(completed_todos) / len(todos) if todos else 0
+                "completion_rate": len(completed_todos) / len(todos) if todos else 0,
+                "workflow_mode": "todo",
+                "workflow_reason": todo_strategy_reason,
             }
 
-            # return_intermediate_steps가 True인 경우에만 상세 정보 포함
             if return_intermediate_steps:
-                result_dict.update({
-                    "todos_list": todos,
-                    "todo_execution_log": todo_execution_log,
-                    "iteration_log": all_results,
-                    "feedback_scores": all_scores
-                })
+                result_dict.update(
+                    {
+                        "todos_list": todos,
+                        "todo_execution_log": todo_execution_log,
+                        "iteration_log": all_results,
+                        "feedback_scores": all_scores,
+                        "todo_planner_raw": todo_plan.get("llm_raw", ""),
+                    }
+                )
 
             return result_dict
 

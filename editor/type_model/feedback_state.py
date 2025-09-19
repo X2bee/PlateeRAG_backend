@@ -16,3 +16,4 @@ class FeedbackState(TypedDict):
     current_todo_title: Optional[str]
     current_todo_index: Optional[int]
     total_todos: Optional[int]
+    execution_mode: Optional[str]

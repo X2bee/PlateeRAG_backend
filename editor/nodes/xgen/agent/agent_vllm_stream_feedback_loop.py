@@ -21,6 +21,7 @@ from editor.utils.feedback.create_todos import create_todos
 from editor.utils.helper.feedback_stream_helper import FeedbackStreamEmitter
 from editor.utils.feedback.todo_executor import todo_executor
 from editor.utils.prefix_prompt import prefix_prompt
+from editor.type_model.feedback_state import FeedbackState
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +152,17 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
                     strict_citation,
                 )
 
-                emitter.emit_status("<FEEDBACK_STATUS>TODO 리스트 생성 중...</FEEDBACK_STATUS>\n")
-                todos = create_todos(llm, text)
-                emitter.emit_todo_list(todos)
+                emitter.emit_status("<FEEDBACK_STATUS>실행 전략 평가 중...</FEEDBACK_STATUS>\n")
+                todo_plan = create_todos(llm, text, tools_list)
+                todos = todo_plan.get("todos", [])
+                execution_mode = todo_plan.get("mode", "todo")
+                todo_strategy_reason = todo_plan.get("reason", "")
+                direct_tool_usage = todo_plan.get("tool_usage", "simple")
+
+                if execution_mode == "todo":
+                    emitter.emit_todo_list(todos)
+                else:
+                    emitter.emit_status("<FEEDBACK_STATUS>단일 실행 모드로 전환합니다.</FEEDBACK_STATUS>\n")
 
                 if not feedback_criteria:
                     feedback_criteria_value = """
@@ -180,6 +189,87 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
                     stream_emitter=emitter,
                 )
 
+                if execution_mode == "direct":
+                    direct_requires_tools = direct_tool_usage == "complex" and bool(tools_list)
+                    direct_state = FeedbackState(
+                        messages=[{"role": "user", "content": text}],
+                        user_input=text,
+                        tool_results=[],
+                        feedback_score=0,
+                        iteration_count=1,
+                        final_result=None,
+                        requirements_met=False,
+                        max_iterations=1,
+                        todo_requires_tools=direct_requires_tools,
+                        current_todo_id=None,
+                        current_todo_title="Direct Execution",
+                        current_todo_index=1,
+                        total_todos=0,
+                        execution_mode="direct",
+                    )
+
+                    import time
+
+                    thread_id = f"direct_{hash(text)}_{int(time.time())}"
+                    final_state = workflow.invoke(
+                        direct_state,
+                        config={"configurable": {"thread_id": thread_id}},
+                    )
+
+                    iteration_log = []
+                    feedback_scores = []
+                    for result in final_state.get("tool_results", []):
+                        iteration_log.append(
+                            {
+                                "iteration": result.get("iteration"),
+                                "result": result.get("result"),
+                                "score": result.get("feedback_score", 0),
+                                "evaluation": result.get("evaluation", {}),
+                                "timestamp": result.get("timestamp"),
+                            }
+                        )
+                        feedback_scores.append(result.get("feedback_score", 0))
+
+                    final_summary = final_state.get("final_result") or ""
+                    raw_todos = todo_plan.get("raw_todos", [])
+
+                    result_dict = {
+                        "result": final_summary,
+                        "todos_generated": len(raw_todos),
+                        "todos_completed": 1 if final_state.get("requirements_met") else 0,
+                        "total_iterations": len(iteration_log),
+                        "final_score": feedback_scores[-1] if feedback_scores else 0,
+                        "average_score": sum(feedback_scores) / len(feedback_scores) if feedback_scores else 0,
+                        "completion_rate": 1 if final_state.get("requirements_met") else 0,
+                        "workflow_mode": "direct",
+                        "workflow_reason": todo_strategy_reason,
+                    }
+
+                    if return_intermediate_steps:
+                        result_dict.update(
+                            {
+                                "todos_list": raw_todos,
+                                "todo_execution_log": [
+                                    {
+                                        "mode": "direct",
+                                        "request": text,
+                                        "result": final_summary,
+                                        "iterations": len(iteration_log),
+                                        "final_score": feedback_scores[-1] if feedback_scores else 0,
+                                        "average_score": result_dict["average_score"],
+                                        "requirements_met": final_state.get("requirements_met", False),
+                                        "reason": todo_strategy_reason,
+                                    }
+                                ],
+                                "iteration_log": iteration_log,
+                                "feedback_scores": feedback_scores,
+                                "todo_planner_raw": todo_plan.get("llm_raw", ""),
+                            }
+                        )
+
+                    emitter.emit_final_dict(result_dict)
+                    return
+
                 all_results, todo_execution_log = todo_executor(
                     todos,
                     text,
@@ -205,6 +295,8 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
                     "final_score": all_scores[-1] if all_scores else 0,
                     "average_score": sum(all_scores) / len(all_scores) if all_scores else 0,
                     "completion_rate": len(completed_todos) / len(todos) if todos else 0,
+                    "workflow_mode": "todo",
+                    "workflow_reason": todo_strategy_reason,
                 }
 
                 if return_intermediate_steps:
@@ -214,6 +306,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
                             "todo_execution_log": todo_execution_log,
                             "iteration_log": all_results,
                             "feedback_scores": all_scores,
+                            "todo_planner_raw": todo_plan.get("llm_raw", ""),
                         }
                     )
 
