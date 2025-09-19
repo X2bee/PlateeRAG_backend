@@ -6,6 +6,7 @@ from editor.utils.helper.service_helper import AppServiceManager
 import re
 from collections import Counter
 import math
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class DBMemoryNode(Node):
         {"id": "interaction_id", "name": "Interaction ID", "type": "STR", "value": ""},
         {"id": "include_thinking", "name": "Include Thinking", "type": "BOOL", "value": False, "required": False, "optional": True},
         {"id": "top_n_messages", "name": "Top N Messages", "type": "INT", "value": 10, "required": False, "optional": True},
+        {"id": "min_tokens_for_similarity", "name": "Min Tokens For Similarity", "type": "INT", "value": 0, "required": False, "optional": True},
         {"id": "enable_similarity_filter", "name": "Enable Similarity Filter", "type": "BOOL", "value": False, "required": False, "optional": True},
     ]
 
@@ -182,6 +184,51 @@ class DBMemoryNode(Node):
         messages_with_relevance.sort(key=lambda x: x['relevance_score'], reverse=True)
         
         return messages_with_relevance
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _get_token_encoder():
+        """tiktoken 인코더를 캐싱해서 재사용"""
+        try:
+            import tiktoken
+        except ImportError:
+            logger.warning("tiktoken library not available; falling back to regex token estimate")
+            return None
+
+        try:
+            return tiktoken.get_encoding("o200k_base")
+        except Exception:
+            logger.warning("Unable to load tiktoken encoder; falling back to regex token estimate")
+            return None
+
+    def _estimate_token_count(self, text: str) -> int:
+        """토큰 수를 tiktoken 기반으로 계산하고 실패 시 간단 추정 사용"""
+        if not text:
+            return 0
+
+        encoder = self._get_token_encoder()
+        if encoder:
+            try:
+                return len(encoder.encode(text))
+            except Exception as exc:
+                logger.warning(f"tiktoken encoding failed, falling back to regex estimate: {exc}")
+
+        tokens = re.findall(r"[가-힣A-Za-z0-9']+|[^\w\s]", text)
+        return len(tokens)
+
+    def _count_tokens_in_pairs(self, pairs: List[Dict[str, str]], limit: Optional[int] = None) -> int:
+        """대화 쌍 리스트에서 토큰 수 추정"""
+        if not pairs:
+            return 0
+
+        relevant_pairs = pairs[-limit:] if limit and limit > 0 else pairs
+        total_tokens = 0
+
+        for pair in relevant_pairs:
+            total_tokens += self._estimate_token_count(pair.get("user", ""))
+            total_tokens += self._estimate_token_count(pair.get("ai", ""))
+
+        return total_tokens
 
     def _simple_message_summary(self, messages: List[Dict[str, Any]], max_length: int = 500) -> str:
         """LLM을 사용할 수 없을 때 간단한 요약 방식"""
@@ -373,31 +420,152 @@ class DBMemoryNode(Node):
             logger.error(f"Error creating memory object: {e}")
             return None
 
-    def _filter_messages_by_similarity(self, messages: List[Dict[str, str]], current_input: str, top_n: int) -> List[Dict[str, str]]:
-        """현재 입력과 유사도가 높은 상위 n개 메시지만 필터링"""
+    def _filter_messages_by_similarity(
+        self,
+        messages: List[Dict[str, str]],
+        current_input: str,
+        top_n: int,
+        min_tokens_for_similarity: int = 0,
+    ) -> List[Dict[str, str]]:
+        """현재 입력과 가장 유사한 상위 n개의 사용자-응답 쌍을 기반으로 메시지 필터링"""
         if not current_input or not messages or top_n <= 0:
             return messages
-        
-        messages_with_relevance = self._calculate_message_relevance(current_input, messages)
-        
-        # 관련도가 0보다 큰 메시지들만 선택
-        meaningful_messages = [msg for msg in messages_with_relevance if msg['relevance_score'] > 0]
-        
-        # 상위 n개 메시지 선택
-        top_messages = meaningful_messages[:top_n]
-        
-        # 원본 형태로 변환 (relevance_score 제거)
-        filtered_messages = []
-        for msg in top_messages:
-            filtered_messages.append({
-                'role': msg['role'],
-                'content': msg['content']
-            })
-        
-        logger.info(f"Filtered {len(messages)} messages to top {len(filtered_messages)} most relevant messages")
-        return filtered_messages
 
-    def execute(self, interaction_id: str, include_thinking: bool = False, top_n_messages: int = 10, enable_similarity_filter: bool = False, current_input: str = ""):
+        query_words = self._preprocess_text(current_input)
+        if not query_words:
+            return messages
+
+        conversation_pairs = self._group_messages_into_pairs(messages)
+        if not conversation_pairs:
+            return messages
+
+        if min_tokens_for_similarity and min_tokens_for_similarity > 0:
+            token_count = self._count_tokens_in_pairs(conversation_pairs, limit=top_n)
+            if token_count < min_tokens_for_similarity:
+                logger.info(
+                    "Skipping similarity filtering because token count %s is below threshold %s",
+                    token_count,
+                    min_tokens_for_similarity,
+                )
+                return messages
+
+        processed_pairs = []
+        all_documents = []
+
+        for index, pair in enumerate(conversation_pairs):
+            combined_text = " ".join(filter(None, [pair.get("user", ""), pair.get("ai", "")])).strip()
+            if not combined_text:
+                continue
+
+            doc_words = self._preprocess_text(combined_text)
+            if not doc_words:
+                continue
+
+            processed_pairs.append({
+                "index": index,
+                "pair": pair,
+                "doc_words": doc_words
+            })
+            all_documents.append(doc_words)
+
+        if not processed_pairs:
+            return messages
+
+        for entry in processed_pairs:
+            relevance_score = self._calculate_tf_idf(query_words, entry["doc_words"], all_documents)
+            entry["relevance_score"] = relevance_score
+
+        meaningful_pairs = [entry for entry in processed_pairs if entry["relevance_score"] > 0]
+        meaningful_pairs.sort(key=lambda x: x["relevance_score"], reverse=True)
+
+        top_pairs = meaningful_pairs[:top_n]
+        if not top_pairs:
+            return []
+
+        # 시간 순서를 유지하기 위해 원래 인덱스 순으로 재정렬
+        top_pairs.sort(key=lambda x: x["index"])
+
+        filtered_messages = []
+        for entry in top_pairs:
+            user_content = entry["pair"].get("user", "").strip()
+            ai_content = entry["pair"].get("ai", "").strip()
+
+            if user_content:
+                filtered_messages.append({"role": "user", "content": user_content})
+            if ai_content:
+                filtered_messages.append({"role": "ai", "content": ai_content})
+
+        logger.info(
+            "Filtered %s conversation pairs to top %s most relevant pairs",
+            len(conversation_pairs),
+            len(top_pairs)
+        )
+
+        return filtered_messages
+    
+    def _group_messages_into_pairs(self, chat_history):
+        """연속된 메시지들을 user-ai 대화 쌍으로 묶어서 반환"""
+        if not chat_history:
+            return []
+
+        pairs = []
+        current_pair = {"user": [], "ai": []}
+
+        def finalize_pair():
+            user_text = " ".join(current_pair["user"]).strip()
+            ai_text = " ".join(current_pair["ai"]).strip()
+            if user_text or ai_text:
+                pairs.append({"user": user_text, "ai": ai_text})
+            current_pair["user"].clear()
+            current_pair["ai"].clear()
+
+        for msg in chat_history:
+            role = None
+            content = ""
+
+            if isinstance(msg, dict):
+                role = msg.get("role")
+                content = (msg.get("content") or "").strip()
+            else:
+                msg_type = getattr(msg, "type", None)
+                raw_content = getattr(msg, "content", "")
+                content = raw_content.strip() if isinstance(raw_content, str) else ""
+                if msg_type == "human":
+                    role = "user"
+                elif msg_type == "ai":
+                    role = "ai"
+                else:
+                    role = msg_type
+
+            if not role or not content:
+                continue
+
+            if role == "user":
+                if current_pair["user"] and current_pair["ai"]:
+                    finalize_pair()
+                elif current_pair["ai"] and not current_pair["user"]:
+                    finalize_pair()
+                current_pair["user"].append(content)
+            elif role == "ai":
+                if current_pair["user"] and current_pair["ai"]:
+                    finalize_pair()
+                current_pair["ai"].append(content)
+            else:
+                continue
+
+        finalize_pair()
+        return pairs
+
+
+    def execute(
+        self,
+        interaction_id: str,
+        include_thinking: bool = False,
+        top_n_messages: int = 10,
+        min_tokens_for_similarity: int = 0,
+        enable_similarity_filter: bool = False,
+        current_input: str = "",
+    ):
         """
         DB에서 대화 기록을 로드하여 ConversationBufferMemory 객체를 반환합니다.
 
@@ -405,6 +573,7 @@ class DBMemoryNode(Node):
             interaction_id: 상호작용 ID
             include_thinking: thinking 태그 포함 여부
             top_n_messages: 유사도 필터링 시 선택할 메시지 수
+            min_tokens_for_similarity: 유사도 필터링을 적용하기 위한 최소 토큰 수
             enable_similarity_filter: 유사도 기반 필터링 활성화 여부
             current_input: 현재 사용자 입력 (유사도 계산 기준)
 
@@ -422,8 +591,20 @@ class DBMemoryNode(Node):
 
             # 유사도 필터링 적용 (활성화된 경우)
             if enable_similarity_filter and current_input:
-                db_messages = self._filter_messages_by_similarity(db_messages, current_input, top_n_messages)
-                logger.info(f"Applied similarity filtering with top {top_n_messages} messages")
+                original_messages = db_messages
+                filtered_messages = self._filter_messages_by_similarity(
+                    db_messages,
+                    current_input,
+                    top_n_messages,
+                    min_tokens_for_similarity,
+                )
+                if filtered_messages is original_messages:
+                    logger.info(
+                        "Similarity filtering skipped due to token threshold or insufficient relevance"
+                    )
+                else:
+                    logger.info(f"Applied similarity filtering with top {top_n_messages} messages")
+                db_messages = filtered_messages
 
             memory = self.load_memory_from_db(db_messages)
 
