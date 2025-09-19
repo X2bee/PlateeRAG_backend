@@ -262,9 +262,6 @@ async def delete_collection(request: Request, collection_request: CollectionDele
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
     existing_collection = app_db.find_by_condition(VectorDB, {'user_id': user_id, 'collection_name': collection_request.collection_name})
-
-    app_db.delete_by_condition(VectorDBChunkMeta, {'collection_name': collection_request.collection_name, 'user_id': user_id})
-    app_db.delete_by_condition(VectorDBChunkEdge, {'collection_name': collection_request.collection_name, 'user_id': user_id})
     if existing_collection:
         try:
             vector_manager = get_vector_manager(request)
@@ -275,10 +272,14 @@ async def delete_collection(request: Request, collection_request: CollectionDele
                 rag_service = get_rag_service(request)
                 vector_manager = rag_service.vector_manager
 
-                app_db.delete_by_condition(VectorDB, {
+                vector_del_result = app_db.delete_by_condition(VectorDB, {
                     "collection_name": collection_request.collection_name,
                     'user_id': user_id
                 })
+                if vector_del_result:
+                    app_db.delete_by_condition(VectorDBChunkMeta, {'collection_name': collection_request.collection_name})
+                    app_db.delete_by_condition(VectorDBChunkEdge, {'collection_name': collection_request.collection_name})
+                    app_db.delete_by_condition(VectorDBFolders, {'collection_name': collection_request.collection_name})
 
             return {"message": "Collection deleted"}
         except Exception as e:

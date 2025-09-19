@@ -47,7 +47,6 @@ class AgentOpenAINode(Node):
         },
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
-        {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "required": False, "optional": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Tool 사용시 해당 과정을 출력할지 여부를 결정합니다."},
@@ -64,7 +63,6 @@ class AgentOpenAINode(Node):
         model: str = "gpt-5",
         temperature: float = 0.7,
         max_tokens: int = 8192,
-        n_messages: int = 3,
         base_url: str = "https://api.openai.com/v1",
         strict_citation: bool = True,
         return_intermediate_steps: bool = False,
@@ -72,7 +70,7 @@ class AgentOpenAINode(Node):
     ) -> str:
         try:
             default_prompt  = prefix_prompt+default_prompt
-            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages, streaming=False)
+            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=False)
 
             additional_rag_context = None
             if rag_context:
@@ -83,7 +81,7 @@ class AgentOpenAINode(Node):
                 default_prompt = create_json_output_prompt(args_schema, default_prompt)
 
             if tools_list and len(tools_list) > 0:
-                final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt, n_messages)
+                final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt)
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(
                     agent=agent,
@@ -101,7 +99,7 @@ class AgentOpenAINode(Node):
                 return handler.get_formatted_output(output)
 
             else:
-                final_prompt = create_context_prompt(additional_rag_context, default_prompt, n_messages, strict_citation)
+                final_prompt = create_context_prompt(additional_rag_context, default_prompt, strict_citation)
                 if args_schema:
                     parser = JsonOutputParser()
                 else:

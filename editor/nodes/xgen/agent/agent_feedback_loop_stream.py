@@ -50,7 +50,6 @@ class AgentFeedbackLoopStreamNode(Node):
         {"id": "model", "name": "Model", "type": "STR", "value": "gpt-4.1-mini", "required": True},
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
-        {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "required": False, "optional": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "중간 단계를 반환할지 여부입니다."},
@@ -85,7 +84,6 @@ class AgentFeedbackLoopStreamNode(Node):
         model: str = "gpt-4",
         temperature: float = 0.7,
         max_tokens: int = 8192,
-        n_messages: int = 3,
         base_url: str = "https://api.openai.com/v1",
         strict_citation: bool = True,
         return_intermediate_steps: bool = True,
@@ -122,7 +120,6 @@ class AgentFeedbackLoopStreamNode(Node):
                     temperature,
                     max_tokens,
                     base_url,
-                    n_messages,
                     streaming=True,
                 )
 
@@ -136,12 +133,10 @@ class AgentFeedbackLoopStreamNode(Node):
                 prompt_template_with_tool = create_tool_context_prompt(
                     additional_rag_context,
                     enhanced_prompt,
-                    n_messages,
                 )
                 prompt_template_without_tool = create_context_prompt(
                     additional_rag_context,
                     enhanced_prompt,
-                    n_messages,
                     strict_citation,
                 )
 
