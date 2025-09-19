@@ -643,9 +643,12 @@ async def delete_document_from_collection(request: Request, collection_name: str
         user_id = extract_user_id_from_request(request)
         app_db = get_db_manager(request)
         rag_service = get_rag_service(request)
-        app_db.delete_by_condition(VectorDBChunkMeta, {'document_id': document_id, 'collection_name': collection_name, 'user_id': user_id})
-        app_db.delete_by_condition(VectorDBChunkEdge, {'document_id': document_id, 'collection_name': collection_name, 'user_id': user_id})
-        return rag_service.delete_document_from_collection(collection_name, document_id)
+        meta_result = app_db.delete_by_condition(VectorDBChunkMeta, {'document_id': document_id, 'collection_name': collection_name, 'user_id': user_id})
+        edge_result = app_db.delete_by_condition(VectorDBChunkEdge, {'document_id': document_id, 'collection_name': collection_name, 'user_id': user_id})
+        if meta_result and edge_result:
+            return rag_service.delete_document_from_collection(collection_name, document_id)
+        else:
+            raise HTTPException(status_code=404, detail="Document not found or not owned by user")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
