@@ -12,6 +12,7 @@ from controller.manager.router import manager_router
 from controller.workflow.router import workflow_router
 from controller.rag.router import rag_router
 from controller.audio.router import audio_router
+from controller.data_manager.router import data_manager_router
 
 from controller.trainController import router as trainRouter
 from controller.llmController import router as llmRouter
@@ -21,7 +22,6 @@ from controller.huggingface.huggingfaceController import router as huggingfaceRo
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
-from controller.dataManagerController import router as dataManagerRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
@@ -332,6 +332,7 @@ app.include_router(manager_router)
 app.include_router(workflow_router)
 app.include_router(rag_router)
 app.include_router(audio_router)
+app.include_router(data_manager_router)
 
 app.include_router(authRouter)
 app.include_router(llmRouter)
@@ -341,7 +342,6 @@ app.include_router(interactionRouter)
 app.include_router(appRouter)
 app.include_router(vastRouter)
 app.include_router(huggingfaceRouter)
-app.include_router(dataManagerRouter)
 
 if __name__ == "__main__":
     try:
