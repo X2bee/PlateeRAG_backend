@@ -146,24 +146,25 @@ async def delete_folder(request: Request, delete_folder_request: DeleteFolderReq
                         metadata={"folder_path": delete_folder_request.folder_path,
                                 "collection_id": delete_folder_request.collection_id})
 
-        # 삭제 전 폴더 정보 조회 (로깅용)
         folders_to_delete = app_db.find_by_condition(VectorDBFolders,
             {'full_path__like__': delete_folder_request.folder_path,
              'collection_id': delete_folder_request.collection_id,
              'user_id': user_id})
 
-        if not folders_to_delete:
+        collection_find = app_db.find_by_condition(VectorDB, {'id': delete_folder_request.collection_id, 'user_id': user_id})
+
+        if not folders_to_delete or not collection_find:
             backend_log.warn("No folders found to delete",
                            metadata={"folder_path": delete_folder_request.folder_path,
                                    "collection_id": delete_folder_request.collection_id})
 
+            raise HTTPException(status_code=404, detail="No folders found to delete or access denied")
+
         folders_count = len(folders_to_delete)
 
-        # 폴더 삭제 실행
         app_db.delete_by_condition(VectorDBFolders,
             {'full_path__like__': delete_folder_request.folder_path,
-             'collection_id': delete_folder_request.collection_id,
-             'user_id': user_id})
+             'collection_id': delete_folder_request.collection_id})
 
         backend_log.success("Folder(s) deleted successfully",
                           metadata={"folder_path": delete_folder_request.folder_path,
