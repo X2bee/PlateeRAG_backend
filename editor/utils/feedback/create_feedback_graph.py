@@ -198,6 +198,19 @@ def create_feedback_graph(
                     "messages": state["messages"] + [{"role": "assistant", "content": f"Error in iteration {state['iteration_count']}: {str(e)}"}]
                 }
 
+        def execute_direct(state: FeedbackState) -> FeedbackState:
+            """단일 실행 경로 (TODO 생략)"""
+            direct_state = execute_task(state)
+            return {**direct_state, "execution_mode": "direct"}
+
+        def execution_router(state: FeedbackState) -> FeedbackState:
+            """실행 모드 분기 준비"""
+            return state
+
+        def route_execution_mode(state: FeedbackState) -> str:
+            """실행 경로 결정"""
+            return "direct" if state.get("execution_mode") == "direct" else "todo"
+
         def evaluate_feedback(state: FeedbackState) -> FeedbackState:
             """결과에 대한 피드백 평가"""
             try:
@@ -447,13 +460,23 @@ def create_feedback_graph(
         workflow = StateGraph(FeedbackState)
         
         # 노드 추가
+        workflow.add_node("execution_router", execution_router)
+        workflow.add_node("execute_direct", execute_direct)
         workflow.add_node("execute_task", execute_task)
         workflow.add_node("evaluate_feedback", evaluate_feedback)
         workflow.add_node("increment_iteration", increment_iteration)
         workflow.add_node("finalize_result", finalize_result)
         
         # 엣지 설정
-        workflow.set_entry_point("execute_task")
+        workflow.set_entry_point("execution_router")
+        workflow.add_conditional_edges(
+            "execution_router",
+            route_execution_mode,
+            {
+                "direct": "execute_direct",
+                "todo": "execute_task"
+            }
+        )
         workflow.add_edge("execute_task", "evaluate_feedback")
         workflow.add_conditional_edges(
             "evaluate_feedback",
@@ -463,6 +486,7 @@ def create_feedback_graph(
                 "finalize": "finalize_result"
             }
         )
+        workflow.add_edge("execute_direct", "evaluate_feedback")
         workflow.add_edge("increment_iteration", "execute_task")
         workflow.add_edge("finalize_result", END)
         

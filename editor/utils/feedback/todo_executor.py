@@ -39,7 +39,8 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             current_todo_id=todo.get('id', i + 1),
             current_todo_title=todo.get('title', 'Untitled'),
             current_todo_index=i + 1,
-            total_todos=len(todos)
+            total_todos=len(todos),
+            execution_mode="todo",
         )
 
         # TODO 실행

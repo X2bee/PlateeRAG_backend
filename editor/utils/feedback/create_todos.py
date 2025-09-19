@@ -1,26 +1,35 @@
+import json
 import logging
+import re
+from typing import Dict, List, Optional
+
 from langchain.schema import HumanMessage
+
 logger = logging.getLogger(__name__)
 
-# 1단계: 사용자 요청을 TODO로 분해
+
 todo_generation_prompt = """
 사용자 요청을 분석하여 구체적이고 실행 가능한 TODO 리스트를 생성해주세요.
 
 사용자 요청: {text}
 
-다음 조건을 만족하는 TODO 리스트를 JSON 형식으로 생성해주세요:
-1. 각 TODO는 구체적이고 실행 가능해야 합니다
-2. 복잡한 작업은 여러 단계로 나누어주세요
-3. 순서대로 실행되도록 배열해주세요
-4. 마지막은 이전 TODO의 결과를 정리해서 사용자의 요청에 맞는 최종 결과를 생성하는 TODO로 마무리해주세요
-5. 각 TODO가 도구 사용이 필요한지 판단해주세요
+다음 조건을 만족하는 JSON 객체를 생성해주세요:
+1. "mode": "direct" 또는 "todo" 중 하나.
+   - TODO 없이 한 번에 답변 가능하고 도구가 필요 없다면 "direct"를 선택하세요.
+   - 조금이라도 복잡하거나 도구 사용/여러 단계가 필요할 것 같다면 "todo"를 선택하세요.
+2. "reason": 선택한 모드에 대한 간단한 설명.
+3. "tool_usage": "simple" 또는 "complex".
+   - direct 모드에서 도구가 필요하면 반드시 "complex"로 표기하세요.
+4. "todos": TODO 객체 배열. direct 모드라도 0개 또는 1개의 TODO를 반환할 수 있습니다.
+   - 각 TODO는 구체적이고 실행 가능해야 합니다.
+   - 순서대로 나열하세요.
+   - 각 TODO마다 "tool_required" 필드에 "simple" 또는 "complex" 중 하나를 기입하세요.
 
-tool_required 판단 기준:
-- "simple": 간단한 답변, 설명, 정보 제공 (도구 불필요)
-- "complex": 계산, 검색, 파일 작업, API 호출 등 (도구 필요)
-
-응답 형식:
+응답 형식 예시:
 {{
+    "mode": "todo",
+    "reason": "여러 단계의 정보 수집이 필요함",
+    "tool_usage": "complex",
     "todos": [
         {{
             "id": 1,
@@ -28,31 +37,135 @@ tool_required 판단 기준:
             "description": "구체적인 작업 설명",
             "priority": "high|medium|low",
             "tool_required": "simple|complex"
-        }},
-        ...
+        }}
     ]
 }}
 """
 
-def create_todos(llm, text):
-    todo_generation_prompt_filled = todo_generation_prompt.format(text=text)
-    # TODO 생성
-    
-    todo_messages = [HumanMessage(content=todo_generation_prompt_filled)]
-    todo_response = llm.invoke(todo_messages)
 
-    # TODO 파싱
-    import json
-    import re
+KEYWORDS_REQUIRING_TOOLS = [
+    "검색",
+    "크롤",
+    "수집",
+    "데이터",
+    "분석",
+    "파일",
+    "다운로드",
+    "업로드",
+    "변환",
+    "convert",
+    "csv",
+    "excel",
+    "api",
+    "로그",
+    "코드",
+    "테스트",
+]
+
+
+def _safe_json_loads(content: str) -> Optional[Dict]:
+    tries = [content]
     try:
-        # JSON 파싱 시도
-        json_match = re.search(r'\{.*\}', todo_response.content, re.DOTALL)
+        json_match = re.search(r"\{.*\}", content, re.DOTALL)
         if json_match:
-            todos_data = json.loads(json_match.group())
-            return todos_data.get("todos", [])
+            tries.append(json_match.group())
+    except Exception:
+        pass
+
+    for candidate in tries:
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    return None
+
+
+def _ensure_todo_structure(text: str, todos: Optional[List[Dict]]) -> List[Dict]:
+    if not isinstance(todos, list) or not todos:
+        return [
+            {
+                "id": 1,
+                "title": "사용자 요청 처리",
+                "description": text,
+                "priority": "high",
+                "tool_required": "simple",
+            }
+        ]
+
+    normalized = []
+    for idx, todo in enumerate(todos, start=1):
+        normalized.append(
+            {
+                "id": todo.get("id", idx),
+                "title": todo.get("title", f"TODO {idx}"),
+                "description": todo.get("description", text),
+                "priority": todo.get("priority", "medium"),
+                "tool_required": "complex"
+                if str(todo.get("tool_required", "complex")).lower() == "complex"
+                else "simple",
+            }
+        )
+    return normalized
+
+
+def _keyword_hits(text: str) -> bool:
+    lowered = text.lower()
+    return any(keyword.lower() in lowered for keyword in KEYWORDS_REQUIRING_TOOLS)
+
+
+def create_todos(llm, text: str, tools_list: Optional[List] = None) -> Dict:
+    """LLM으로 TODO 리스트와 실행 모드 결정"""
+
+    prompt = todo_generation_prompt.format(text=text)
+    response = llm.invoke([HumanMessage(content=prompt)])
+    content = getattr(response, "content", "") or ""
+
+    parsed = _safe_json_loads(content) or {}
+
+    todos = _ensure_todo_structure(text, parsed.get("todos"))
+    mode = parsed.get("mode", "todo")
+    reason = parsed.get("reason", "")
+    tool_usage = parsed.get("tool_usage", "simple")
+
+    if mode not in ("direct", "todo"):
+        mode = "todo"
+    if tool_usage not in ("simple", "complex"):
+        tool_usage = "simple"
+
+    has_tools = bool(tools_list)
+    keyword_hit = _keyword_hits(text)
+    multi_step = len(todos) > 1
+    any_complex = any(todo.get("tool_required") == "complex" for todo in todos)
+    long_request = len(text) > 200
+
+    if mode == "direct":
+        if multi_step or long_request:
+            mode = "todo"
+            if not reason:
+                reason = "여러 단계 또는 긴 설명이 필요하여 TODO 모드로 전환"
         else:
-            # fallback: 기본 TODO 생성
-            return [{"id": 1, "title": "사용자 요청 처리", "description": text, "priority": "high"}]
-    except Exception as e:
-        logger.warning(f"TODO 파싱 실패, 기본 TODO 사용: {str(e)}")
-        return [{"id": 1, "title": "사용자 요청 처리", "description": text, "priority": "high"}]
+            if tool_usage == "complex":
+                tool_usage = "complex"
+            elif has_tools and (any_complex or keyword_hit):
+                tool_usage = "complex"
+            else:
+                tool_usage = "simple"
+    else:  # mode == "todo"
+        if not multi_step and not any_complex and not long_request and not keyword_hit:
+            mode = "direct"
+            tool_usage = "simple"
+            if not reason:
+                reason = "단일 단계로 충분하고 도구가 필요하지 않음"
+        elif has_tools and any_complex:
+            tool_usage = "complex"
+        else:
+            tool_usage = "simple"
+
+    return {
+        "mode": mode,
+        "reason": reason,
+        "todos": [] if mode == "direct" else todos,
+        "tool_usage": tool_usage,
+        "raw_todos": todos,
+        "llm_raw": content,
+    }
