@@ -175,6 +175,8 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
                 workflow_id=workflow_request.content.workflow_id,
                 workflow_name=workflow_request.workflow_name,
                 is_deployed=False,
+                is_accepted=True,
+                inquire_deploy=False,
                 deploy_key=""
             )
 
@@ -188,8 +190,11 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
                 limit=1
             )
             if existing_deploy_data:
-                existing_deploy_id = existing_deploy_data[0].id
-                deploy_meta.id = existing_deploy_id
+                deploy_meta.id = existing_deploy_data[0].id
+                deploy_meta.is_deployed = existing_deploy_data[0].is_deployed
+                deploy_meta.is_accepted = existing_deploy_data[0].is_accepted
+                deploy_meta.inquire_deploy = existing_deploy_data[0].inquire_deploy
+                deploy_meta.deploy_key = existing_deploy_data[0].deploy_key
                 app_db.update(deploy_meta)
             else:
                 app_db.insert(deploy_meta)
