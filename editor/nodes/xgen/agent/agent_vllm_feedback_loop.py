@@ -45,7 +45,6 @@ class AgentVLLMFeedbackLoopNode(Node):
         {"id": "model", "name": "Model", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_model_name", "required": True},
         {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
-        {"id": "n_messages", "name": "Max Memory", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "", "is_api": True, "api_name": "api_vllm_api_base_url", "required": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "중간 단계를 반환할지 여부입니다."},
@@ -78,7 +77,6 @@ class AgentVLLMFeedbackLoopNode(Node):
         model: str = "x2bee/Polar-14B",
         temperature: float = 0.7,
         max_tokens: int = 8192,
-        n_messages: int = 3,
         base_url: str = "",
         strict_citation: bool = True,
         return_intermediate_steps: bool = True,
@@ -92,7 +90,7 @@ class AgentVLLMFeedbackLoopNode(Node):
             # LLM 컴포넌트 준비
             enhanced_prompt = prefix_prompt + default_prompt
             llm, tools_list, chat_history = prepare_llm_components(
-                text, tools, memory, model, temperature, max_tokens, base_url, n_messages, streaming=False
+                text, tools, memory, model, temperature, max_tokens, base_url, streaming=False
             )
 
             # RAG 컨텍스트 구성
@@ -105,9 +103,9 @@ class AgentVLLMFeedbackLoopNode(Node):
                 enhanced_prompt = create_json_output_prompt(args_schema, enhanced_prompt)
 
             # 프롬프트 템플릿 생성
-            prompt_template_with_tool = create_tool_context_prompt(additional_rag_context, enhanced_prompt, n_messages)
-            prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, n_messages, strict_citation)
-            
+            prompt_template_with_tool = create_tool_context_prompt(additional_rag_context, enhanced_prompt)
+            prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, strict_citation)
+
 
             # 사용자 요청을 TODO로 분해
             todos = create_todos(llm, text)

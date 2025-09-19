@@ -103,7 +103,7 @@ def _flatten_tools_list(tools_list):
     logger.info(f"Tools flattened: {len(tools_list)} items -> {len(flattened)} items")
     return flattened
 
-def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages, streaming=True):
+def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages=None, streaming=True):
     from langchain_openai import ChatOpenAI
     from editor.utils.helper.service_helper import AppServiceManager
 
@@ -143,17 +143,14 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
     chat_history = []
     if memory:
         try:
-            summary_window = max(3, (n_messages or 1) * 2)
             chat_history = prepare_chat_history(
                 memory,
                 current_input=text,
-                llm=llm,
-                summary_message_limit=summary_window,
+                llm=llm
             )
             logger.info(
-                "Using multiturn memory with %s messages (summary window: %s)",
+                "Using multiturn memory with %s messages",
                 len(chat_history),
-                summary_window,
             )
         except Exception as e:
             logger.warning(f"Failed to use optimized memory, using standard: {e}")
@@ -165,7 +162,6 @@ def prepare_chat_history(
     memory,
     current_input: Optional[str] = None,
     llm: Optional[Any] = None,
-    summary_message_limit: int = 6,
 ):
     """최적화된 chat_history 생성 - 기존 inputs 구조와 호환"""
     if not memory:
@@ -303,7 +299,7 @@ def create_json_output_prompt(args_schema, original_prompt):
     escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
     return f"{original_prompt}\n\n{escaped_instructions}"
 
-def create_tool_context_prompt(additional_rag_context, default_prompt, n_messages, memory=None, current_input=None, llm=None, use_optimization=True):
+def create_tool_context_prompt(additional_rag_context, default_prompt, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True):
     """
     Tool context prompt 생성 - 메모리가 있을 때만 최적화 기능 사용
 
@@ -333,7 +329,7 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
         ])
     return final_prompt
 
-def create_context_prompt(additional_rag_context, default_prompt, n_messages, strict_citation, memory=None, current_input=None, llm=None, use_optimization=True):
+def create_context_prompt(additional_rag_context, default_prompt, strict_citation, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True):
     """
     Context prompt 생성 - 메모리가 있을 때만 최적화 기능 사용
 
