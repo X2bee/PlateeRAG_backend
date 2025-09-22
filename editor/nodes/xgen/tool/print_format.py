@@ -67,10 +67,23 @@ class PrintAnyNode(Node):
             else:  # detailed
                 formatted_output = self._format_detailed(result, iteration_log, feedback_scores, show_scores, show_timestamps, max_iteration_display, truncate_results, total_iterations, final_score, average_score, has_error, show_todo_details, input_print)
             
-            if not enable_formatted_output:
-                return str(result)
-            
-            return f"<FEEDBACK_RESULT><FEEDBACK_REPORT>{formatted_output}</FEEDBACK_REPORT></FEEDBACK_RESULT>{self._format_todo_details(input_print)}{str(result)}"
+            if enable_formatted_output:
+                feedback_body = f"<FEEDBACK_REPORT>{formatted_output}</FEEDBACK_REPORT>"
+            else:
+                feedback_body = str(result)
+
+            payload = f"<FEEDBACK_RESULT>{feedback_body}</FEEDBACK_RESULT>"
+
+            if show_todo_details:
+                todo_block = self._format_todo_details(input_print)
+                if todo_block:
+                    payload += todo_block
+
+            plain_result = input_print.get("result")
+            if plain_result:
+                payload += f"\n{plain_result}"
+
+            return payload
             
         except Exception as e:
             logger.error(f"[FEEDBACK_FORMATTER] 포매팅 중 오류 발생: {str(e)}")
@@ -99,14 +112,7 @@ class PrintAnyNode(Node):
 
         feedback_output = f"{error_indicator}피드백 루프 완료: {total_iterations}회 반복{score_info}"
 
-        # TODO 세부 정보 추가
-        todo_output = ""
-        if show_todo_details:
-            todo_output = self._format_todo_details(input_print)
-
-        return f"""{feedback_output}
-{todo_output}
-{str(result)}"""
+        return feedback_output
 
     def _format_markdown(self, result: str, iteration_log: List[Dict], feedback_scores: List[int],
                         show_scores: bool, show_timestamps: bool, max_iterations: int, truncate_len: int,
@@ -267,12 +273,28 @@ class PrintAnyNode(Node):
             for i, log_entry in enumerate(todo_execution_log, 1):
                 todo_title = log_entry.get("todo_title", f"TODO {i}")
                 result = log_entry.get("result", "결과 없음")
+                if isinstance(result, str) and len(result) > 400:
+                    result = result[:400].rstrip() + "..."
                 status = log_entry.get("status", "unknown")
 
                 status_emoji = "✅" if status == "completed" else "❌" if status == "failed" else "⏳"
 
                 output += f"[TODO {i}] {status_emoji} {todo_title}\n"
-                output += f"결과: {str(result)}\n\n"
+                output += f"결과: {str(result)}\n"
+
+                best_iteration = log_entry.get("best_iteration")
+                best_score = log_entry.get("best_score")
+                if best_iteration is not None and best_score is not None:
+                    output += f"   - 최고 점수: 반복 {best_iteration}에서 {best_score}/10\n"
+
+                if log_entry.get("iterations"):
+                    output += f"   - 총 반복: {log_entry.get('iterations')}회\n"
+
+                if log_entry.get("feedback_scores"):
+                    score_path = " → ".join(str(s) for s in log_entry.get("feedback_scores", []))
+                    output += f"   - 점수 변화: {score_path}\n"
+
+                output += "\n"
 
         output += "</TODO_DETAILS>"
 
