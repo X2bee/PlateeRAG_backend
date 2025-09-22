@@ -18,7 +18,8 @@ from .data_manager_helper import (
     process_multiple_files,
     combine_tables,
     determine_file_type_from_filename,
-    create_result_info
+    create_result_info,
+    generate_dataset_statistics
 )
 import json
 import logging
@@ -463,3 +464,25 @@ class DataManager:
         except Exception as e:
             logger.error("Failed to export dataset to Parquet: %s", e)
             raise RuntimeError(f"Parquet export failed: {str(e)}")
+
+    def get_dataset_statistics(self) -> Dict[str, Any]:
+        """
+        현재 로드된 데이터셋의 기술통계정보 반환
+
+        Returns:
+            Dict[str, Any]: 기술통계정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            statistics = generate_dataset_statistics(self.dataset)
+            logger.info("Dataset statistics generated for manager %s", self.manager_id)
+            return statistics
+
+        except Exception as e:
+            logger.error("Failed to generate dataset statistics: %s", e)
+            raise RuntimeError(f"Statistics generation failed: {str(e)}")

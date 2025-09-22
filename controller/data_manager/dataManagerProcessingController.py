@@ -211,3 +211,39 @@ async def export_dataset_as_parquet(request: Request, export_request: ExportData
     except Exception as e:
         logger.error("예상치 못한 오류: %s", e)
         raise HTTPException(status_code=500, detail="Parquet 내보내기 중 오류가 발생했습니다")
+
+
+@router.post("/statistics",
+    summary="데이터셋 기술통계정보 조회",
+    description="현재 적재된 데이터셋의 기술통계정보를 반환합니다.",
+    response_model=Dict[str, Any])
+async def get_dataset_statistics(request: Request, export_request: ExportDatasetRequest) -> Dict[str, Any]:
+    """데이터셋 기술통계정보 조회"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, export_request.manager_id, user_id)
+
+        # 기술통계정보 생성
+        statistics = manager.get_dataset_statistics()
+
+        logger.info("통계정보 조회: 매니저 %s", export_request.manager_id)
+
+        return {
+            "success": True,
+            "manager_id": export_request.manager_id,
+            "message": "데이터셋 기술통계정보가 성공적으로 생성되었습니다",
+            "statistics": statistics
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("통계정보 생성 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="통계정보 생성 중 오류가 발생했습니다")

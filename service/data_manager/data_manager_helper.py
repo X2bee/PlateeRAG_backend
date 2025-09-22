@@ -11,6 +11,7 @@ from huggingface_hub import hf_hub_download
 import pyarrow.parquet as pq
 import pyarrow as pa
 import pyarrow.csv as csv
+import pyarrow.compute as pc
 
 logger = logging.getLogger(__name__)
 
@@ -154,3 +155,121 @@ def create_result_info(repo_id: str, file_type: str, combined_table: pa.Table, *
         "loaded_at": datetime.now().isoformat(),
         **kwargs
     }
+
+
+def generate_dataset_statistics(table: pa.Table) -> Dict[str, Any]:
+    """
+    pyarrow Table의 기술통계정보 생성
+
+    Args:
+        table (pa.Table): 분석할 테이블
+
+    Returns:
+        Dict[str, Any]: 기술통계정보
+    """
+    if table is None or table.num_rows == 0:
+        return {
+            "success": False,
+            "message": "빈 데이터셋",
+            "statistics": {}
+        }
+
+    try:
+        stats = {
+            "dataset_info": {
+                "total_rows": table.num_rows,
+                "total_columns": table.num_columns,
+                "column_names": table.column_names
+            },
+            "column_statistics": {}
+        }
+
+        # 각 컬럼별 통계
+        for col_name in table.column_names:
+            column = table.column(col_name)
+
+            # null count 계산
+            null_count = pc.sum(pc.is_null(column)).as_py()
+            non_null_count = table.num_rows - null_count
+
+            col_stats = {
+                "data_type": str(column.type),
+                "null_count": null_count,
+                "non_null_count": non_null_count,
+                "unique_count": None
+            }
+
+            # null 비율
+            col_stats["null_percentage"] = (null_count / table.num_rows * 100) if table.num_rows > 0 else 0
+
+            # unique count 계산 (메모리 효율성을 위해 try-except 사용)
+            try:
+                unique_values = pc.unique(column)
+                unique_count = len(unique_values)
+                col_stats["unique_count"] = unique_count
+
+                # unique value가 30개 이하면 개별 값 카운트 제공
+                if unique_count <= 30:
+                    try:
+                        # value_counts 계산
+                        unique_dict = {}
+                        for unique_val in unique_values:
+                            if unique_val.is_valid:
+                                val = unique_val.as_py()
+                                count = pc.sum(pc.equal(column, val)).as_py()
+                                unique_dict[str(val)] = count
+                        col_stats["unique_dict"] = unique_dict
+                    except Exception:
+                        col_stats["unique_dict"] = "계산불가"
+
+            except Exception:
+                col_stats["unique_count"] = "계산불가"
+
+            # 숫자형 데이터 타입 체크 및 추가 통계
+            data_type = str(column.type)
+            if any(num_type in data_type.lower() for num_type in ['int', 'float', 'double', 'decimal']):
+                try:
+                    col_stats["min"] = pc.min(column).as_py()
+                    col_stats["max"] = pc.max(column).as_py()
+                    col_stats["mean"] = pc.mean(column).as_py()
+
+                    # Q1, Q3 분위수 계산
+                    try:
+                        q1_result = pc.quantile(column, q=0.25)
+                        q3_result = pc.quantile(column, q=0.75)
+
+                        # 결과가 스칼라면 as_py(), 배열이면 첫 번째 요소 사용
+                        if hasattr(q1_result, 'as_py'):
+                            col_stats["q1"] = q1_result.as_py()
+                        else:
+                            col_stats["q1"] = q1_result[0].as_py() if len(q1_result) > 0 else "계산불가"
+
+                        if hasattr(q3_result, 'as_py'):
+                            col_stats["q3"] = q3_result.as_py()
+                        else:
+                            col_stats["q3"] = q3_result[0].as_py() if len(q3_result) > 0 else "계산불가"
+
+                    except Exception as e:
+                        logger.warning("분위수 계산 실패 (%s): %s", col_name, e)
+                        col_stats["q1"] = "계산불가"
+                        col_stats["q3"] = "계산불가"
+
+                except Exception as e:
+                    logger.warning("숫자형 통계 계산 실패 (%s): %s", col_name, e)
+                    pass
+
+            stats["column_statistics"][col_name] = col_stats
+
+        return {
+            "success": True,
+            "statistics": stats,
+            "generated_at": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error("통계 생성 실패: %s", e)
+        return {
+            "success": False,
+            "message": f"통계 생성 중 오류: {str(e)}",
+            "statistics": {}
+        }
