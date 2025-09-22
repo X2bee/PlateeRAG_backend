@@ -69,4 +69,10 @@ class AppConfig(BaseConfig):
             file_path="hf_hub_token.txt",
         )
 
+        self.MODEL_STORAGE_DIRECTORY = self.create_persistent_config(
+            env_name="MODEL_STORAGE_DIRECTORY",
+            config_path="app.model_storage_directory",
+            default_value="models"
+        )
+
         return self.configs

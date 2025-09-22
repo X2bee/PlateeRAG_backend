@@ -74,14 +74,15 @@ class AppDatabaseManager:
             db_type = self.config_db_manager.db_type
             query, values = model.get_insert_query(db_type)
 
+            insert_id = None
             if db_type == "postgresql":
                 query += " RETURNING id"
-                result = self.config_db_manager.execute_query_one(query, tuple(values))
-                return {"result": "success"}
+                insert_id = self.config_db_manager.execute_insert(query, tuple(values))
             else:
                 # SQLite의 경우 execute_insert 사용
-                self.config_db_manager.execute_insert(query, tuple(values))
-                return {"result": "success"}
+                insert_id = self.config_db_manager.execute_insert(query, tuple(values))
+
+            return {"result": "success", "id": insert_id}
 
         except AttributeError as e:
             self.logger.error("Failed to insert %s: %s", model.__class__.__name__, e)
