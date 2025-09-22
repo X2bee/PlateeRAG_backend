@@ -3,7 +3,7 @@ import os
 import threading
 import time
 import sys
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 import gc
 from huggingface_hub import hf_hub_download, list_repo_files
@@ -11,6 +11,15 @@ import pyarrow.parquet as pq
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.csv as csv
+from .data_manager_helper import (
+    save_and_load_files,
+    classify_dataset_files,
+    download_and_read_file,
+    process_multiple_files,
+    combine_tables,
+    determine_file_type_from_filename,
+    create_result_info
+)
 import json
 import logging
 
@@ -278,14 +287,8 @@ class DataManager:
         if hasattr(self, 'is_active') and self.is_active:
             self.cleanup()
 
-
-    def download_and_load_dataset(self, repo_id: str, filename: str = None, split: str = None) -> Dict[str, Any]:
+    def hf_download_and_load_dataset(self, repo_id: str, filename: str = None, split: str = None) -> Dict[str, Any]:
         """
-        Huggingface repo에서 데이터셋을 다운로드하고 pyarrow로 적재
-        - 여러 parquet 파일을 자동으로 합치기
-        - CSV 파일 지원
-        - 파일 형태 자동 감지
-
         Args:
             repo_id (str): Huggingface 리포지토리 ID
             filename (str, optional): 특정 파일명. None이면 자동 탐색
@@ -302,134 +305,161 @@ class DataManager:
             cache_dir = "/huggingface_cache"
             os.makedirs(cache_dir, exist_ok=True)
 
-            logger.info(f"Starting dataset download from {repo_id} for manager {self.manager_id}")
+            logger.info("Starting dataset download from %s for manager %s", repo_id, self.manager_id)
 
             if filename is None:
+                # 다중 파일 처리
                 repo_files = list_repo_files(repo_id, repo_type='dataset')
+                target_files, file_type = classify_dataset_files(repo_files, split)
 
-                # parquet과 csv 파일 분류
-                parquet_files = [f for f in repo_files if f.endswith('.parquet')]
-                csv_files = [f for f in repo_files if f.endswith('.csv')]
+                tables, downloaded_paths = process_multiple_files(repo_id, target_files, file_type, cache_dir)
+                combined_table = combine_tables(tables, target_files)
 
-                # 사용할 파일들 결정
-                target_files = []
-                file_type = None
-
-                if parquet_files:
-                    # split이 지정된 경우 해당 split 파일들 찾기
-                    if split:
-                        split_parquet_files = [f for f in parquet_files if split in f.lower()]
-                        target_files = split_parquet_files if split_parquet_files else parquet_files
-                    else:
-                        target_files = parquet_files
-                    file_type = 'parquet'
-                    logger.info(f"Found {len(target_files)} parquet files")
-
-                elif csv_files:
-                    # split이 지정된 경우 해당 split 파일들 찾기
-                    if split:
-                        split_csv_files = [f for f in csv_files if split in f.lower()]
-                        target_files = split_csv_files if split_csv_files else csv_files
-                    else:
-                        target_files = csv_files
-                    file_type = 'csv'
-                    logger.info(f"Found {len(target_files)} CSV files")
-
-                else:
-                    raise RuntimeError(f"No supported data files (parquet/csv) found in repository {repo_id}")
-
-                # 여러 파일을 다운로드하고 합치기
-                tables = []
-                downloaded_paths = []
-
-                for target_file in target_files:
-                    downloaded_path = hf_hub_download(
-                        repo_id=repo_id,
-                        filename=target_file,
-                        repo_type='dataset',
-                        cache_dir=cache_dir,
-                    )
-                    downloaded_paths.append(downloaded_path)
-                    logger.info(f"File downloaded: {downloaded_path}")
-
-                    # 파일 형태에 따라 읽기
-                    if file_type == 'parquet':
-                        table = pq.read_table(downloaded_path)
-                    else:  # csv
-                        # pyarrow로 CSV 파일 읽기
-                        table = csv.read_csv(downloaded_path)
-
-                    tables.append(table)
-                    logger.info(f"Loaded {target_file}: {table.num_rows} rows, {table.num_columns} columns")
-
-                # 여러 테이블을 하나로 합치기
-                if len(tables) == 1:
-                    combined_table = tables[0]
-                else:
-                    # 모든 테이블의 스키마가 동일한지 확인
-                    first_schema = tables[0].schema
-                    for i, table in enumerate(tables[1:], 1):
-                        if not table.schema.equals(first_schema):
-                            logger.warning(f"Schema mismatch in file {target_files[i]}. Attempting to unify schemas.")
-
-                    # 테이블들을 세로로 합치기 (concat)
-                    combined_table = pa.concat_tables(tables)
-
-                logger.info(f"Combined {len(tables)} tables into one: {combined_table.num_rows} total rows")
-
-                result_info = {
-                    "success": True,
-                    "repo_id": repo_id,
-                    "file_type": file_type,
-                    "files_processed": target_files,
-                    "num_files": len(target_files),
-                    "local_paths": downloaded_paths,
-                    "table_shape": combined_table.shape,
-                    "columns": combined_table.column_names,
-                    "num_rows": combined_table.num_rows,
-                    "num_columns": combined_table.num_columns,
-                    "loaded_at": datetime.now().isoformat()
-                }
+                result_info = create_result_info(
+                    repo_id=repo_id,
+                    file_type=file_type,
+                    combined_table=combined_table,
+                    files_processed=target_files,
+                    local_paths=downloaded_paths
+                )
 
             else:
-                # 특정 파일명이 지정된 경우
-                downloaded_path = hf_hub_download(
+                # 단일 파일 처리
+                file_type = determine_file_type_from_filename(filename)
+                combined_table, downloaded_path = download_and_read_file(repo_id, filename, file_type, cache_dir)
+
+                result_info = create_result_info(
                     repo_id=repo_id,
+                    file_type=file_type,
+                    combined_table=combined_table,
                     filename=filename,
-                    repo_type='dataset',
-                    cache_dir=cache_dir,
+                    local_path=downloaded_path
                 )
-                logger.info(f"File downloaded: {downloaded_path}")
-
-                # 파일 확장자로 형태 판단
-                if filename.endswith('.parquet'):
-                    combined_table = pq.read_table(downloaded_path)
-                    file_type = 'parquet'
-                elif filename.endswith('.csv'):
-                    combined_table = csv.read_csv(downloaded_path)
-                    file_type = 'csv'
-                else:
-                    raise RuntimeError(f"Unsupported file format: {filename}")
-
-                result_info = {
-                    "success": True,
-                    "repo_id": repo_id,
-                    "file_type": file_type,
-                    "filename": filename,
-                    "local_path": downloaded_path,
-                    "table_shape": combined_table.shape,
-                    "columns": combined_table.column_names,
-                    "num_rows": combined_table.num_rows,
-                    "num_columns": combined_table.num_columns,
-                    "loaded_at": datetime.now().isoformat()
-                }
 
             # self.dataset에 저장
             self.dataset = combined_table
-            logger.info(f"Dataset loaded successfully. Final shape: {combined_table.shape}, Columns: {combined_table.column_names}")
+            logger.info("Dataset loaded successfully. Final shape: %s, Columns: %s", combined_table.shape, combined_table.column_names)
 
             return result_info
 
         except Exception as e:
-            logger.error(f"Failed to download and load dataset from {repo_id}: {e}")
+            logger.error("Failed to download and load dataset from %s: %s", repo_id, e)
             raise RuntimeError(f"Dataset download/load failed: {str(e)}")
+
+    def local_upload_and_load_dataset(self, uploaded_files, filenames: List[str]) -> Dict[str, Any]:
+        """
+        로컬 파일들을 업로드하고 자동 적재
+
+        Args:
+            uploaded_files: 업로드된 파일 객체들 (단일 또는 여러개)
+            filenames: 파일명들
+
+        Returns:
+            Dict[str, Any]: 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        try:
+            # 단일 파일인 경우 리스트로 변환
+            if not isinstance(uploaded_files, list):
+                uploaded_files = [uploaded_files]
+            if not isinstance(filenames, list):
+                filenames = [filenames]
+
+            logger.info("로컬 파일 업로드 시작: %d개 파일", len(uploaded_files))
+
+            # 파일들 저장하고 로드
+            combined_table, dataset_id = save_and_load_files(uploaded_files, filenames, self.manager_id)
+
+            # 결과 정보
+            result_info = {
+                "success": True,
+                "dataset_id": dataset_id,
+                "num_files": len(filenames),
+                "filenames": filenames,
+                "num_rows": combined_table.num_rows,
+                "num_columns": combined_table.num_columns,
+                "columns": combined_table.column_names,
+                "loaded_at": datetime.now().isoformat()
+            }
+
+            # 데이터셋 저장
+            self.dataset = combined_table
+            logger.info("로컬 데이터셋 로드 완료: %s", combined_table.shape)
+
+            return result_info
+
+        except Exception as e:
+            logger.error("로컬 데이터셋 업로드 실패: %s", e)
+            raise RuntimeError(f"로컬 데이터셋 업로드 실패: {str(e)}")
+
+    def download_dataset_as_csv(self, output_path: str = None) -> str:
+        """
+        현재 로드된 데이터셋을 CSV 파일로 저장하고 경로 반환
+
+        Args:
+            output_path (str, optional): 출력 파일 경로. None이면 자동 생성
+
+        Returns:
+            str: 저장된 CSV 파일 경로
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 출력 경로가 지정되지 않으면 자동 생성
+            if output_path is None:
+                download_dir = "/tmp/dataset_downloads"
+                os.makedirs(download_dir, exist_ok=True)
+                output_path = os.path.join(download_dir, f"dataset_{self.manager_id}.csv")
+
+            # pyarrow Table을 CSV로 저장
+            csv.write_csv(self.dataset, output_path)
+
+            logger.info("Dataset exported to CSV: %s (rows: %d, columns: %d)",
+                       output_path, self.dataset.num_rows, self.dataset.num_columns)
+
+            return output_path
+
+        except Exception as e:
+            logger.error("Failed to export dataset to CSV: %s", e)
+            raise RuntimeError(f"CSV export failed: {str(e)}")
+
+    def download_dataset_as_parquet(self, output_path: str = None) -> str:
+        """
+        현재 로드된 데이터셋을 Parquet 파일로 저장하고 경로 반환
+
+        Args:
+            output_path (str, optional): 출력 파일 경로. None이면 자동 생성
+
+        Returns:
+            str: 저장된 Parquet 파일 경로
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 출력 경로가 지정되지 않으면 자동 생성
+            if output_path is None:
+                download_dir = "/tmp/dataset_downloads"
+                os.makedirs(download_dir, exist_ok=True)
+                output_path = os.path.join(download_dir, f"dataset_{self.manager_id}.parquet")
+
+            # pyarrow Table을 Parquet으로 저장
+            pq.write_table(self.dataset, output_path)
+
+            logger.info("Dataset exported to Parquet: %s (rows: %d, columns: %d)",
+                       output_path, self.dataset.num_rows, self.dataset.num_columns)
+
+            return output_path
+
+        except Exception as e:
+            logger.error("Failed to export dataset to Parquet: %s", e)
+            raise RuntimeError(f"Parquet export failed: {str(e)}")
