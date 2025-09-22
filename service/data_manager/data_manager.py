@@ -10,6 +10,7 @@ from huggingface_hub import hf_hub_download, list_repo_files
 import pyarrow.parquet as pq
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.csv as csv
 import json
 import logging
 
@@ -281,6 +282,9 @@ class DataManager:
     def download_and_load_dataset(self, repo_id: str, filename: str = None, split: str = None) -> Dict[str, Any]:
         """
         Huggingface repo에서 데이터셋을 다운로드하고 pyarrow로 적재
+        - 여러 parquet 파일을 자동으로 합치기
+        - CSV 파일 지원
+        - 파일 형태 자동 감지
 
         Args:
             repo_id (str): Huggingface 리포지토리 ID
@@ -300,50 +304,131 @@ class DataManager:
 
             logger.info(f"Starting dataset download from {repo_id} for manager {self.manager_id}")
 
-            # 파일명이 지정되지 않은 경우 repo의 파일 목록에서 parquet 파일 찾기
             if filename is None:
                 repo_files = list_repo_files(repo_id, repo_type='dataset')
+
+                # parquet과 csv 파일 분류
                 parquet_files = [f for f in repo_files if f.endswith('.parquet')]
+                csv_files = [f for f in repo_files if f.endswith('.csv')]
 
-                if not parquet_files:
-                    raise RuntimeError(f"No parquet files found in repository {repo_id}")
+                # 사용할 파일들 결정
+                target_files = []
+                file_type = None
 
-                # split이 지정된 경우 해당 split 파일 찾기
-                if split:
-                    split_files = [f for f in parquet_files if split in f.lower()]
-                    filename = split_files[0] if split_files else parquet_files[0]
+                if parquet_files:
+                    # split이 지정된 경우 해당 split 파일들 찾기
+                    if split:
+                        split_parquet_files = [f for f in parquet_files if split in f.lower()]
+                        target_files = split_parquet_files if split_parquet_files else parquet_files
+                    else:
+                        target_files = parquet_files
+                    file_type = 'parquet'
+                    logger.info(f"Found {len(target_files)} parquet files")
+
+                elif csv_files:
+                    # split이 지정된 경우 해당 split 파일들 찾기
+                    if split:
+                        split_csv_files = [f for f in csv_files if split in f.lower()]
+                        target_files = split_csv_files if split_csv_files else csv_files
+                    else:
+                        target_files = csv_files
+                    file_type = 'csv'
+                    logger.info(f"Found {len(target_files)} CSV files")
+
                 else:
-                    filename = parquet_files[0]
+                    raise RuntimeError(f"No supported data files (parquet/csv) found in repository {repo_id}")
 
-            # 파일 다운로드
-            downloaded_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                repo_type='dataset',
-                cache_dir=cache_dir,
-            )
+                # 여러 파일을 다운로드하고 합치기
+                tables = []
+                downloaded_paths = []
 
-            logger.info(f"File downloaded: {downloaded_path}")
+                for target_file in target_files:
+                    downloaded_path = hf_hub_download(
+                        repo_id=repo_id,
+                        filename=target_file,
+                        repo_type='dataset',
+                        cache_dir=cache_dir,
+                    )
+                    downloaded_paths.append(downloaded_path)
+                    logger.info(f"File downloaded: {downloaded_path}")
 
-            # pyarrow로 parquet 파일 읽기
-            table = pq.read_table(downloaded_path)
+                    # 파일 형태에 따라 읽기
+                    if file_type == 'parquet':
+                        table = pq.read_table(downloaded_path)
+                    else:  # csv
+                        # pyarrow로 CSV 파일 읽기
+                        table = csv.read_csv(downloaded_path)
+
+                    tables.append(table)
+                    logger.info(f"Loaded {target_file}: {table.num_rows} rows, {table.num_columns} columns")
+
+                # 여러 테이블을 하나로 합치기
+                if len(tables) == 1:
+                    combined_table = tables[0]
+                else:
+                    # 모든 테이블의 스키마가 동일한지 확인
+                    first_schema = tables[0].schema
+                    for i, table in enumerate(tables[1:], 1):
+                        if not table.schema.equals(first_schema):
+                            logger.warning(f"Schema mismatch in file {target_files[i]}. Attempting to unify schemas.")
+
+                    # 테이블들을 세로로 합치기 (concat)
+                    combined_table = pa.concat_tables(tables)
+
+                logger.info(f"Combined {len(tables)} tables into one: {combined_table.num_rows} total rows")
+
+                result_info = {
+                    "success": True,
+                    "repo_id": repo_id,
+                    "file_type": file_type,
+                    "files_processed": target_files,
+                    "num_files": len(target_files),
+                    "local_paths": downloaded_paths,
+                    "table_shape": combined_table.shape,
+                    "columns": combined_table.column_names,
+                    "num_rows": combined_table.num_rows,
+                    "num_columns": combined_table.num_columns,
+                    "loaded_at": datetime.now().isoformat()
+                }
+
+            else:
+                # 특정 파일명이 지정된 경우
+                downloaded_path = hf_hub_download(
+                    repo_id=repo_id,
+                    filename=filename,
+                    repo_type='dataset',
+                    cache_dir=cache_dir,
+                )
+                logger.info(f"File downloaded: {downloaded_path}")
+
+                # 파일 확장자로 형태 판단
+                if filename.endswith('.parquet'):
+                    combined_table = pq.read_table(downloaded_path)
+                    file_type = 'parquet'
+                elif filename.endswith('.csv'):
+                    combined_table = csv.read_csv(downloaded_path)
+                    file_type = 'csv'
+                else:
+                    raise RuntimeError(f"Unsupported file format: {filename}")
+
+                result_info = {
+                    "success": True,
+                    "repo_id": repo_id,
+                    "file_type": file_type,
+                    "filename": filename,
+                    "local_path": downloaded_path,
+                    "table_shape": combined_table.shape,
+                    "columns": combined_table.column_names,
+                    "num_rows": combined_table.num_rows,
+                    "num_columns": combined_table.num_columns,
+                    "loaded_at": datetime.now().isoformat()
+                }
 
             # self.dataset에 저장
-            self.dataset = table
+            self.dataset = combined_table
+            logger.info(f"Dataset loaded successfully. Final shape: {combined_table.shape}, Columns: {combined_table.column_names}")
 
-            logger.info(f"Dataset loaded successfully. Shape: {table.shape}, Columns: {table.column_names}")
-
-            return {
-                "success": True,
-                "repo_id": repo_id,
-                "filename": filename,
-                "local_path": downloaded_path,
-                "table_shape": table.shape,
-                "columns": table.column_names,
-                "num_rows": table.num_rows,
-                "num_columns": table.num_columns,
-                "loaded_at": datetime.now().isoformat()
-            }
+            return result_info
 
         except Exception as e:
             logger.error(f"Failed to download and load dataset from {repo_id}: {e}")

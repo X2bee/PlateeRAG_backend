@@ -586,7 +586,7 @@ async def get_group_available_sections(request: Request, user_id=None):
         user_type = user.user_type
 
         if user_type == "superuser":
-            return {"available_sections": ["canvas", "documents", "train", "workflows", "eval", "train-monitor", "storage", "data-station", "admin-page"]}
+            return {"available_sections": ["canvas", "documents", "train", "workflows", "eval", "train-monitor", "model-storage", "data-station", "data-storage", "admin-page"]}
 
         if not groups or groups == None or groups == [] or len(groups) == 0:
             return {"available_sections": []}
