@@ -41,6 +41,12 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             current_todo_index=i + 1,
             total_todos=len(todos),
             execution_mode="todo",
+            skip_feedback_eval=False,
+            remediation_notes=[],
+            seen_results=[],
+            last_result_signature=None,
+            last_result_duplicate=False,
+            stagnation_count=0,
         )
 
         # TODO 실행
@@ -58,7 +64,7 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
         for result in todo_final_state["tool_results"]:
             todo_results.append({
                 "iteration": result["iteration"],
-                "result": result["result"],
+                "result": result.get("clean_result", result.get("result", "")),
                 "score": result.get("feedback_score", 0),
                 "evaluation": result.get("evaluation", {}),
                 "timestamp": result["timestamp"]
@@ -70,12 +76,22 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             "todo_title": todo.get("title", "Untitled"),
             "todo_description": todo.get("description", ""),
             "todo_priority": todo.get("priority", "medium"),
-            "result": todo_final_state["final_result"] or "No result generated",
+            "result": todo_final_state.get("final_result_clean") or todo_final_state.get("final_result") or "No result generated",
             "iterations": len(todo_results),
             "final_score": todo_scores[-1] if todo_scores else 0,
             "average_score": sum(todo_scores) / len(todo_scores) if todo_scores else 0,
-            "requirements_met": todo_final_state.get("requirements_met", False)
+            "requirements_met": todo_final_state.get("requirements_met", False),
+            "status": "completed" if todo_final_state.get("requirements_met", False) else "incomplete",
         }
+
+        if todo_results:
+            best_iteration_entry = max(todo_results, key=lambda r: r.get("score", 0))
+            todo_log.update(
+                {
+                    "best_iteration": best_iteration_entry.get("iteration"),
+                    "best_score": best_iteration_entry.get("score", 0),
+                }
+            )
 
         if return_intermediate_steps:
             todo_log.update({
@@ -99,3 +115,17 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             stream_emitter.emit_todo_summary(todo_log)
 
     return all_results, todo_execution_log
+
+
+def build_final_summary(todo_execution_log):
+    """최종 결과를 간결하게 반환"""
+    if not todo_execution_log:
+        return "No TODOs executed."
+
+    # 가장 최근 TODO의 결과가 있으면 사용
+    for entry in reversed(todo_execution_log):
+        result_text = (entry.get("result") or "").strip()
+        if result_text:
+            return result_text
+
+    return "No result generated."

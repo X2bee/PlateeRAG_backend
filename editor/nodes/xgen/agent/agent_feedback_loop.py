@@ -6,7 +6,7 @@ from controller.helper.singletonHelper import get_config_composer
 from editor.type_model.feedback_state import FeedbackState
 from editor.utils.feedback.create_feedback_graph import create_feedback_graph
 from editor.utils.feedback.create_todos import create_todos
-from editor.utils.feedback.todo_executor import todo_executor
+from editor.utils.feedback.todo_executor import todo_executor, build_final_summary
 from pydantic import BaseModel
 from editor.node_composer import Node
 from editor.nodes.xgen.agent.functions import (
@@ -146,6 +146,12 @@ class AgentFeedbackLoopNode(Node):
                     current_todo_index=1,
                     total_todos=0,
                     execution_mode="direct",
+                    skip_feedback_eval=True,
+                    remediation_notes=[],
+                    seen_results=[],
+                    last_result_signature=None,
+                    last_result_duplicate=False,
+                    stagnation_count=0,
                 )
 
                 import time
@@ -225,10 +231,7 @@ class AgentFeedbackLoopNode(Node):
             all_scores = [result["score"] for result in all_results if "score" in result]
             completed_todos = [todo for todo in todo_execution_log if todo.get("requirements_met", False)]
 
-            if todo_execution_log:
-                final_summary = todo_execution_log[-1].get("result", "No TODOs executed.")
-            else:
-                final_summary = "No TODOs executed."
+            final_summary = build_final_summary(todo_execution_log)
 
             result_dict = {
                 "result": final_summary,
