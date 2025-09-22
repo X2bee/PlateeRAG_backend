@@ -19,7 +19,11 @@ from .data_manager_helper import (
     combine_tables,
     determine_file_type_from_filename,
     create_result_info,
-    generate_dataset_statistics
+    generate_dataset_statistics,
+    drop_columns_from_table,
+    replace_column_values,
+    apply_column_operation,
+    remove_null_rows
 )
 import json
 import logging
@@ -69,22 +73,61 @@ class DataManager:
         logger.info(f"DataManager {self.manager_id} created for user {self.user_name} ({self.user_id}) (Initial memory: {self.initial_memory / (1024 * 1024):.2f} MB)")
 
     def _get_object_memory_size(self) -> int:
-        """DataManager 인스턴스의 메모리 사용량 계산"""
+        """DataManager 인스턴스의 메모리 사용량 계산 - 개선된 버전"""
         total_size = 0
 
-        # 인스턴스 자체의 크기
+        # 인스턴스 자체의 기본 크기
         total_size += sys.getsizeof(self)
 
-        # 각 속성의 메모리 크기 계산
-        for attr_name in dir(self):
-            if not attr_name.startswith('_') or attr_name in ['_resource_stats']:
+        # 주요 속성들만 선별적으로 계산 (순환 참조 방지)
+        safe_attrs = [
+            'manager_id', 'user_id', 'user_name', 'created_at',
+            'is_active', 'initial_memory', 'dataset'
+        ]
+
+        for attr_name in safe_attrs:
+            if hasattr(self, attr_name):
                 try:
                     attr_value = getattr(self, attr_name)
-                    total_size += self._calculate_deep_size(attr_value)
-                except:
+                    if attr_name == 'dataset' and attr_value is not None:
+                        # 데이터셋은 별도로 정확하게 계산
+                        total_size += self._calculate_dataset_memory_size(attr_value)
+                    else:
+                        total_size += self._calculate_deep_size(attr_value)
+                except Exception as e:
+                    logger.warning(f"메모리 계산 실패 ({attr_name}): {e}")
                     continue
 
+        # _resource_stats는 별도로 간단하게 계산
+        try:
+            stats_size = sys.getsizeof(self._resource_stats)
+            for key, value in self._resource_stats.items():
+                stats_size += sys.getsizeof(key) + sys.getsizeof(value)
+                if isinstance(value, list):
+                    stats_size += sum(sys.getsizeof(item) for item in value[-10:])  # 최근 10개만
+            total_size += stats_size
+        except:
+            pass
+
         return total_size
+
+    def _calculate_dataset_memory_size(self, dataset) -> int:
+        """데이터셋 전용 메모리 크기 계산"""
+        if dataset is None:
+            return 0
+
+        try:
+            # PyArrow Table의 실제 메모리 사용량 계산
+            if hasattr(dataset, 'nbytes'):
+                return dataset.nbytes
+            elif hasattr(dataset, 'get_total_buffer_size'):
+                return dataset.get_total_buffer_size()
+            else:
+                # fallback: 대략적인 크기 추정
+                return sys.getsizeof(dataset)
+        except Exception as e:
+            logger.warning(f"데이터셋 메모리 계산 실패: {e}")
+            return sys.getsizeof(dataset)
 
     def _calculate_deep_size(self, obj, seen=None) -> int:
         """객체의 전체 메모리 크기를 재귀적으로 계산"""
@@ -116,70 +159,125 @@ class DataManager:
         return size
 
     def _monitor_instance_memory(self):
-        """DataManager 인스턴스 메모리 사용량 모니터링 스레드"""
+        """DataManager 인스턴스 메모리 사용량 모니터링 스레드 - 개선된 버전"""
+        consecutive_errors = 0
+        max_errors = 5
+
         while self._monitoring and self.is_active:
             try:
-                # 가비지 컬렉션 후 정확한 메모리 측정
-                gc.collect()
+                # 가비지 컬렉션 후 정확한 메모리 측정 (빈도 줄임)
+                if consecutive_errors == 0:  # 오류가 없을 때만 GC 실행
+                    gc.collect()
 
-                # 인스턴스 전체 메모리
+                # 인스턴스 전체 메모리 (안전한 방법으로 계산)
                 current_instance_memory = self._get_object_memory_size()
 
-                # 개별 데이터 구조 메모리
-                dataset_memory = self._calculate_deep_size(self.dataset) if self.dataset is not None else 0
+                # 데이터셋 메모리 (전용 함수 사용)
+                dataset_memory = self._calculate_dataset_memory_size(self.dataset)
 
-                # 통계 업데이트
-                self._resource_stats['instance_memory_usage'].append(current_instance_memory)
-                self._resource_stats['dataset_memory'].append(dataset_memory)
-                self._resource_stats['current_instance_memory'] = current_instance_memory
+                # 스레드 안전성을 위한 락 (간단한 접근)
+                try:
+                    # 통계 업데이트
+                    self._resource_stats['instance_memory_usage'].append(current_instance_memory)
+                    self._resource_stats['dataset_memory'].append(dataset_memory)
+                    self._resource_stats['current_instance_memory'] = current_instance_memory
 
-                # 피크 메모리 업데이트
-                if current_instance_memory > self._resource_stats['peak_instance_memory']:
-                    self._resource_stats['peak_instance_memory'] = current_instance_memory
+                    # 피크 메모리 업데이트
+                    if current_instance_memory > self._resource_stats['peak_instance_memory']:
+                        self._resource_stats['peak_instance_memory'] = current_instance_memory
 
-                # 최근 100개 샘플만 유지
-                for key in ['instance_memory_usage', 'dataset_memory']:
-                    if len(self._resource_stats[key]) > 100:
-                        self._resource_stats[key] = self._resource_stats[key][-100:]
+                    # 최근 50개 샘플만 유지 (메모리 절약)
+                    for key in ['instance_memory_usage', 'dataset_memory']:
+                        if len(self._resource_stats[key]) > 50:
+                            self._resource_stats[key] = self._resource_stats[key][-50:]
 
-                time.sleep(2)  # 2초마다 체크 (메모리 측정은 CPU보다 무거움)
+                except Exception as e:
+                    logger.warning(f"통계 업데이트 실패: {e}")
+
+                # 오류 카운터 리셋
+                consecutive_errors = 0
+
+                # 적응적 대기 시간 (메모리 사용량에 따라 조정)
+                if dataset_memory > 100 * 1024 * 1024:  # 100MB 이상
+                    time.sleep(5)  # 더 자주 모니터링
+                else:
+                    time.sleep(10)  # 덜 자주 모니터링
 
             except Exception as e:
-                logger.error(f"Instance memory monitoring error: {e}")
-                break
+                consecutive_errors += 1
+                logger.warning(f"메모리 모니터링 오류 ({consecutive_errors}/{max_errors}): {e}")
+
+                if consecutive_errors >= max_errors:
+                    logger.error("메모리 모니터링 연속 오류로 스레드 종료")
+                    break
+
+                time.sleep(15)  # 오류 시 더 긴 대기
 
     def get_resource_stats(self) -> Dict[str, Any]:
-        """DataManager 인스턴스의 메모리 사용량 통계 반환"""
-        current_instance_memory = self._resource_stats['current_instance_memory']
+        """DataManager 인스턴스의 메모리 사용량 통계 반환 - 개선된 버전"""
+        try:
+            current_instance_memory = self._resource_stats.get('current_instance_memory', 0)
 
-        # 데이터셋 메모리
-        dataset_memory = self._calculate_deep_size(self.dataset) if self.dataset is not None else 0
+            # 데이터셋 메모리 (전용 함수 사용)
+            dataset_memory = self._calculate_dataset_memory_size(self.dataset)
 
-        return {
-            'manager_id': self.manager_id,
-            'user_id': self.user_id,
-            'user_name': self.user_name,
-            'created_at': self.created_at.isoformat(),
-            'is_active': self.is_active,
+            # 메모리 히스토리 통계
+            memory_history = self._resource_stats.get('instance_memory_usage', [])
+            dataset_history = self._resource_stats.get('dataset_memory', [])
 
-            # DataManager 인스턴스 메모리 정보
-            'current_instance_memory_mb': current_instance_memory / (1024 * 1024),
-            'initial_instance_memory_mb': self.initial_memory / (1024 * 1024),
-            'peak_instance_memory_mb': self._resource_stats['peak_instance_memory'] / (1024 * 1024),
-            'memory_growth_mb': (current_instance_memory - self.initial_memory) / (1024 * 1024),
+            # 평균 메모리 사용량 (최근 10개 샘플)
+            recent_memory = memory_history[-10:] if memory_history else [current_instance_memory]
+            recent_dataset = dataset_history[-10:] if dataset_history else [dataset_memory]
 
-            # 데이터셋 메모리
-            'dataset_memory_mb': dataset_memory / (1024 * 1024),
+            avg_memory = sum(recent_memory) / len(recent_memory) if recent_memory else 0
+            avg_dataset = sum(recent_dataset) / len(recent_dataset) if recent_dataset else 0
 
-            # 데이터 상태
-            'has_dataset': self.dataset is not None,
+            return {
+                'manager_id': self.manager_id,
+                'user_id': self.user_id,
+                'user_name': self.user_name,
+                'created_at': self.created_at.isoformat(),
+                'is_active': self.is_active,
 
-            # 메모리 분포 (퍼센트)
-            'memory_distribution': {
-                'dataset_percent': (dataset_memory / current_instance_memory * 100) if current_instance_memory > 0 else 0,
-                'other_percent': ((current_instance_memory - dataset_memory) / current_instance_memory * 100) if current_instance_memory > 0 else 0
+                # DataManager 인스턴스 메모리 정보
+                'current_instance_memory_mb': current_instance_memory / (1024 * 1024),
+                'initial_instance_memory_mb': self.initial_memory / (1024 * 1024),
+                'peak_instance_memory_mb': self._resource_stats.get('peak_instance_memory', 0) / (1024 * 1024),
+                'memory_growth_mb': (current_instance_memory - self.initial_memory) / (1024 * 1024),
+
+                # 데이터셋 메모리
+                'dataset_memory_mb': dataset_memory / (1024 * 1024),
+
+                # 평균 메모리 사용량
+                'average_memory_mb': avg_memory / (1024 * 1024),
+                'average_dataset_mb': avg_dataset / (1024 * 1024),
+
+                # 데이터 상태
+                'has_dataset': self.dataset is not None,
+                'dataset_rows': self.dataset.num_rows if self.dataset is not None else 0,
+                'dataset_columns': self.dataset.num_columns if self.dataset is not None else 0,
+
+                # 메모리 분포 (퍼센트) - 안전한 계산
+                'memory_distribution': {
+                    'dataset_percent': (dataset_memory / current_instance_memory * 100) if current_instance_memory > 0 else 0,
+                    'other_percent': ((current_instance_memory - dataset_memory) / current_instance_memory * 100) if current_instance_memory > 0 else 0
+                },
+
+                # 모니터링 상태
+                'monitoring_active': self._monitoring,
+                'memory_samples_count': len(memory_history)
             }
-        }
+
+        except Exception as e:
+            logger.error(f"리소스 통계 생성 실패: {e}")
+            # 기본적인 정보만 반환
+            return {
+                'manager_id': self.manager_id,
+                'user_id': self.user_id,
+                'is_active': self.is_active,
+                'error': f"통계 생성 실패: {str(e)}",
+                'has_dataset': self.dataset is not None
+            }
 
     def get_dataset(self) -> Any:
         """데이터셋 반환"""
@@ -486,3 +584,186 @@ class DataManager:
         except Exception as e:
             logger.error("Failed to generate dataset statistics: %s", e)
             raise RuntimeError(f"Statistics generation failed: {str(e)}")
+
+    def drop_dataset_columns(self, columns_to_drop: List[str]) -> Dict[str, Any]:
+        """
+        현재 로드된 데이터셋에서 지정된 컬럼들을 삭제
+
+        Args:
+            columns_to_drop (List[str]): 삭제할 컬럼명들
+
+        Returns:
+            Dict[str, Any]: 삭제 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        # 메모리 사용량 추적 (삭제 전) - 개선된 방법
+        initial_memory = self._calculate_dataset_memory_size(self.dataset)
+
+        try:
+            # 기존 테이블 참조 저장 (메모리 해제를 위해)
+            old_table = self.dataset
+
+            # 컬럼 삭제 실행
+            new_table, result_info = drop_columns_from_table(self.dataset, columns_to_drop)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            # 기존 테이블 명시적 해제
+            del old_table
+
+            # 강제 가비지 컬렉션 (메모리 즉시 해제)
+            gc.collect()
+
+            # 메모리 사용량 추적 (삭제 후) - 개선된 방법
+            final_memory = self._calculate_dataset_memory_size(self.dataset)
+            memory_reduced = initial_memory - final_memory
+
+            # 결과에 메모리 정보 추가
+            result_info["memory_info"] = {
+                "initial_memory_mb": initial_memory / (1024 * 1024),
+                "final_memory_mb": final_memory / (1024 * 1024),
+                "memory_reduced_mb": memory_reduced / (1024 * 1024)
+            }
+
+            logger.info("Dataset columns dropped for manager %s: %s (메모리 절약: %.2f MB)",
+                       self.manager_id, columns_to_drop, memory_reduced / (1024 * 1024))
+
+            return result_info
+
+        except Exception as e:
+            # 오류 발생 시에도 가비지 컬렉션 실행
+            gc.collect()
+            logger.error("Failed to drop dataset columns: %s", e)
+            raise RuntimeError(f"Column drop failed: {str(e)}")
+
+    def replace_dataset_column_values(self, column_name: str, old_value: str, new_value: str) -> Dict[str, Any]:
+        """
+        데이터셋의 특정 컬럼에서 값을 교체
+
+        Args:
+            column_name (str): 대상 컬럼명
+            old_value (str): 교체할 기존 값
+            new_value (str): 새로운 값
+
+        Returns:
+            Dict[str, Any]: 교체 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 값 교체 실행
+            new_table, result_info = replace_column_values(self.dataset, column_name, old_value, new_value)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            logger.info("Column values replaced for manager %s: %s",
+                       self.manager_id, result_info)
+
+            return result_info
+
+        except Exception as e:
+            logger.error("Failed to replace column values: %s", e)
+            raise RuntimeError(f"Value replacement failed: {str(e)}")
+
+    def apply_dataset_column_operation(self, column_name: str, operation: str) -> Dict[str, Any]:
+        """
+        데이터셋의 특정 컬럼에 수치 연산을 적용
+
+        Args:
+            column_name (str): 대상 컬럼명
+            operation (str): 연산식 (예: "+4", "*3+4")
+
+        Returns:
+            Dict[str, Any]: 연산 적용 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 기존 테이블 참조 저장
+            old_table = self.dataset
+
+            # 연산 적용
+            new_table, result_info = apply_column_operation(self.dataset, column_name, operation)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            # 메모리 정리
+            del old_table
+            gc.collect()
+
+            return result_info
+
+        except Exception as e:
+            logger.error("컬럼 연산 적용 실패: %s", e)
+            raise RuntimeError(f"컬럼 연산 적용 실패: {str(e)}")
+
+    def remove_null_rows_from_dataset(self, column_name: str = None) -> Dict[str, Any]:
+        """
+        데이터셋에서 NULL 값이 있는 행을 제거
+
+        Args:
+            column_name (str, optional): 특정 컬럼명. None이면 전체 컬럼에서 NULL 체크
+
+        Returns:
+            Dict[str, Any]: NULL row 제거 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        # 메모리 사용량 추적 (제거 전)
+        initial_memory = self._calculate_dataset_memory_size(self.dataset)
+
+        try:
+            # 기존 테이블 참조 저장
+            old_table = self.dataset
+
+            # NULL row 제거 실행
+            new_table, result_info = remove_null_rows(self.dataset, column_name)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            # 기존 테이블 명시적 해제
+            del old_table
+
+            # 강제 가비지 컬렉션
+            gc.collect()
+
+            # 메모리 사용량 추적 (제거 후)
+            final_memory = self._calculate_dataset_memory_size(self.dataset)
+            memory_saved = initial_memory - final_memory
+
+            # 메모리 정보 추가
+            result_info["memory_info"] = {
+                "initial_memory_mb": initial_memory / (1024 * 1024),
+                "final_memory_mb": final_memory / (1024 * 1024),
+                "memory_saved_mb": memory_saved / (1024 * 1024)
+            }
+
+            logger.info("NULL row 제거 완료: 매니저 %s에서 %d개 행 제거",
+                       self.manager_id, result_info["removed_rows"])
+
+            return result_info
+
+        except Exception as e:
+            logger.error("NULL row 제거 실패: %s", e)
+            raise RuntimeError(f"NULL row 제거 실패: {str(e)}")

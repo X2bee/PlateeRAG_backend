@@ -23,6 +23,29 @@ class ExportDatasetRequest(BaseModel):
     """데이터셋 내보내기 요청"""
     manager_id: str = Field(..., description="매니저 ID")
 
+class DropColumnsRequest(BaseModel):
+    """컬럼 삭제 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    columns: List[str] = Field(..., description="삭제할 컬럼명들", min_items=1)
+
+class ReplaceValuesRequest(BaseModel):
+    """값 교체 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    column_name: str = Field(..., description="대상 컬럼명")
+    old_value: str = Field(..., description="교체할 기존 값")
+    new_value: str = Field(..., description="새로운 값")
+
+class ApplyOperationRequest(BaseModel):
+    """연산 적용 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    column_name: str = Field(..., description="대상 컬럼명")
+    operation: str = Field(..., description="연산식 (예: +4, *3+4)", pattern=r'^[+\-*/\d.]+$')
+
+class RemoveNullRowsRequest(BaseModel):
+    """NULL row 제거 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    column_name: Optional[str] = Field(None, description="특정 컬럼명 (미지정시 전체 컬럼에서 NULL 체크)")
+
 # ========== Helper Functions ==========
 def get_manager_with_auth(registry, manager_id: str, user_id: str):
     """인증된 매니저 가져오기"""
@@ -247,3 +270,166 @@ async def get_dataset_statistics(request: Request, export_request: ExportDataset
     except Exception as e:
         logger.error("예상치 못한 오류: %s", e)
         raise HTTPException(status_code=500, detail="통계정보 생성 중 오류가 발생했습니다")
+
+
+@router.post("/drop-columns",
+    summary="데이터셋 컬럼 삭제",
+    description="현재 적재된 데이터셋에서 지정된 컬럼들을 삭제합니다.",
+    response_model=Dict[str, Any])
+async def drop_dataset_columns(request: Request, drop_request: DropColumnsRequest) -> Dict[str, Any]:
+    """데이터셋 컬럼 삭제"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, drop_request.manager_id, user_id)
+
+        # 컬럼 삭제 실행
+        result_info = manager.drop_dataset_columns(drop_request.columns)
+
+        logger.info("컬럼 삭제 완료: 매니저 %s, 삭제된 컬럼: %s",
+                   drop_request.manager_id, drop_request.columns)
+
+        return {
+            "success": True,
+            "manager_id": drop_request.manager_id,
+            "message": f"{len(drop_request.columns)}개 컬럼이 성공적으로 삭제되었습니다",
+            "drop_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("컬럼 삭제 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="컬럼 삭제 중 오류가 발생했습니다")
+
+
+@router.post("/replace-values",
+    summary="컬럼 값 교체",
+    description="특정 컬럼에서 문자열 값을 다른 값으로 교체합니다.",
+    response_model=Dict[str, Any])
+async def replace_column_values(request: Request, replace_request: ReplaceValuesRequest) -> Dict[str, Any]:
+    """컬럼 값 교체"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, replace_request.manager_id, user_id)
+
+        # 값 교체 실행
+        result_info = manager.replace_dataset_column_values(
+            replace_request.column_name,
+            replace_request.old_value,
+            replace_request.new_value
+        )
+
+        logger.info("값 교체 완료: 매니저 %s, 컬럼 %s",
+                   replace_request.manager_id, replace_request.column_name)
+
+        return {
+            "success": True,
+            "manager_id": replace_request.manager_id,
+            "message": f"컬럼 '{replace_request.column_name}'에서 값이 성공적으로 교체되었습니다",
+            "replace_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("값 교체 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="값 교체 중 오류가 발생했습니다")
+
+
+@router.post("/apply-operation",
+    summary="컬럼 연산 적용",
+    description="특정 컬럼에 수치 연산을 적용합니다.",
+    response_model=Dict[str, Any])
+async def apply_column_operation(request: Request, operation_request: ApplyOperationRequest) -> Dict[str, Any]:
+    """컬럼 연산 적용"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, operation_request.manager_id, user_id)
+
+        # 연산 적용 실행
+        result_info = manager.apply_dataset_column_operation(
+            operation_request.column_name,
+            operation_request.operation
+        )
+
+        logger.info("연산 적용 완료: 매니저 %s, 컬럼 %s, 연산 %s",
+                   operation_request.manager_id, operation_request.column_name, operation_request.operation)
+
+        return {
+            "success": True,
+            "manager_id": operation_request.manager_id,
+            "message": f"컬럼 '{operation_request.column_name}'에 연산 '{operation_request.operation}'이 성공적으로 적용되었습니다",
+            "operation_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("연산 적용 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="연산 적용 중 오류가 발생했습니다")
+
+
+@router.post("/remove-null-rows",
+    summary="NULL row 제거",
+    description="NULL 값이 있는 행을 제거합니다. 특정 컬럼 지정 가능.",
+    response_model=Dict[str, Any])
+async def remove_null_rows(request: Request, remove_request: RemoveNullRowsRequest) -> Dict[str, Any]:
+    """NULL 값이 있는 행 제거"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, remove_request.manager_id, user_id)
+
+        # NULL row 제거 실행
+        result_info = manager.remove_null_rows_from_dataset(remove_request.column_name)
+
+        # 로그 메시지 생성
+        if remove_request.column_name:
+            log_msg = f"매니저 {remove_request.manager_id}, 컬럼 '{remove_request.column_name}'"
+            response_msg = f"컬럼 '{remove_request.column_name}'에서 NULL 값이 있는 행이 성공적으로 제거되었습니다"
+        else:
+            log_msg = f"매니저 {remove_request.manager_id}, 전체 컬럼"
+            response_msg = "NULL 값이 있는 행이 성공적으로 제거되었습니다"
+
+        logger.info("NULL row 제거 완료: %s, %d개 행 제거",
+                   log_msg, result_info["removed_rows"])
+
+        return {
+            "success": True,
+            "manager_id": remove_request.manager_id,
+            "message": response_msg,
+            "removal_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("NULL row 제거 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="NULL row 제거 중 오류가 발생했습니다")

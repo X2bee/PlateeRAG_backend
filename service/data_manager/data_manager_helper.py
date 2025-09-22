@@ -12,6 +12,8 @@ import pyarrow.parquet as pq
 import pyarrow as pa
 import pyarrow.csv as csv
 import pyarrow.compute as pc
+import difflib
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -273,3 +275,271 @@ def generate_dataset_statistics(table: pa.Table) -> Dict[str, Any]:
             "message": f"통계 생성 중 오류: {str(e)}",
             "statistics": {}
         }
+
+
+def drop_columns_from_table(table: pa.Table, columns_to_drop: List[str]) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    pyarrow Table에서 지정된 컬럼들을 삭제
+
+    Args:
+        table (pa.Table): 원본 테이블
+        columns_to_drop (List[str]): 삭제할 컬럼명들
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if not columns_to_drop:
+        raise RuntimeError("삭제할 컬럼이 지정되지 않았습니다")
+
+    existing_columns = set(table.column_names)
+    columns_to_drop_set = set(columns_to_drop)
+
+    # 존재하지 않는 컬럼 확인
+    missing_columns = columns_to_drop_set - existing_columns
+
+    if missing_columns:
+        # 유사한 컬럼명 찾기
+        suggestions = {}
+        for missing_col in missing_columns:
+            # difflib를 사용해 가장 유사한 컬럼명 찾기
+            close_matches = difflib.get_close_matches(
+                missing_col,
+                existing_columns,
+                n=3,  # 최대 3개까지
+                cutoff=0.3  # 30% 이상 유사도
+            )
+            if close_matches:
+                suggestions[missing_col] = close_matches
+
+        # 오류 메시지 생성
+        error_msg = f"존재하지 않는 컬럼: {list(missing_columns)}"
+        if suggestions:
+            error_msg += "\n혹시 이런 컬럼들을 의도하셨나요?"
+            for missing_col, similar_cols in suggestions.items():
+                error_msg += f"\n- '{missing_col}' → {similar_cols}"
+
+        raise RuntimeError(error_msg)
+
+    # 남겨둘 컬럼들 결정
+    columns_to_keep = [col for col in table.column_names if col not in columns_to_drop_set]
+
+    if not columns_to_keep:
+        raise RuntimeError("모든 컬럼을 삭제할 수 없습니다. 최소 1개의 컬럼은 남겨두어야 합니다")
+
+    try:
+        # 컬럼 선택으로 새 테이블 생성
+        new_table = table.select(columns_to_keep)
+
+        result_info = {
+            "success": True,
+            "dropped_columns": list(columns_to_drop),
+            "remaining_columns": columns_to_keep,
+            "original_columns_count": table.num_columns,
+            "new_columns_count": new_table.num_columns,
+            "rows_count": new_table.num_rows,
+            "dropped_at": datetime.now().isoformat()
+        }
+
+        logger.info("컬럼 삭제 완료: %d개 컬럼 삭제, %d개 컬럼 남음",
+                   len(columns_to_drop), len(columns_to_keep))
+
+        return new_table, result_info
+
+    except Exception as e:
+        logger.error("컬럼 삭제 실패: %s", e)
+        raise RuntimeError(f"컬럼 삭제 중 오류 발생: {str(e)}")
+
+
+def replace_column_values(table: pa.Table, column_name: str, old_value: str, new_value: str) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    특정 컬럼에서 문자열 값을 다른 값으로 교체
+
+    Args:
+        table (pa.Table): 원본 테이블
+        column_name (str): 대상 컬럼명
+        old_value (str): 교체할 기존 값
+        new_value (str): 새로운 값
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if column_name not in table.column_names:
+        raise RuntimeError(f"컬럼 '{column_name}'이 존재하지 않습니다")
+
+    try:
+        # 기존 컬럼 가져오기
+        column = table.column(column_name)
+
+        # 문자열로 변환하여 교체 수행
+        str_column = pc.cast(column, pa.string())
+        replaced_column = pc.replace_substring_regex(str_column, old_value, new_value)
+
+        # 원래 타입으로 복원 시도
+        try:
+            final_column = pc.cast(replaced_column, column.type)
+        except:
+            final_column = replaced_column  # 변환 실패시 문자열 유지
+
+        # 새 테이블 생성
+        new_table = table.set_column(table.column_names.index(column_name), column_name, final_column)
+
+        # 교체된 개수 계산
+        replaced_count = pc.sum(pc.not_equal(column, final_column)).as_py()
+
+        result_info = {
+            "success": True,
+            "column_name": column_name,
+            "old_value": old_value,
+            "new_value": new_value,
+            "replaced_count": replaced_count,
+            "total_rows": table.num_rows,
+            "replaced_at": datetime.now().isoformat()
+        }
+
+        logger.info("값 교체 완료: 컬럼 %s에서 %d개 값 교체", column_name, replaced_count)
+        return new_table, result_info
+
+    except Exception as e:
+        logger.error("값 교체 실패: %s", e)
+        raise RuntimeError(f"값 교체 중 오류 발생: {str(e)}")
+
+
+def apply_column_operation(table: pa.Table, column_name: str, operation: str) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    특정 컬럼에 수치 연산 적용
+
+    Args:
+        table (pa.Table): 원본 테이블
+        column_name (str): 대상 컬럼명
+        operation (str): 연산식 (예: "+4", "*3+4", "+4*3")
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if column_name not in table.column_names:
+        raise RuntimeError(f"컬럼 '{column_name}'이 존재하지 않습니다")
+
+    try:
+        column = table.column(column_name)
+
+        # 숫자 타입인지 확인
+        if not any(num_type in str(column.type).lower() for num_type in ['int', 'float', 'double', 'decimal']):
+            raise RuntimeError(f"컬럼 '{column_name}'은 숫자 타입이 아닙니다")
+
+        # 연산식 파싱 및 실행
+        original_column = column
+        result_column = column
+
+        # 연산자와 숫자를 순차적으로 찾아서 적용
+        operations = re.findall(r'([+\-*/])(\d+(?:\.\d+)?)', operation)
+
+        if not operations:
+            raise RuntimeError(f"잘못된 연산식: {operation}")
+
+        for op, value in operations:
+            num_value = float(value) if '.' in value else int(value)
+
+            if op == '+':
+                result_column = pc.add(result_column, num_value)
+            elif op == '-':
+                result_column = pc.subtract(result_column, num_value)
+            elif op == '*':
+                result_column = pc.multiply(result_column, num_value)
+            elif op == '/':
+                result_column = pc.divide(result_column, num_value)
+
+        # 새 테이블 생성
+        new_table = table.set_column(table.column_names.index(column_name), column_name, result_column)
+
+        result_info = {
+            "success": True,
+            "column_name": column_name,
+            "operation": operation,
+            "operations_applied": len(operations),
+            "total_rows": table.num_rows,
+            "applied_at": datetime.now().isoformat()
+        }
+
+        logger.info("연산 적용 완료: 컬럼 %s에 연산 %s 적용", column_name, operation)
+        return new_table, result_info
+
+    except Exception as e:
+        logger.error("연산 적용 실패: %s", e)
+        raise RuntimeError(f"연산 적용 중 오류 발생: {str(e)}")
+
+
+def remove_null_rows(table: pa.Table, column_name: str = None) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    NULL 값이 있는 row를 제거
+
+    Args:
+        table (pa.Table): 원본 테이블
+        column_name (str, optional): 특정 컬럼명. None이면 전체 컬럼에서 NULL 체크
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    try:
+        original_rows = table.num_rows
+
+        if column_name is not None:
+            # 특정 컬럼에서만 NULL 체크
+            if column_name not in table.column_names:
+                raise RuntimeError(f"컬럼 '{column_name}'이 존재하지 않습니다")
+
+            # 해당 컬럼에서 NULL이 아닌 행만 필터링
+            column = table.column(column_name)
+            mask = pc.is_valid(column)
+            new_table = pc.filter(table, mask)
+
+            null_rows_removed = original_rows - new_table.num_rows
+            filter_info = f"컬럼 '{column_name}'"
+
+        else:
+            # 전체 컬럼에서 NULL 체크 - 어느 컬럼이든 NULL이 있으면 해당 row 제거
+            mask = None
+
+            for col_name in table.column_names:
+                column = table.column(col_name)
+                col_mask = pc.is_valid(column)
+
+                if mask is None:
+                    mask = col_mask
+                else:
+                    # AND 연산 - 모든 컬럼이 valid해야 함
+                    mask = pc.and_(mask, col_mask)
+
+            new_table = pc.filter(table, mask)
+            null_rows_removed = original_rows - new_table.num_rows
+            filter_info = "전체 컬럼"
+
+        result_info = {
+            "success": True,
+            "filter_target": filter_info,
+            "original_rows": original_rows,
+            "remaining_rows": new_table.num_rows,
+            "removed_rows": null_rows_removed,
+            "total_columns": new_table.num_columns,
+            "filtered_at": datetime.now().isoformat()
+        }
+
+        logger.info("NULL row 제거 완료: %s에서 %d개 행 제거 (전체: %d → %d)",
+                   filter_info, null_rows_removed, original_rows, new_table.num_rows)
+
+        return new_table, result_info
+
+    except Exception as e:
+        logger.error("NULL row 제거 실패: %s", e)
+        raise RuntimeError(f"NULL row 제거 중 오류 발생: {str(e)}")
