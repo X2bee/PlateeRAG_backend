@@ -59,7 +59,7 @@ class ModelInferenceService:
         if isinstance(raw_inputs, dict):
             if not input_schema:
                 raise ValueError("Input schema required when passing a dictionary record")
-            row = [raw_inputs[field] for field in input_schema]
+            row = [ModelInferenceService._coerce_value(raw_inputs[field]) for field in input_schema]
             return ModelInferenceService._to_array([row])
 
         if not isinstance(raw_inputs, list):
@@ -76,16 +76,23 @@ class ModelInferenceService:
                 for field in input_schema:
                     if field not in item:
                         raise ValueError(f"Missing feature '{field}' in record index {idx}")
-                    row.append(item[field])
+                    row.append(ModelInferenceService._coerce_value(item[field]))
                 rows.append(row)
             return ModelInferenceService._to_array(rows)
 
         if isinstance(first_item, (list, tuple)):
-            rows = [list(item) for item in raw_inputs]
+            rows = [
+                [ModelInferenceService._coerce_value(value) for value in list(item)]
+                for item in raw_inputs
+            ]
             return ModelInferenceService._to_array(rows)
 
         # Treat as a single record represented by scalars
-        return ModelInferenceService._to_array([raw_inputs])
+        if isinstance(raw_inputs, (list, tuple)):
+            coerced = [ModelInferenceService._coerce_value(value) for value in raw_inputs]
+        else:
+            coerced = [ModelInferenceService._coerce_value(raw_inputs)]
+        return ModelInferenceService._to_array([coerced])
 
     def predict(self,
                 file_path: str,
@@ -124,6 +131,18 @@ class ModelInferenceService:
         if np is not None:
             return np.array(rows, dtype=object)
         return [list(row) for row in rows]
+
+    @staticmethod
+    def _coerce_value(value: Any) -> Any:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped == "":
+                return value
+            try:
+                return float(stripped)
+            except ValueError:
+                return value
+        return value
 
     def clear_cache(self, file_path: str):
         resolved = str(Path(file_path).expanduser().resolve())
