@@ -7,13 +7,17 @@ import shutil
 import logging
 from typing import Dict, List, Any, IO, Tuple
 from datetime import datetime
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, create_repo, upload_file
 import pyarrow.parquet as pq
 import pyarrow as pa
 import pyarrow.csv as csv
 import pyarrow.compute as pc
 import difflib
 import re
+import ast
+import tempfile
+import subprocess
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -543,3 +547,652 @@ def remove_null_rows(table: pa.Table, column_name: str = None) -> Tuple[pa.Table
     except Exception as e:
         logger.error("NULL row 제거 실패: %s", e)
         raise RuntimeError(f"NULL row 제거 중 오류 발생: {str(e)}")
+
+
+def upload_dataset_to_hf(table: pa.Table, repo_id: str, hf_user_id: str, hub_token: str,
+                        filename: str = None, private: bool = False) -> Dict[str, Any]:
+    """
+    pyarrow Table을 parquet 파일로 저장하고 HuggingFace Hub에 업로드
+
+    Args:
+        table (pa.Table): 업로드할 테이블
+        repo_id (str): HuggingFace 리포지토리 ID (user/repo-name 형식)
+        hf_user_id (str): HuggingFace 사용자 ID
+        hub_token (str): HuggingFace Hub 토큰
+        filename (str, optional): 업로드할 파일명. None이면 자동 생성
+        private (bool): 프라이빗 리포지토리 여부
+
+    Returns:
+        Dict[str, Any]: 업로드 결과 정보
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if not hub_token:
+        raise RuntimeError("HuggingFace Hub 토큰이 제공되지 않았습니다")
+
+    if not hf_user_id:
+        raise RuntimeError("HuggingFace 사용자 ID가 제공되지 않았습니다")
+
+    try:
+        # 임시 디렉토리 생성
+        upload_dir = f"/tmp/hf_upload_{int(datetime.now().timestamp())}"
+        os.makedirs(upload_dir, exist_ok=True)
+
+        # 파일명 설정
+        if filename is None:
+            filename = f"dataset_{int(datetime.now().timestamp())}.parquet"
+
+        if not filename.endswith('.parquet'):
+            filename += '.parquet'
+
+        temp_parquet_path = os.path.join(upload_dir, filename)
+
+        # parquet 파일로 저장
+        pq.write_table(table, temp_parquet_path)
+        logger.info("parquet 파일 생성: %s (%d행, %d열)", temp_parquet_path, table.num_rows, table.num_columns)
+
+        # repo_id 검증 및 조정
+        if '/' not in repo_id:
+            repo_id = f"{hf_user_id}/{repo_id}"
+
+        try:
+            # 리포지토리 생성 시도 (이미 존재하면 무시)
+            create_repo(
+                repo_id=repo_id,
+                repo_type="dataset",
+                private=private,
+                token=hub_token,
+                exist_ok=True
+            )
+            logger.info("HuggingFace 데이터셋 리포지토리 생성/확인: %s", repo_id)
+
+        except Exception as e:
+            logger.warning("리포지토리 생성 실패 (이미 존재할 수 있음): %s", e)
+
+        # 파일 업로드
+        upload_result = upload_file(
+            path_or_fileobj=temp_parquet_path,
+            path_in_repo=filename,
+            repo_id=repo_id,
+            repo_type="dataset",
+            token=hub_token,
+            commit_message=f"Upload dataset {filename} - {table.num_rows} rows, {table.num_columns} columns"
+        )
+
+        logger.info("HuggingFace Hub 업로드 완료: %s → %s", temp_parquet_path, upload_result)
+
+        # 파일 크기 계산
+        file_size = os.path.getsize(temp_parquet_path)
+
+        result_info = {
+            "success": True,
+            "repo_id": repo_id,
+            "filename": filename,
+            "upload_url": upload_result,
+            "file_size_mb": file_size / (1024 * 1024),
+            "dataset_rows": table.num_rows,
+            "dataset_columns": table.num_columns,
+            "column_names": table.column_names,
+            "private": private,
+            "uploaded_at": datetime.now().isoformat()
+        }
+
+        # 임시 파일 정리
+        try:
+            shutil.rmtree(upload_dir)
+        except Exception as e:
+            logger.warning("임시 디렉토리 삭제 실패: %s", e)
+
+        logger.info("HuggingFace 데이터셋 업로드 완료: %s (%d행, %d열, %.2f MB)",
+                   repo_id, table.num_rows, table.num_columns, file_size / (1024 * 1024))
+
+        return result_info
+
+    except Exception as e:
+        # 임시 파일 정리 (오류 시)
+        try:
+            if 'upload_dir' in locals():
+                shutil.rmtree(upload_dir)
+        except:
+            pass
+
+        logger.error("HuggingFace 업로드 실패: %s", e)
+        raise RuntimeError(f"HuggingFace 업로드 중 오류 발생: {str(e)}")
+
+
+def copy_column(table: pa.Table, source_column: str, new_column: str) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    특정 컬럼을 복사하여 새로운 컬럼으로 추가
+
+    Args:
+        table (pa.Table): 원본 테이블
+        source_column (str): 복사할 원본 컬럼명
+        new_column (str): 새로운 컬럼명
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if source_column not in table.column_names:
+        raise RuntimeError(f"원본 컬럼 '{source_column}'이 존재하지 않습니다")
+
+    if new_column in table.column_names:
+        raise RuntimeError(f"새로운 컬럼명 '{new_column}'이 이미 존재합니다")
+
+    try:
+        # 원본 컬럼 데이터 가져오기
+        source_column_data = table.column(source_column)
+
+        # 새로운 컬럼으로 추가
+        new_table = table.append_column(new_column, source_column_data)
+
+        result_info = {
+            "success": True,
+            "source_column": source_column,
+            "new_column": new_column,
+            "original_columns": table.num_columns,
+            "new_columns": new_table.num_columns,
+            "rows_count": new_table.num_rows,
+            "copied_at": datetime.now().isoformat()
+        }
+
+        logger.info("컬럼 복사 완료: '%s' → '%s' (%d행)", source_column, new_column, table.num_rows)
+        return new_table, result_info
+
+    except Exception as e:
+        logger.error("컬럼 복사 실패: %s", e)
+        raise RuntimeError(f"컬럼 복사 중 오류 발생: {str(e)}")
+
+
+def rename_column(table: pa.Table, old_name: str, new_name: str) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    특정 컬럼의 이름을 변경
+
+    Args:
+        table (pa.Table): 원본 테이블
+        old_name (str): 기존 컬럼명
+        new_name (str): 새로운 컬럼명
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if old_name not in table.column_names:
+        raise RuntimeError(f"컬럼 '{old_name}'이 존재하지 않습니다")
+
+    if new_name in table.column_names:
+        raise RuntimeError(f"새로운 컬럼명 '{new_name}'이 이미 존재합니다")
+
+    try:
+        # 컬럼명 변경
+        column_names = list(table.column_names)
+        old_index = column_names.index(old_name)
+        column_names[old_index] = new_name
+
+        # 새로운 스키마 생성
+        new_schema = pa.schema([
+            pa.field(column_names[i], table.schema.field(i).type, table.schema.field(i).nullable)
+            for i in range(len(column_names))
+        ])
+
+        # 새로운 테이블 생성
+        new_table = pa.Table.from_arrays(
+            [table.column(i) for i in range(table.num_columns)],
+            schema=new_schema
+        )
+
+        result_info = {
+            "success": True,
+            "old_name": old_name,
+            "new_name": new_name,
+            "total_columns": new_table.num_columns,
+            "rows_count": new_table.num_rows,
+            "renamed_at": datetime.now().isoformat()
+        }
+
+        logger.info("컬럼 이름 변경 완료: '%s' → '%s'", old_name, new_name)
+        return new_table, result_info
+
+    except Exception as e:
+        logger.error("컬럼 이름 변경 실패: %s", e)
+        raise RuntimeError(f"컬럼 이름 변경 중 오류 발생: {str(e)}")
+
+
+def format_columns_string(table: pa.Table, column_names: List[str], template: str, new_column: str) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    여러 컬럼의 값들을 문자열 템플릿에 삽입하여 새로운 컬럼 생성
+
+    Args:
+        table (pa.Table): 원본 테이블
+        column_names (List[str]): 사용할 컬럼명들
+        template (str): 문자열 템플릿 (예: "{col1}_aiaiaiai_{col2}")
+        new_column (str): 새로운 컬럼명
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if not column_names:
+        raise RuntimeError("컬럼명이 지정되지 않았습니다")
+
+    if new_column in table.column_names:
+        raise RuntimeError(f"새로운 컬럼명 '{new_column}'이 이미 존재합니다")
+
+    # 컬럼 존재 확인
+    missing_columns = [col for col in column_names if col not in table.column_names]
+    if missing_columns:
+        raise RuntimeError(f"존재하지 않는 컬럼: {missing_columns}")
+
+    try:
+        # 각 컬럼의 데이터를 문자열로 변환
+        column_data = {}
+        for col_name in column_names:
+            column = table.column(col_name)
+            # 문자열로 변환 (NULL 값은 빈 문자열로 처리)
+            str_column = pc.cast(column, pa.string())
+            # NULL을 빈 문자열로 교체
+            str_column = pc.fill_null(str_column, "")
+            column_data[col_name] = str_column
+
+        # 템플릿에 컬럼명이 포함되어 있는지 확인
+        template_columns = []
+        for col_name in column_names:
+            if f"{{{col_name}}}" in template:
+                template_columns.append(col_name)
+
+        if not template_columns:
+            raise RuntimeError("템플릿에 지정된 컬럼명이 포함되지 않았습니다")
+
+        # 행별로 템플릿 적용
+        result_values = []
+        for i in range(table.num_rows):
+            # 각 행의 값들을 딕셔너리로 구성
+            row_values = {}
+            for col_name in template_columns:
+                value = column_data[col_name][i].as_py()
+                row_values[col_name] = str(value) if value is not None else ""
+
+            # 템플릿에 값 삽입
+            formatted_string = template.format(**row_values)
+            result_values.append(formatted_string)
+
+        # 새로운 컬럼 생성
+        result_array = pa.array(result_values, type=pa.string())
+
+        # 테이블에 컬럼 추가
+        new_table = table.append_column(new_column, result_array)
+
+        result_info = {
+            "success": True,
+            "used_columns": template_columns,
+            "template": template,
+            "new_column": new_column,
+            "original_columns": table.num_columns,
+            "new_columns": new_table.num_columns,
+            "rows_processed": table.num_rows,
+            "formatted_at": datetime.now().isoformat()
+        }
+
+        logger.info("컬럼 문자열 포맷팅 완료: %s → '%s' (%d행)",
+                   template_columns, new_column, table.num_rows)
+        return new_table, result_info
+
+    except Exception as e:
+        logger.error("컬럼 문자열 포맷팅 실패: %s", e)
+        raise RuntimeError(f"컬럼 문자열 포맷팅 중 오류 발생: {str(e)}")
+
+
+def calculate_columns_operation(table: pa.Table, col1: str, col2: str, operation: str, new_column: str) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    두 컬럼 간 사칙연산을 수행하여 새로운 컬럼 생성
+    문자열과 숫자 타입에 따라 특별한 처리 로직 적용
+
+    Args:
+        table (pa.Table): 원본 테이블
+        col1 (str): 첫 번째 컬럼명
+        col2 (str): 두 번째 컬럼명
+        operation (str): 연산자 (+, -, *, /)
+        new_column (str): 새로운 컬럼명
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if new_column in table.column_names:
+        raise RuntimeError(f"새로운 컬럼명 '{new_column}'이 이미 존재합니다")
+
+    # 컬럼 존재 확인
+    missing_columns = [col for col in [col1, col2] if col not in table.column_names]
+    if missing_columns:
+        raise RuntimeError(f"존재하지 않는 컬럼: {missing_columns}")
+
+    if operation not in ['+', '-', '*', '/']:
+        raise RuntimeError(f"지원되지 않는 연산자: {operation}")
+
+    try:
+        column1 = table.column(col1)
+        column2 = table.column(col2)
+
+        # 컬럼 타입 확인
+        col1_type = str(column1.type).lower()
+        col2_type = str(column2.type).lower()
+
+        # 숫자 타입인지 확인
+        def is_numeric_type(type_str):
+            return any(num_type in type_str for num_type in ['int', 'float', 'double', 'decimal'])
+
+        col1_is_numeric = is_numeric_type(col1_type)
+        col2_is_numeric = is_numeric_type(col2_type)
+
+        # 연산 결과 배열
+        result_values = []
+
+        # 행별로 연산 수행
+        for i in range(table.num_rows):
+            val1 = column1[i].as_py()
+            val2 = column2[i].as_py()
+
+            # NULL 값 처리
+            if val1 is None or val2 is None:
+                result_values.append(None)
+                continue
+
+            try:
+                if operation == '+':
+                    if col1_is_numeric and col2_is_numeric:
+                        # 숫자 + 숫자 = 숫자 덧셈
+                        result = float(val1) + float(val2)
+                        result_values.append(result)
+                    else:
+                        # 문자열 연결: {col1}{col2}
+                        result = str(val1) + str(val2)
+                        result_values.append(result)
+
+                elif operation == '-':
+                    if col1_is_numeric and col2_is_numeric:
+                        # 숫자 - 숫자 = 숫자 빼기
+                        result = float(val1) - float(val2)
+                        result_values.append(result)
+                    else:
+                        # 문자열에서는 빼기 연산 불가
+                        raise ValueError("문자열 타입에서는 빼기 연산을 지원하지 않습니다")
+
+                elif operation == '*':
+                    if col1_is_numeric and col2_is_numeric:
+                        # 숫자 * 숫자 = 숫자 곱셈
+                        result = float(val1) * float(val2)
+                        result_values.append(result)
+                    elif not col1_is_numeric and col2_is_numeric:
+                        # 문자열 * 숫자 = 문자열 반복
+                        result = str(val1) * int(val2)
+                        result_values.append(result)
+                    elif col1_is_numeric and not col2_is_numeric:
+                        # 숫자 * 문자열 = 문자열 반복
+                        result = str(val2) * int(val1)
+                        result_values.append(result)
+                    else:
+                        # 문자열 * 문자열은 불가
+                        raise ValueError("두 문자열 간의 곱셈은 지원하지 않습니다")
+
+                elif operation == '/':
+                    if col1_is_numeric and col2_is_numeric:
+                        if float(val2) == 0:
+                            raise ValueError("0으로 나눌 수 없습니다")
+                        result = float(val1) / float(val2)
+                        result_values.append(result)
+                    else:
+                        # 문자열에서는 나누기 연산 불가
+                        raise ValueError("문자열 타입에서는 나누기 연산을 지원하지 않습니다")
+
+            except Exception as e:
+                logger.warning("행 %d에서 연산 실패: %s", i, e)
+                result_values.append(None)
+
+        # 결과 타입 결정
+        if all(isinstance(v, (int, float)) for v in result_values if v is not None):
+            # 모두 숫자면 float 타입
+            result_array = pa.array(result_values, type=pa.float64())
+            result_type = "numeric"
+        else:
+            # 문자열이 포함되면 string 타입
+            result_array = pa.array(result_values, type=pa.string())
+            result_type = "string"
+
+        # 테이블에 컬럼 추가
+        new_table = table.append_column(new_column, result_array)
+
+        result_info = {
+            "success": True,
+            "col1": col1,
+            "col2": col2,
+            "operation": operation,
+            "new_column": new_column,
+            "col1_type": col1_type,
+            "col2_type": col2_type,
+            "result_type": result_type,
+            "original_columns": table.num_columns,
+            "new_columns": new_table.num_columns,
+            "rows_processed": table.num_rows,
+            "calculated_at": datetime.now().isoformat()
+        }
+
+        logger.info("컬럼 연산 완료: %s %s %s → '%s' (%s타입, %d행)",
+                   col1, operation, col2, new_column, result_type, table.num_rows)
+        return new_table, result_info
+
+    except Exception as e:
+        logger.error("컬럼 연산 실패: %s", e)
+        raise RuntimeError(f"컬럼 연산 중 오류 발생: {str(e)}")
+
+
+def execute_safe_callback(table: pa.Table, callback_code: str) -> Tuple[pa.Table, Dict[str, Any]]:
+    """
+    AST를 사용하여 사용자 정의 PyArrow 코드를 안전하게 실행
+    exec을 사용하지 않고 임시 파일과 subprocess를 활용
+
+    Args:
+        table (pa.Table): 원본 테이블
+        callback_code (str): 실행할 PyArrow 코드
+
+    Returns:
+        Tuple[pa.Table, Dict[str, Any]]: (수정된 테이블, 실행 결과 정보)
+    """
+    if table is None:
+        raise RuntimeError("테이블이 None입니다")
+
+    if not callback_code or not callback_code.strip():
+        raise RuntimeError("실행할 코드가 지정되지 않았습니다")
+
+    # 허용된 안전한 함수/속성명들
+    ALLOWED_NAMES = {
+        # PyArrow Table 메서드들
+        'table', 'select', 'filter', 'take', 'slice', 'sort_by', 'group_by',
+        'append_column', 'add_column', 'set_column', 'remove_column', 'column',
+        'rename_columns', 'cast', 'drop_duplicates', 'column_names', 'num_rows', 'num_columns',
+
+        # PyArrow Compute 함수들
+        'pc', 'pa', 'add', 'subtract', 'multiply', 'divide', 'power',
+        'equal', 'not_equal', 'greater', 'less', 'greater_equal', 'less_equal',
+        'and_', 'or_', 'not_', 'is_null', 'is_valid', 'fill_null',
+        'strptime', 'strftime', 'extract', 'starts_with', 'ends_with',
+        'match_substring', 'replace_substring', 'replace_substring_regex',
+        'length', 'upper', 'lower', 'sum', 'mean', 'min', 'max', 'count',
+        'stddev', 'variance', 'quantile', 'unique', 'value_counts',
+        'concat_tables', 'array', 'field', 'schema',
+
+        # 안전한 내장함수들
+        'len', 'range', 'enumerate', 'zip', 'list', 'dict', 'tuple', 'set',
+        'str', 'int', 'float', 'bool', 'type', 'isinstance', 'min', 'max',
+        'abs', 'round', 'sorted', 'reversed', 'all', 'any', 'print',
+
+        # 기본 타입과 연산
+        'result', 'True', 'False', 'None'
+    }
+
+    try:
+        # 1. AST를 사용한 코드 안전성 검증
+        try:
+            parsed = ast.parse(callback_code)
+        except SyntaxError as e:
+            raise RuntimeError(f"코드 문법 오류: {str(e)}")
+
+        # 2. AST 노드 검증 - 위험한 노드 차단
+        for node in ast.walk(parsed):
+            # 함수/메서드 호출 검증
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    if node.func.id not in ALLOWED_NAMES:
+                        raise RuntimeError(f"허용되지 않는 함수: {node.func.id}")
+                elif isinstance(node.func, ast.Attribute):
+                    # 메서드 호출은 허용 (table.select 등)
+                    if node.func.attr not in ALLOWED_NAMES:
+                        raise RuntimeError(f"허용되지 않는 메서드: {node.func.attr}")
+
+            # 변수명 검증
+            elif isinstance(node, ast.Name):
+                if isinstance(node.ctx, (ast.Store, ast.Load)):
+                    if node.id not in ALLOWED_NAMES:
+                        # 사용자 정의 변수는 허용 (result, temp_var 등)
+                        if not (node.id.startswith(('temp_', 'result', 'filtered', 'new_', 'updated_')) or
+                               node.id.replace('_', '').isalnum()):
+                            raise RuntimeError(f"허용되지 않는 변수명: {node.id}")
+
+            # 위험한 노드 타입들 차단
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                raise RuntimeError("import 구문은 허용되지 않습니다")
+
+            # 속성 접근 검증 (__builtins__ 등 차단)
+            elif isinstance(node, ast.Attribute):
+                if node.attr.startswith('_'):
+                    raise RuntimeError(f"private 속성 접근은 허용되지 않습니다: {node.attr}")
+
+        # 3. 추가 문자열 패턴 검사 (이중 보안)
+        dangerous_patterns = [
+            '__builtins__', '__globals__', '__locals__', 'exec(', 'eval(',
+            'compile(', 'open(', 'file(', '__import__', 'getattr(', 'setattr(',
+            'subprocess', 'os.', 'sys.'
+        ]
+
+        code_lower = callback_code.lower()
+        for pattern in dangerous_patterns:
+            if pattern.lower() in code_lower:
+                raise RuntimeError(f"허용되지 않는 패턴: {pattern}")
+
+        # 3. 임시 파일을 사용한 안전한 실행
+        execution_start = datetime.now()
+        original_rows = table.num_rows
+        original_columns = table.num_columns
+        original_column_names = table.column_names.copy()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 입력 테이블을 임시 parquet 파일로 저장
+            input_file = os.path.join(temp_dir, "input_table.parquet")
+            output_file = os.path.join(temp_dir, "output_table.parquet")
+
+            pq.write_table(table, input_file)
+
+            # 사용자 코드를 적절히 들여쓰기 처리
+            indented_code = ""
+            for line in callback_code.split('\n'):
+                if line.strip():  # 빈 줄이 아닌 경우에만 들여쓰기 추가
+                    indented_code += "    " + line + "\n"
+                else:
+                    indented_code += "\n"
+
+            # 실행할 파이썬 스크립트 생성
+            script_content = f'''import pyarrow.parquet as pq
+import pyarrow as pa
+import pyarrow.compute as pc
+import sys
+
+try:
+    # 입력 테이블 로드
+    table = pq.read_table("{input_file}")
+
+    # 사용자 코드 실행
+{indented_code}
+    # 결과 테이블 결정
+    if 'result' in locals() and isinstance(result, pa.Table):
+        final_table = result
+    else:
+        final_table = table
+
+    # 결과 저장
+    pq.write_table(final_table, "{output_file}")
+
+    # 성공 표시
+    print("SUCCESS")
+
+except Exception as e:
+    print(f"ERROR: {{str(e)}}")
+    sys.exit(1)
+'''
+
+            script_file = os.path.join(temp_dir, "callback_script.py")
+            with open(script_file, 'w', encoding='utf-8') as f:
+                f.write(script_content)
+
+            # subprocess로 격리된 환경에서 실행
+            try:
+                result = subprocess.run([
+                    sys.executable, script_file
+                ], capture_output=True, text=True, timeout=30)  # 30초 타임아웃
+
+                if result.returncode != 0:
+                    error_output = result.stderr.strip() or result.stdout.strip()
+                    raise RuntimeError(f"코드 실행 실패: {error_output}")
+
+                if "SUCCESS" not in result.stdout:
+                    raise RuntimeError("코드 실행이 완료되지 않았습니다")
+
+                # 결과 테이블 로드
+                if not os.path.exists(output_file):
+                    raise RuntimeError("결과 테이블이 생성되지 않았습니다")
+
+                result_table = pq.read_table(output_file)
+
+                if not isinstance(result_table, pa.Table):
+                    raise RuntimeError("올바른 PyArrow Table이 반환되지 않았습니다")
+
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("코드 실행 시간 초과 (30초)")
+            except FileNotFoundError:
+                raise RuntimeError("Python 인터프리터를 찾을 수 없습니다")
+
+        execution_time = (datetime.now() - execution_start).total_seconds()
+
+        # 4. 결과 정보 생성
+        result_info = {
+            "success": True,
+            "original_rows": original_rows,
+            "original_columns": original_columns,
+            "original_column_names": original_column_names,
+            "final_rows": result_table.num_rows,
+            "final_columns": result_table.num_columns,
+            "final_column_names": result_table.column_names,
+            "execution_time_seconds": execution_time,
+            "rows_changed": result_table.num_rows - original_rows,
+            "columns_changed": result_table.num_columns - original_columns,
+            "executed_at": execution_start.isoformat(),
+            "code_executed": callback_code,
+            "execution_method": "subprocess_isolation"
+        }
+
+        logger.info("사용자 콜백 코드 실행 완료 (격리환경): %d행 → %d행, %d열 → %d열 (%.3f초)",
+                   original_rows, result_table.num_rows,
+                   original_columns, result_table.num_columns, execution_time)
+
+        return result_table, result_info
+
+    except Exception as e:
+        logger.error("AST 기반 콜백 코드 실행 실패: %s", e)
+        raise RuntimeError(f"콜백 코드 실행 중 오류 발생: {str(e)}")

@@ -23,7 +23,13 @@ from .data_manager_helper import (
     drop_columns_from_table,
     replace_column_values,
     apply_column_operation,
-    remove_null_rows
+    remove_null_rows,
+    upload_dataset_to_hf,
+    copy_column,
+    rename_column,
+    format_columns_string,
+    calculate_columns_operation,
+    execute_safe_callback
 )
 import json
 import logging
@@ -767,3 +773,243 @@ class DataManager:
         except Exception as e:
             logger.error("NULL row 제거 실패: %s", e)
             raise RuntimeError(f"NULL row 제거 실패: {str(e)}")
+
+    def upload_dataset_to_hf_repo(self, repo_id: str, hf_user_id: str, hub_token: str,
+                                 filename: str = None, private: bool = False) -> Dict[str, Any]:
+        """
+        현재 데이터셋을 HuggingFace Hub에 업로드
+
+        Args:
+            repo_id (str): HuggingFace 리포지토리 ID
+            hf_user_id (str): HuggingFace 사용자 ID
+            hub_token (str): HuggingFace Hub 토큰
+            filename (str, optional): 업로드할 파일명. None이면 자동 생성
+            private (bool): 프라이빗 리포지토리 여부
+
+        Returns:
+            Dict[str, Any]: 업로드 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # HuggingFace 업로드 실행
+            result_info = upload_dataset_to_hf(
+                self.dataset, repo_id, hf_user_id, hub_token, filename, private
+            )
+
+            logger.info("HuggingFace 업로드 완료: 매니저 %s → %s",
+                       self.manager_id, result_info["repo_id"])
+
+            return result_info
+
+        except Exception as e:
+            logger.error("HuggingFace 업로드 실패: %s", e)
+            raise RuntimeError(f"HuggingFace 업로드 실패: {str(e)}")
+
+    def copy_dataset_column(self, source_column: str, new_column: str) -> Dict[str, Any]:
+        """
+        데이터셋의 특정 컬럼을 복사하여 새로운 컬럼으로 추가
+
+        Args:
+            source_column (str): 복사할 원본 컬럼명
+            new_column (str): 새로운 컬럼명
+
+        Returns:
+            Dict[str, Any]: 복사 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 기존 테이블 참조 저장
+            old_table = self.dataset
+
+            # 컬럼 복사 실행
+            new_table, result_info = copy_column(self.dataset, source_column, new_column)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            # 메모리 정리
+            del old_table
+            gc.collect()
+
+            logger.info("컬럼 복사 완료: 매니저 %s에서 '%s' → '%s'",
+                       self.manager_id, source_column, new_column)
+
+            return result_info
+
+        except Exception as e:
+            logger.error("컬럼 복사 실패: %s", e)
+            raise RuntimeError(f"컬럼 복사 실패: {str(e)}")
+
+    def rename_dataset_column(self, old_name: str, new_name: str) -> Dict[str, Any]:
+        """
+        데이터셋의 특정 컬럼 이름을 변경
+
+        Args:
+            old_name (str): 기존 컬럼명
+            new_name (str): 새로운 컬럼명
+
+        Returns:
+            Dict[str, Any]: 이름 변경 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 기존 테이블 참조 저장
+            old_table = self.dataset
+
+            # 컬럼 이름 변경 실행
+            new_table, result_info = rename_column(self.dataset, old_name, new_name)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            # 메모리 정리
+            del old_table
+            gc.collect()
+
+            logger.info("컬럼 이름 변경 완료: 매니저 %s에서 '%s' → '%s'",
+                       self.manager_id, old_name, new_name)
+
+            return result_info
+
+        except Exception as e:
+            logger.error("컬럼 이름 변경 실패: %s", e)
+            raise RuntimeError(f"컬럼 이름 변경 실패: {str(e)}")
+
+    def format_columns_to_string(self, column_names: List[str], template: str, new_column: str) -> Dict[str, Any]:
+        """
+        여러 컬럼의 값들을 문자열 템플릿에 삽입하여 새로운 컬럼 생성
+
+        Args:
+            column_names (List[str]): 사용할 컬럼명들
+            template (str): 문자열 템플릿 (예: "{col1}_aiaiaiai_{col2}")
+            new_column (str): 새로운 컬럼명
+
+        Returns:
+            Dict[str, Any]: 문자열 포맷팅 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 기존 테이블 참조 저장
+            old_table = self.dataset
+
+            # 문자열 포맷팅 실행
+            new_table, result_info = format_columns_string(self.dataset, column_names, template, new_column)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            # 메모리 정리
+            del old_table
+            gc.collect()
+
+            logger.info("컬럼 문자열 포맷팅 완료: 매니저 %s에서 %s → '%s'",
+                       self.manager_id, column_names, new_column)
+
+            return result_info
+
+        except Exception as e:
+            logger.error("컬럼 문자열 포맷팅 실패: %s", e)
+            raise RuntimeError(f"컬럼 문자열 포맷팅 실패: {str(e)}")
+
+    def calculate_columns_to_new(self, col1: str, col2: str, operation: str, new_column: str) -> Dict[str, Any]:
+        """
+        두 컬럼 간 사칙연산을 수행하여 새로운 컬럼 생성
+
+        Args:
+            col1 (str): 첫 번째 컬럼명
+            col2 (str): 두 번째 컬럼명
+            operation (str): 연산자 (+, -, *, /)
+            new_column (str): 새로운 컬럼명
+
+        Returns:
+            Dict[str, Any]: 연산 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 기존 테이블 참조 저장
+            old_table = self.dataset
+
+            # 컬럼 연산 실행
+            new_table, result_info = calculate_columns_operation(self.dataset, col1, col2, operation, new_column)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            # 메모리 정리
+            del old_table
+            gc.collect()
+
+            logger.info("컬럼 연산 완료: 매니저 %s에서 %s %s %s → '%s'",
+                       self.manager_id, col1, operation, col2, new_column)
+
+            return result_info
+
+        except Exception as e:
+            logger.error("컬럼 연산 실패: %s", e)
+            raise RuntimeError(f"컬럼 연산 실패: {str(e)}")
+
+    def execute_dataset_callback(self, callback_code: str) -> Dict[str, Any]:
+        """
+        사용자 정의 PyArrow 코드를 안전하게 실행하여 dataset을 조작
+
+        Args:
+            callback_code (str): 실행할 PyArrow 코드
+
+        Returns:
+            Dict[str, Any]: 콜백 실행 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if self.dataset is None:
+            raise RuntimeError("No dataset loaded")
+
+        try:
+            # 기존 테이블 참조 저장
+            old_table = self.dataset
+
+            # 사용자 콜백 코드 실행
+            new_table, result_info = execute_safe_callback(self.dataset, callback_code)
+
+            # 데이터셋 업데이트
+            self.dataset = new_table
+
+            # 메모리 정리
+            del old_table
+            gc.collect()
+
+            logger.info("사용자 콜백 실행 완료: 매니저 %s, %d행 → %d행, %d열 → %d열",
+                       self.manager_id, result_info["original_rows"],
+                       result_info["final_rows"], result_info["original_columns"],
+                       result_info["final_columns"])
+
+            return result_info
+
+        except Exception as e:
+            logger.error("사용자 콜백 실행 실패: %s", e)
+            raise RuntimeError(f"사용자 콜백 실행 실패: {str(e)}")
