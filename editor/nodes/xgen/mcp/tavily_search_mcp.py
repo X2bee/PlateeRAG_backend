@@ -25,6 +25,6 @@ class TavilySearchMCP(Node):
 
     def execute(self, tavily_api_key: str, max_results: int = 5, *args, **kwargs):
         os.environ["TAVILY_API_KEY"] = tavily_api_key
-        tavily_search_tool = TavilySearchResults(description="Tavily Search Tool", max_results=max_results)
+        tavily_search_tool = TavilySearchResults(description="검색 도구입니다. 사용자가 트렌드, 이슈, 뉴스 등 풍부한 정보를 요청하는 경우, 해당 도구를 사용하여 관련된 정보를 수집하도록 합니다.", max_results=max_results)
 
         return tavily_search_tool
