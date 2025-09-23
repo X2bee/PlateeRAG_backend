@@ -21,6 +21,9 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+# 다운로드 기본 경로 설정
+downloads_path = os.path.join(os.getcwd(), "downloads")
+
 
 def save_and_load_files(uploaded_files: List[IO], filenames: List[str], manager_id: str) -> pa.Table:
     """
@@ -47,7 +50,7 @@ def save_and_load_files(uploaded_files: List[IO], filenames: List[str], manager_
 
     # 저장 경로
     dataset_id = f"dataset_{manager_id}_{int(datetime.now().timestamp())}"
-    save_dir = f"/plateerag_backend/downloads/dataset_local_upload/{dataset_id}"
+    save_dir = os.path.join(downloads_path, "dataset_local_upload", dataset_id)
     os.makedirs(save_dir, exist_ok=True)
 
     tables = []
@@ -576,7 +579,7 @@ def upload_dataset_to_hf(table: pa.Table, repo_id: str, hf_user_id: str, hub_tok
 
     try:
         # 임시 디렉토리 생성
-        upload_dir = f"/plateerag_backend/downloads/tmp/hf_upload_{int(datetime.now().timestamp())}"
+        upload_dir = os.path.join(downloads_path, "tmp", f"hf_upload_{int(datetime.now().timestamp())}")
         os.makedirs(upload_dir, exist_ok=True)
 
         # 파일명 설정
@@ -1094,7 +1097,7 @@ def execute_safe_callback(table: pa.Table, callback_code: str) -> Tuple[pa.Table
         original_column_names = table.column_names.copy()
 
         # 임시 디렉토리 기본 경로 설정
-        base_temp_dir = "/plateerag_backend/downloads/tmp"
+        base_temp_dir = os.path.join(downloads_path, "tmp")
         os.makedirs(base_temp_dir, exist_ok=True)
 
         with tempfile.TemporaryDirectory(dir=base_temp_dir) as temp_dir:
