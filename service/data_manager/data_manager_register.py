@@ -16,21 +16,22 @@ class DataManagerRegistry:
         self._lock = threading.Lock()
         logger.info("DataManagerRegistry initialized")
 
-    def create_manager(self, user_id: str) -> str:
+    def create_manager(self, user_id: str, user_name: str = "Unknown") -> str:
         """
         새로운 DataManager 인스턴스 생성 및 등록
 
         Args:
             user_id (str): 사용자 ID
+            user_name (str): 사용자 이름
 
         Returns:
             str: 생성된 매니저 ID
         """
         with self._lock:
-            manager = DataManager(user_id)
+            manager = DataManager(user_id, user_name)
             self.managers[manager.manager_id] = manager
 
-            logger.info(f"DataManager {manager.manager_id} registered for user {user_id}")
+            logger.info(f"DataManager {manager.manager_id} registered for user {user_name} ({user_id})")
             return manager.manager_id
 
     def get_manager(self, manager_id: str, user_id: str) -> Optional[DataManager]:
@@ -107,14 +108,12 @@ class DataManagerRegistry:
         with self._lock:
             total_managers = len(self.managers)
             active_managers = sum(1 for m in self.managers.values() if m.is_active)
-            total_datasets = sum(len(m.datasets) for m in self.managers.values())
-            total_files = sum(len(m.files) for m in self.managers.values())
+            total_datasets = sum(1 for m in self.managers.values() if m.dataset is not None)
 
             return {
                 'total_managers': total_managers,
                 'active_managers': active_managers,
                 'total_datasets': total_datasets,
-                'total_files': total_files,
                 'managers_by_user': {}
             }
 

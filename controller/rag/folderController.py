@@ -147,11 +147,13 @@ async def delete_folder(request: Request, delete_folder_request: DeleteFolderReq
                                 "collection_id": delete_folder_request.collection_id})
 
         folders_to_delete = app_db.find_by_condition(VectorDBFolders,
-            {'full_path__like__': delete_folder_request.folder_path,
-             'collection_id': delete_folder_request.collection_id,
-             'user_id': user_id})
+            {
+                'full_path__like__': delete_folder_request.folder_path,
+                'collection_id': delete_folder_request.collection_id
+            }
+        )
 
-        collection_find = app_db.find_by_condition(VectorDB, {'id': delete_folder_request.collection_id, 'user_id': user_id})
+        collection_find = app_db.find_by_condition(VectorDB, {'id': delete_folder_request.collection_id})
 
         if not folders_to_delete or not collection_find:
             backend_log.warn("No folders found to delete",

@@ -97,15 +97,26 @@ class DBMemoryNode(Node):
             return None
 
         if content:
-            import re
-            content = re.sub(r'\[Cite\.\s*\{[^}]*\}\]', '', content, flags=re.DOTALL | re.IGNORECASE)
-            
-            if not include_thinking:
-                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
-            
-            content = content.strip()
+            content = self._sanitize_content(content, include_thinking)
 
         return content if content else None
+
+    def _sanitize_content(self, content: str, include_thinking: bool = False) -> str:
+        import re
+        content = re.sub(r'\[Cite\.\s*\{[^}]*\}\]', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r"<FEEDBACK_(LOOP|RESULT|STATUS)>.*?</FEEDBACK_(LOOP|RESULT|STATUS)>", '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r"<TODO_DETAILS>.*?</TODO_DETAILS>", '', content, flags=re.DOTALL | re.IGNORECASE)
+
+        if not include_thinking:
+            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        content = content.strip()
+        if not include_thinking:
+            content = re.sub(r'<TOOLUSELOG>.*?</TOOLUSELOG>', '', content, flags=re.DOTALL | re.IGNORECASE)
+            content = re.sub(r'<TOOLOUTPUTLOG>.*?</TOOLOUTPUTLOG>', '', content, flags=re.DOTALL | re.IGNORECASE)
+
+        return content
 
     def _preprocess_text(self, text: str) -> List[str]:
         """텍스트를 전처리하여 키워드 리스트로 반환"""

@@ -1,6 +1,3 @@
-"""
-Admin 관련 라우터 통합
-"""
 from fastapi import APIRouter
 from .sttController import router as sttRouter
 from .ttsController import router as ttsRouter

@@ -9,24 +9,14 @@ from pydantic import BaseModel, Field
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from service.database.models.user import User
 from controller.helper.singletonHelper import get_db_manager, get_data_manager_registry
 from controller.helper.controllerHelper import extract_user_id_from_request
 
-router = APIRouter(prefix="/api/data-manager", tags=["data-manager"])
+router = APIRouter(prefix="", tags=["data-manager"])
 logger = logging.getLogger("data-manager-controller")
 
 # ========== Request Models ==========
-class LoadDatasetRequest(BaseModel):
-    """데이터셋 로드 요청"""
-    dataset_name: str = Field(..., description="Huggingface 데이터셋 이름", example="squad")
-    config_name: Optional[str] = Field(None, description="설정 이름", example="plain_text")
-    split: Optional[str] = Field(None, description="데이터 분할", example="train")
-
-class DownloadFileRequest(BaseModel):
-    """파일 다운로드 요청"""
-    repo_id: str = Field(..., description="Huggingface 리포지토리 ID", example="microsoft/DialoGPT-medium")
-    filename: str = Field(..., description="다운로드할 파일명", example="config.json")
-
 class GetManagerStatusRequest(BaseModel):
     """매니저 상태 조회 요청"""
     manager_id: str = Field(..., description="매니저 ID")
@@ -35,73 +25,44 @@ class DeleteManagerRequest(BaseModel):
     """매니저 삭제 요청"""
     manager_id: str = Field(..., description="매니저 ID")
 
-class ListManagerDatasetsRequest(BaseModel):
-    """매니저 데이터셋 목록 조회 요청"""
+class SetDatasetRequest(BaseModel):
+    """데이터셋 설정 요청"""
     manager_id: str = Field(..., description="매니저 ID")
+    dataset: Any = Field(..., description="설정할 데이터셋")
 
-class LoadManagerDatasetRequest(BaseModel):
-    """매니저 데이터셋 로드 요청"""
+class GetDatasetRequest(BaseModel):
+    """데이터셋 조회 요청"""
     manager_id: str = Field(..., description="매니저 ID")
-    dataset_name: str = Field(..., description="Huggingface 데이터셋 이름", example="squad")
-    config_name: Optional[str] = Field(None, description="설정 이름", example="plain_text")
-    split: Optional[str] = Field(None, description="데이터 분할", example="train")
 
 class RemoveDatasetRequest(BaseModel):
     """데이터셋 제거 요청"""
     manager_id: str = Field(..., description="매니저 ID")
-    dataset_key: str = Field(..., description="제거할 데이터셋 키")
 
-class ListManagerFilesRequest(BaseModel):
-    """매니저 파일 목록 조회 요청"""
+class GetDatasetSampleRequest(BaseModel):
+    """데이터셋 샘플 조회 요청"""
     manager_id: str = Field(..., description="매니저 ID")
-
-class DownloadManagerFileRequest(BaseModel):
-    """매니저 파일 다운로드 요청"""
-    manager_id: str = Field(..., description="매니저 ID")
-    repo_id: str = Field(..., description="Huggingface 리포지토리 ID", example="microsoft/DialoGPT-medium")
-    filename: str = Field(..., description="다운로드할 파일명", example="config.json")
-
-class RemoveFileRequest(BaseModel):
-    """파일 제거 요청"""
-    manager_id: str = Field(..., description="매니저 ID")
-    file_key: str = Field(..., description="제거할 파일 키")
+    num_samples: int = Field(10, description="샘플 수", ge=1, le=100)
 
 # ========== Response Models ==========
 class ManagerStatusResponse(BaseModel):
     """매니저 상태 응답"""
     manager_id: str = Field(..., description="매니저 ID")
     user_id: str = Field(..., description="사용자 ID")
+    user_name: str = Field(..., description="사용자 이름")
     created_at: str = Field(..., description="생성 시간")
     is_active: bool = Field(..., description="활성 상태")
-    current_memory_mb: float = Field(..., description="현재 메모리 사용량 (MB)")
-    current_cpu_percent: float = Field(..., description="현재 CPU 사용률 (%)")
-    peak_memory_mb: float = Field(..., description="최고 메모리 사용량 (MB)")
-    average_cpu_percent: float = Field(..., description="평균 CPU 사용률 (%)")
-    memory_delta_mb: float = Field(..., description="초기 메모리 대비 증가량 (MB)")
-    datasets_count: int = Field(..., description="로드된 데이터셋 수")
-    models_count: int = Field(..., description="로드된 모델 수")
-    files_count: int = Field(..., description="다운로드된 파일 수")
+    current_instance_memory_mb: float = Field(..., description="현재 인스턴스 메모리 사용량 (MB)")
+    initial_instance_memory_mb: float = Field(..., description="초기 인스턴스 메모리 사용량 (MB)")
+    peak_instance_memory_mb: float = Field(..., description="최고 인스턴스 메모리 사용량 (MB)")
+    memory_growth_mb: float = Field(..., description="메모리 증가량 (MB)")
+    dataset_memory_mb: float = Field(..., description="데이터셋 메모리 사용량 (MB)")
+    has_dataset: bool = Field(..., description="데이터셋 보유 여부")
+    memory_distribution: Dict[str, float] = Field(..., description="메모리 분포")
 
 class ManagerListResponse(BaseModel):
     """매니저 목록 응답"""
     managers: Dict[str, ManagerStatusResponse] = Field(..., description="매니저 목록")
     total: int = Field(..., description="총 매니저 수")
-
-class DatasetInfoResponse(BaseModel):
-    """데이터셋 정보 응답"""
-    dataset_key: str = Field(..., description="데이터셋 키")
-    name: str = Field(..., description="데이터셋 이름")
-    config: Optional[str] = Field(None, description="설정 이름")
-    split: Optional[str] = Field(None, description="데이터 분할")
-    size: Any = Field(..., description="데이터셋 크기")
-
-class FileInfoResponse(BaseModel):
-    """파일 정보 응답"""
-    repo_id: str = Field(..., description="리포지토리 ID")
-    filename: str = Field(..., description="파일명")
-    local_path: str = Field(..., description="로컬 경로")
-    file_size: int = Field(..., description="파일 크기 (바이트)")
-    downloaded_at: str = Field(..., description="다운로드 시간")
 
 # ========== Helper Functions ==========
 def get_manager_with_auth(registry, manager_id: str, user_id: str):
@@ -148,10 +109,14 @@ async def create_manager(request: Request) -> Dict[str, Any]:
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
 
+        app_db = get_db_manager(request)
+        user_db = app_db.find_by_id(User, user_id)
+        user_name = user_db.username or user_db.full_name or "Unknown"
+
         registry = get_data_manager_registry(request)
 
         # 매니저 생성
-        manager_id = registry.create_manager(user_id)
+        manager_id = registry.create_manager(user_id, user_name)
 
         logger.info(f"Data Manager {manager_id} 생성됨 (사용자: {user_id})")
 
@@ -159,12 +124,12 @@ async def create_manager(request: Request) -> Dict[str, Any]:
             "success": True,
             "manager_id": manager_id,
             "user_id": user_id,
+            "user_name": user_name,
             "message": "Data Manager가 성공적으로 생성되었습니다",
             "created_at": datetime.now().isoformat(),
             "endpoints": {
                 "status": f"/api/data-manager/managers/{manager_id}/status",
-                "datasets": f"/api/data-manager/managers/{manager_id}/datasets",
-                "files": f"/api/data-manager/managers/{manager_id}/files"
+                "dataset": f"/api/data-manager/managers/{manager_id}/dataset"
             }
         }
 
@@ -250,7 +215,6 @@ async def delete_manager(request: Request, delete_request: DeleteManagerRequest)
         logger.error(f"매니저 삭제 실패: {e}")
         raise HTTPException(status_code=500, detail="매니저 삭제 실패")
 
-
 @router.get("/stats",
     summary="전체 통계 조회",
     description="모든 Data Manager의 통계 정보를 조회합니다.",
@@ -270,3 +234,65 @@ async def get_total_stats(request: Request) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"통계 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="통계 조회 실패")
+
+@router.post("/managers/dataset/sample",
+    summary="데이터셋 샘플 조회",
+    description="지정된 Data Manager의 데이터셋 샘플을 조회합니다.",
+    response_model=Dict[str, Any])
+async def get_dataset_sample(request: Request, sample_request: GetDatasetSampleRequest) -> Dict[str, Any]:
+    """데이터셋 샘플 조회"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, sample_request.manager_id, user_id)
+        sample_data = manager.get_dataset_sample(sample_request.num_samples)
+        logger.info(f"Dataset sample retrieved for manager {sample_request.manager_id} (samples: {sample_request.num_samples})")
+
+        return sample_data
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error(f"데이터셋 샘플 조회 실패: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"예상치 못한 오류: {e}")
+        raise HTTPException(status_code=500, detail="데이터셋 샘플 조회 중 오류가 발생했습니다")
+
+@router.post("/managers/dataset/remove",
+    summary="데이터셋 제거",
+    description="지정된 Data Manager의 데이터셋을 제거합니다.",
+    response_model=Dict[str, Any])
+async def remove_dataset(request: Request, remove_request: RemoveDatasetRequest) -> Dict[str, Any]:
+    """데이터셋 제거"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, remove_request.manager_id, user_id)
+
+        success = manager.remove_dataset()
+
+        if not success:
+            raise HTTPException(status_code=404, detail="제거할 데이터셋이 없습니다")
+
+        logger.info(f"Dataset removed from manager {remove_request.manager_id} (사용자: {user_id})")
+
+        return {
+            "success": True,
+            "manager_id": remove_request.manager_id,
+            "message": "데이터셋이 성공적으로 제거되었습니다",
+            "removed_at": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"데이터셋 제거 실패: {e}")
+        raise HTTPException(status_code=500, detail="데이터셋 제거 실패")
+

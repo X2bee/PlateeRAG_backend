@@ -60,3 +60,6 @@ def api_collection(self, request: Request) -> Dict[str, Any]:
 12. description (옵션: 기본값 None)
 해당 함수를 설명해주는 값.
 해당 값이 존재하면 워크플로우 에디터에서 설명을 표시해 줌.
+
+13. dependency (옵션: 기본값 None)
+파라미터 의존성을 설정하면 해당 파라미터가 True일때 활성화됨
