@@ -47,7 +47,7 @@ def save_and_load_files(uploaded_files: List[IO], filenames: List[str], manager_
 
     # 저장 경로
     dataset_id = f"dataset_{manager_id}_{int(datetime.now().timestamp())}"
-    save_dir = f"/dataset_local_upload/{dataset_id}"
+    save_dir = f"/plateerag_backend/dataset_local_upload/{dataset_id}"
     os.makedirs(save_dir, exist_ok=True)
 
     tables = []
@@ -576,7 +576,7 @@ def upload_dataset_to_hf(table: pa.Table, repo_id: str, hf_user_id: str, hub_tok
 
     try:
         # 임시 디렉토리 생성
-        upload_dir = f"/tmp/hf_upload_{int(datetime.now().timestamp())}"
+        upload_dir = f"/plateerag_backend/tmp/hf_upload_{int(datetime.now().timestamp())}"
         os.makedirs(upload_dir, exist_ok=True)
 
         # 파일명 설정
@@ -1093,7 +1093,11 @@ def execute_safe_callback(table: pa.Table, callback_code: str) -> Tuple[pa.Table
         original_columns = table.num_columns
         original_column_names = table.column_names.copy()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        # 임시 디렉토리 기본 경로 설정
+        base_temp_dir = "/plateerag_backend/tmp"
+        os.makedirs(base_temp_dir, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(dir=base_temp_dir) as temp_dir:
             # 입력 테이블을 임시 parquet 파일로 저장
             input_file = os.path.join(temp_dir, "input_table.parquet")
             output_file = os.path.join(temp_dir, "output_table.parquet")
