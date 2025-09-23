@@ -407,7 +407,7 @@ class DataManager:
 
         try:
             # huggingface_cache 디렉토리 생성
-            cache_dir = "/huggingface_cache"
+            cache_dir = "/plateerag_backend/huggingface_cache"
             os.makedirs(cache_dir, exist_ok=True)
 
             logger.info("Starting dataset download from %s for manager %s", repo_id, self.manager_id)
@@ -518,7 +518,7 @@ class DataManager:
         try:
             # 출력 경로가 지정되지 않으면 자동 생성
             if output_path is None:
-                download_dir = "/tmp/dataset_downloads"
+                download_dir = "/plateerag_backend/tmp/dataset_downloads"
                 os.makedirs(download_dir, exist_ok=True)
                 output_path = os.path.join(download_dir, f"dataset_{self.manager_id}.csv")
 
@@ -553,7 +553,7 @@ class DataManager:
         try:
             # 출력 경로가 지정되지 않으면 자동 생성
             if output_path is None:
-                download_dir = "/tmp/dataset_downloads"
+                download_dir = "/plateerag_backend/tmp/dataset_downloads"
                 os.makedirs(download_dir, exist_ok=True)
                 output_path = os.path.join(download_dir, f"dataset_{self.manager_id}.parquet")
 
