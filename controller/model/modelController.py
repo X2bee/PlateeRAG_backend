@@ -17,6 +17,7 @@ from controller.helper.singletonHelper import get_db_manager, get_config_compose
 from service.database.logger_helper import create_logger
 from service.model.model_registry_service import ModelRegistryService
 from service.model.model_inference_service import ModelInferenceService
+from service.model.model_deletion_service import ModelDeletionService
 
 logger = logging.getLogger("model-controller")
 
@@ -232,6 +233,79 @@ async def upload_model(
     }
 
 
+@router.get("/")
+async def list_models(request: Request, limit: int = 100, offset: int = 0):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, _coerce_user_id(user_id), request)
+
+    registry_service = ModelRegistryService(app_db)
+    models = registry_service.list_models(limit=limit, offset=offset)
+
+    serialized = [
+        {
+            "id": model.id,
+            "model_name": model.model_name,
+            "model_version": model.model_version,
+            "framework": model.framework,
+            "file_path": model.file_path,
+            "file_size": model.file_size,
+            "file_checksum": model.file_checksum,
+            "status": model.status,
+            "uploaded_by": model.uploaded_by,
+            "created_at": model.created_at.isoformat() if model.created_at else None,
+            "updated_at": model.updated_at.isoformat() if model.updated_at else None,
+        }
+        for model in models
+    ]
+
+    backend_log.success(
+        "Listed models",
+        metadata={"count": len(serialized), "limit": limit, "offset": offset}
+    )
+
+    return {"items": serialized, "limit": limit, "offset": offset}
+
+
+@router.get("/{model_id}")
+async def get_model_detail(request: Request, model_id: int):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, _coerce_user_id(user_id), request)
+
+    registry_service = ModelRegistryService(app_db)
+    model = registry_service.get_model_by_id(model_id)
+
+    if not model:
+        backend_log.warn(
+            "Requested missing model",
+            metadata={"model_id": model_id}
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MODEL_NOT_FOUND")
+
+    backend_log.success(
+        "Retrieved model detail",
+        metadata={"model_id": model_id}
+    )
+
+    return {
+        "id": model.id,
+        "model_name": model.model_name,
+        "model_version": model.model_version,
+        "framework": model.framework,
+        "file_path": model.file_path,
+        "file_size": model.file_size,
+        "file_checksum": model.file_checksum,
+        "input_schema": model.input_schema,
+        "output_schema": model.output_schema,
+        "metadata": model.metadata,
+        "status": model.status,
+        "uploaded_by": model.uploaded_by,
+        "created_at": model.created_at.isoformat() if model.created_at else None,
+        "updated_at": model.updated_at.isoformat() if model.updated_at else None,
+    }
+
+
 @router.post("/infer")
 async def run_inference(request: Request, payload: InferenceRequest):
     user_id = extract_user_id_from_request(request)
@@ -287,3 +361,81 @@ async def run_inference(request: Request, payload: InferenceRequest):
         },
         "result": inference_result,
     }
+
+
+@router.post("/sync")
+async def sync_model_artifacts(request: Request):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, _coerce_user_id(user_id), request)
+
+    registry_service = ModelRegistryService(app_db)
+    deletion_service = ModelDeletionService(app_db)
+
+    models = registry_service.list_models(limit=10_000)
+    removed_ids = []
+
+    for model in models:
+        try:
+            path = Path(model.file_path)
+        except TypeError:
+            path = None
+
+        if not path or not path.exists():
+            if deletion_service.delete(model.id, model=model, remove_artifact=False):
+                removed_ids.append(model.id)
+
+    backend_log.success(
+        "Model artifact sync completed",
+        metadata={"checked": len(models), "removed": len(removed_ids)}
+    )
+
+    return {
+        "checked": len(models),
+        "removed": len(removed_ids),
+        "removed_ids": removed_ids,
+    }
+
+
+@router.delete("/{model_id}")
+async def delete_model(request: Request, model_id: int):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, _coerce_user_id(user_id), request)
+
+    deletion_service = ModelDeletionService(app_db)
+    existing = deletion_service.get_by_id(model_id)
+
+    if not existing:
+        backend_log.warn(
+            "Attempted to delete missing model",
+            metadata={"model_id": model_id}
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MODEL_NOT_FOUND")
+
+    try:
+        deleted = deletion_service.delete(model_id, model=existing, remove_artifact=True)
+    except RuntimeError as exc:
+        backend_log.error(
+            "Failed to remove model artifact",
+            metadata={"model_id": model_id},
+            exception=exc,
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_FILE_DELETE_FAILED") from exc
+
+    if deleted:
+        backend_log.success(
+            "Model deleted",
+            metadata={
+                "model_id": model_id,
+                "model_name": existing.model_name,
+                "model_version": existing.model_version,
+            }
+        )
+        return {"message": "MODEL_DELETED", "model_id": model_id}
+
+    backend_log.error(
+        "Failed to delete model",
+        metadata={"model_id": model_id}
+    )
+    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_DELETE_FAILED")

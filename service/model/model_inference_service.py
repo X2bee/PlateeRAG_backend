@@ -1,7 +1,10 @@
 """Utility for loading models and running inference."""
 from __future__ import annotations
 
+import importlib
 import logging
+import pickle
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,14 +14,17 @@ try:  # Optional dependency for serialization
 except ImportError:  # pragma: no cover - fallback handled below
     joblib = None
 
-import pickle
-
 try:  # Optional scientific stack
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover - fallback handled below
     np = None
 
 logger = logging.getLogger("model-inference-service")
+
+MODULE_FALLBACKS = {
+    "tests.assets.sample_demo_model": "service.model.sample_demo_model",
+}
+
 
 class ModelInferenceService:
     """Provides cached model loading and inference helpers."""
@@ -38,11 +44,15 @@ class ModelInferenceService:
             if cache_entry and cache_entry.get("mtime") == mtime:
                 return cache_entry["model"]
 
-            if joblib is not None:
-                model = joblib.load(path)
-            else:
-                with path.open("rb") as artifact:
-                    model = pickle.load(artifact)
+            try:
+                model = self._load_artifact(path)
+            except ModuleNotFoundError as exc:
+                missing_module = getattr(exc, "name", None)
+                if missing_module and self._ensure_fallback_module(missing_module):
+                    model = self._load_artifact(path)
+                else:
+                    raise
+
             self._cache[str(path)] = {"model": model, "mtime": mtime}
             logger.info("Loaded model from %s", path)
             return model
@@ -87,7 +97,6 @@ class ModelInferenceService:
             ]
             return ModelInferenceService._to_array(rows)
 
-        # Treat as a single record represented by scalars
         if isinstance(raw_inputs, (list, tuple)):
             coerced = [ModelInferenceService._coerce_value(value) for value in raw_inputs]
         else:
@@ -143,6 +152,28 @@ class ModelInferenceService:
             except ValueError:
                 return value
         return value
+
+    @staticmethod
+    def _load_artifact(path: Path) -> Any:
+        if joblib is not None:
+            return joblib.load(path)
+        with path.open("rb") as artifact:
+            return pickle.load(artifact)
+
+    def _ensure_fallback_module(self, module_name: str) -> bool:
+        fallback = MODULE_FALLBACKS.get(module_name)
+        if not fallback:
+            return False
+        try:
+            module = importlib.import_module(fallback)
+            sys.modules[module_name] = module
+            logger.warning(
+                "Registered fallback module mapping %s -> %s", module_name, fallback
+            )
+            return True
+        except ModuleNotFoundError:
+            logger.error("Fallback module %s not found", fallback)
+            return False
 
     def clear_cache(self, file_path: str):
         resolved = str(Path(file_path).expanduser().resolve())

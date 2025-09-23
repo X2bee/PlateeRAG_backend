@@ -149,6 +149,10 @@ class AppDatabaseManager:
             self.logger.error("Failed to delete %s with id %s: %s",
                             model_class.__name__, record_id, e)
             return False
+        except Exception as e:
+            self.logger.error("Unexpected error deleting %s with id %s: %s",
+                              model_class.__name__, record_id, e)
+            return False
 
     def delete_by_condition(self, model_class: Type[BaseModel], conditions: Dict[str, Any]) -> bool:
         """조건으로 레코드 삭제"""
