@@ -12,6 +12,7 @@ from itertools import chain
 from typing import ClassVar, Iterator, List, Tuple, Union
 
 import requests
+import pytz
 from service.epg2xml.utils import Element, PrefixLogger, RateLimiter, dump_json
 
 log = logging.getLogger("PROV")
@@ -422,7 +423,8 @@ class EPGProvider:
             channels = channelinfo["CHANNELS"]
             assert total == len(channels), "TOTAL != len(CHANNELS)"
             updated_at = datetime.fromisoformat(channelinfo["UPDATED"])
-            if (datetime.now() - updated_at).total_seconds() <= 3600 * 24 * 4:
+            seoul_tz = pytz.timezone('Asia/Seoul')
+            if (datetime.now(seoul_tz) - updated_at).total_seconds() <= 3600 * 24 * 4:
                 self.svc_channels = channels
                 plog.info("%03d service channels loaded from cache", len(channels))
                 return
@@ -558,8 +560,9 @@ class EPGHandler:
                 p.load_svc_channels(channeljson=channeljson)
         if any(p.was_channel_updated for p in self.providers):
             for p in self.providers:
+                seoul_tz = pytz.timezone('Asia/Seoul')
                 channeljson[p.provider_name.upper()] = {
-                    "UPDATED": datetime.now().isoformat(),
+                    "UPDATED": datetime.now(seoul_tz).isoformat(),
                     "TOTAL": len(p.svc_channels),
                     "CHANNELS": p.svc_channels,
                 }

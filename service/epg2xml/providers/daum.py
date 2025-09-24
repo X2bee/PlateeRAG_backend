@@ -70,14 +70,31 @@ class DAUM(EPGProvider):
         assert soup.find_all(attrs={"disp-attr": "B3T"}), "EPG 정보가 없거나 없는 채널입니다"
         days = soup.select('div[class="tbl_head head_type2"] > span > span[class="date"]')
 
-        # 연도 추정
-        currdate = datetime.now()  # 언제나 basedate보다 미래
+        # 현재 서울 시간 기준으로 올바른 날짜 찾기
+        import pytz
+        seoul_tz = pytz.timezone('Asia/Seoul')
+        currdate = datetime.now(seoul_tz)
+        current_date_str = currdate.strftime("%m.%d")
+
+        # 오늘 날짜와 일치하는 인덱스 찾기
+        start_day_index = 0
+        for idx, day_elem in enumerate(days):
+            if day_elem.text.strip() == current_date_str:
+                start_day_index = idx
+                break
+
+        # 첫 번째 날짜를 기준으로 basedate 설정
         basedate = datetime.strptime(days[0].text.strip(), "%m.%d").replace(year=currdate.year)
+        basedate = seoul_tz.localize(basedate)  # timezone aware로 변환
         if (basedate - currdate).days > 0:
             basedate = basedate.replace(year=basedate.year - 1)
 
         _epgs = []
-        for nd, _ in enumerate(days):
+        # 현재 날짜부터 데이터 가져오기 (최대 FETCH_LIMIT 일수만큼)
+        fetch_limit = int(self.cfg.get("FETCH_LIMIT", 1))
+        end_day_index = min(start_day_index + fetch_limit, len(days))
+
+        for nd in range(start_day_index, end_day_index):
             hours = soup.select(f'[id="tvProgramListWrap"] > table > tbody > tr > td:nth-of-type({nd+1})')
             assert len(hours) == 24, f"24개의 시간 행이 있어야 합니다: 현재: {len(hours):d}"
             for nh, hour in enumerate(hours):

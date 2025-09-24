@@ -4,8 +4,9 @@ from itertools import islice
 from typing import List
 
 import requests
+import pytz
 
-from epg2xml.providers import EPGProgram, EPGProvider
+from service.epg2xml.providers import EPGProgram, EPGProvider
 
 log = logging.getLogger(__name__.rsplit(".", maxsplit=1)[-1].upper())
 today = date.today()
@@ -90,11 +91,12 @@ class TVING(EPGProvider):
                     pass
             return None
 
+        seoul_tz = pytz.timezone('Asia/Seoul')
         params = {
             "broadDate": today.strftime("%Y%m%d"),
             "broadcastDate": today.strftime("%Y%m%d"),
-            "startBroadTime": datetime.now().strftime("%H0000"),
-            "endBroadTime": (datetime.now() + timedelta(hours=3)).strftime("%H0000"),
+            "startBroadTime": datetime.now(seoul_tz).strftime("%H0000"),
+            "endBroadTime": (datetime.now(seoul_tz) + timedelta(hours=3)).strftime("%H0000"),
         }
         return [
             {
@@ -122,7 +124,8 @@ class TVING(EPGProvider):
                 day = today + timedelta(days=nd)
                 params.update({"broadDate": day.strftime("%Y%m%d"), "broadcastDate": day.strftime("%Y%m%d")})
                 for t in range(8):
-                    if nd == 0 and (t + 1) * 3 < datetime.now().hour:
+                    seoul_tz = pytz.timezone('Asia/Seoul')
+                    if nd == 0 and (t + 1) * 3 < datetime.now(seoul_tz).hour:
                         continue
                     params.update({"startBroadTime": f"{t*3:02d}0000", "endBroadTime": f"{t*3+3:02d}0000"})
                     for ch in self.__get(self.url, params=params):

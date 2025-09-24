@@ -3,8 +3,9 @@ from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import List
 from xml.sax.saxutils import unescape
+import pytz
 
-from epg2xml.providers import EPGProgram, EPGProvider
+from service.epg2xml.providers import EPGProgram, EPGProvider
 
 log = logging.getLogger(__name__.rsplit(".", maxsplit=1)[-1].upper())
 today = date.today()
@@ -60,7 +61,8 @@ class WAVVE(EPGProvider):
 
     def get_svc_channels(self) -> List[dict]:
         today_str = today.strftime("%Y-%m-%d")
-        hour_min = datetime.now().hour // 3
+        seoul_tz = pytz.timezone('Asia/Seoul')
+        hour_min = datetime.now(seoul_tz).hour // 3
         # 현재 시간과 가까운 미래에 서비스 가능한 채널만 가져옴
         params = {
             "enddatetime": f"{today_str} {(hour_min+1)*3:02d}:00",
@@ -124,10 +126,11 @@ class WAVVE(EPGProvider):
         # parameters for requests
         channeldict = {}
         params = {"genre": "all", "limit": 500, "offset": 0}
+        seoul_tz = pytz.timezone('Asia/Seoul')
         for nd in range(int(self.cfg["FETCH_LIMIT"])):
             day = (today + timedelta(days=nd)).strftime("%Y-%m-%d")
             for t in range(8):
-                if nd == 0 and (t + 1) * 3 < datetime.now().hour:
+                if nd == 0 and (t + 1) * 3 < datetime.now(seoul_tz).hour:
                     continue
                 params.update({"startdatetime": f"{day} {t*3:02d}:00", "enddatetime": f"{day} {t*3+3:02d}:00"})
                 for ch in self.__get("/live/epgs", params=params)["list"]:

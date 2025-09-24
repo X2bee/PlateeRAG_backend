@@ -2,12 +2,15 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import List
 from xml.sax.saxutils import unescape
+import pytz
 
 from . import EPGProgram, EPGProvider, no_endtime
 from ..utils import ParserBeautifulSoup as BeautifulSoup
 
 log = logging.getLogger(__name__.rsplit(".", maxsplit=1)[-1].upper())
-today = date.today()
+# 서울 시간 기준으로 오늘 날짜 가져오기
+seoul_tz = pytz.timezone('Asia/Seoul')
+today = datetime.now(seoul_tz).date()
 
 CH_CATE = [
     {"name": "지상파", "u1": "100"},

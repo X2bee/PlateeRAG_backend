@@ -11,6 +11,7 @@ from functools import wraps
 from math import floor
 from pathlib import Path
 from typing import Callable
+import pytz
 
 from bs4 import BeautifulSoup, FeatureNotFound
 
@@ -19,7 +20,7 @@ log = logging.getLogger("UTILS")
 
 def get_cache_file_path(filename: str = "test_channels.json") -> str:
     """
-    downloads/epg_{YYYY-MM-DD} 구조로 캐시 파일 경로를 생성합니다.
+    downloads/epg_{YYYY-MM-DD} 구조로 캐시 파일 경로를 생성합니다. (서울 시간 기준)
 
     Args:
         filename: 캐시 파일명 (기본값: "test_channels.json")
@@ -27,8 +28,9 @@ def get_cache_file_path(filename: str = "test_channels.json") -> str:
     Returns:
         str: 생성된 캐시 파일의 전체 경로
     """
-    # 현재 날짜를 YYYY-MM-DD 형식으로 가져오기
-    today = datetime.now().strftime("%Y-%m-%d")
+    # 현재 날짜를 YYYY-MM-DD 형식으로 가져오기 (서울 시간 기준)
+    seoul_tz = pytz.timezone('Asia/Seoul')
+    today = datetime.now(seoul_tz).strftime("%Y-%m-%d")
 
     # downloads 폴더 경로 설정 (프로젝트 루트 기준)
     downloads_path = os.path.join(os.getcwd(), "downloads")
