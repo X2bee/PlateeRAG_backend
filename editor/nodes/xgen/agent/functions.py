@@ -84,6 +84,18 @@ def _validate_and_fix_tools(tools_list):
             if original_func_name != sanitized_func_name:
                 logger.warning(f"Tool func name sanitized: '{original_func_name}' -> '{sanitized_func_name}'")
                 tool.func.__name__ = sanitized_func_name
+
+        # OpenAI API의 tool calling을 위한 추가 검증
+        if hasattr(tool, 'args_schema'):
+            # args_schema가 None인 경우 기본 스키마로 대체
+            if tool.args_schema is None:
+                from pydantic import BaseModel, Field
+                class DefaultToolSchema(BaseModel):
+                    """Default schema for tools without explicit arguments"""
+                    pass
+                tool.args_schema = DefaultToolSchema
+                logger.info(f"Tool '{tool.name}' had no args_schema, assigned default schema")
+
         validated_tools.append(tool)
     return validated_tools
 
@@ -103,7 +115,7 @@ def _flatten_tools_list(tools_list):
     logger.info(f"Tools flattened: {len(tools_list)} items -> {len(flattened)} items")
     return flattened
 
-def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages=None, streaming=True):
+def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages=None, streaming=True, plan=None):
     from langchain_openai import ChatOpenAI
     from editor.utils.helper.service_helper import AppServiceManager
 
@@ -136,9 +148,11 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
     tools_list = []
     if tools:
         tools_list = tools if isinstance(tools, list) else [tools]
-        tools_list = _flatten_tools_list(tools_list)
-        # OpenAI API 요구사항에 맞게 tool name 검증 및 수정
-        tools_list = _validate_and_fix_tools(tools_list)
+    if plan and "tools" in plan and isinstance(plan["tools"], list) and len(plan["tools"]) > 0:
+        tools_list.extend(plan["tools"])
+
+    tools_list = _flatten_tools_list(tools_list)
+    tools_list = _validate_and_fix_tools(tools_list)
 
     chat_history = []
     if memory:
@@ -299,7 +313,7 @@ def create_json_output_prompt(args_schema, original_prompt):
     escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
     return f"{original_prompt}\n\n{escaped_instructions}"
 
-def create_tool_context_prompt(additional_rag_context, default_prompt, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True):
+def create_tool_context_prompt(additional_rag_context, default_prompt, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True, plan=None):
     """
     Tool context prompt 생성 - 메모리가 있을 때만 최적화 기능 사용
 
@@ -310,6 +324,10 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
         llm: LLM 객체 (최적화 사용 시 필요)
     """
     from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+    if plan and "steps" in plan and isinstance(plan["steps"], list) and len(plan["steps"]) > 0:
+        plan_description = "\n".join(plan["steps"])
+        default_prompt = f"사용자 요청이 적절한 경우, 다음의 계획에 따라 문제를 해결하십시오: {plan_description}\n\n{default_prompt}"
 
     # 기존 방식 (메모리가 없거나 최적화 비활성화)
     if additional_rag_context and additional_rag_context.strip():
@@ -329,7 +347,7 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
         ])
     return final_prompt
 
-def create_context_prompt(additional_rag_context, default_prompt, strict_citation, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True):
+def create_context_prompt(additional_rag_context, default_prompt, strict_citation, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True, plan=None):
     """
     Context prompt 생성 - 메모리가 있을 때만 최적화 기능 사용
 
@@ -340,6 +358,10 @@ def create_context_prompt(additional_rag_context, default_prompt, strict_citatio
         llm: LLM 객체 (최적화 사용 시 필요)
     """
     from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+    if plan and "steps" in plan and isinstance(plan["steps"], list) and len(plan["steps"]) > 0:
+        plan_description = "\n".join(plan["steps"])
+        default_prompt = f"사용자 요청이 적절한 경우, 다음의 계획에 따라 문제를 해결하십시오: {plan_description}\n\n{default_prompt}"
 
     # 기존 방식 (메모리가 없거나 최적화 비활성화)
     if additional_rag_context and additional_rag_context.strip():

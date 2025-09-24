@@ -103,11 +103,11 @@ class APICallingTool(Node):
         additional_params = kwargs.get("additional_params", {})
         def create_api_tool():
             if args_schema is None:
-                # 빈 스키마를 명시적으로 생성
+                # OpenAI API 호환을 위한 기본 스키마 생성
                 from pydantic import BaseModel
-                class EmptySchema(BaseModel):
-                    pass
-                actual_args_schema = EmptySchema
+                class DefaultSchema(BaseModel):
+                    return_dict: bool = Field(default=False, description="Whether to return the response as a dictionary or string")
+                actual_args_schema = DefaultSchema
             else:
                 actual_args_schema = args_schema
 
@@ -124,7 +124,7 @@ class APICallingTool(Node):
                     for key, value in additional_params.items():
                         parsed_additional_params[key] = parse_param_value(value)
                     request_data.update(parsed_additional_params)
-                    
+
                 endpoint = api_endpoint
                 if request_data:
                     placeholder_pattern = r'\{([^}]+)\}'

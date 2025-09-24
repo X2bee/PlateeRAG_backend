@@ -42,6 +42,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
         {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema", "required": False},
+        {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
         {"id": "feedback_criteria", "name": "Feedback Criteria", "type": "FeedbackCrit", "multi": False, "required": False, "value": ""},
     ]
 
@@ -91,6 +92,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
+        plan: Optional[Dict[str, Any]] = None,
         feedback_criteria: str = "",
         model: str = "x2bee/Polar-14B",
         temperature: float = 0.7,
@@ -133,6 +135,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
                     max_tokens,
                     base_url,
                     streaming=True,
+                    plan=plan,
                 )
 
                 additional_rag_context = ""
@@ -145,11 +148,13 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
                 prompt_template_with_tool = create_tool_context_prompt(
                     additional_rag_context,
                     enhanced_prompt,
+                    plan=plan
                 )
                 prompt_template_without_tool = create_context_prompt(
                     additional_rag_context,
                     enhanced_prompt,
                     strict_citation,
+                    plan=plan
                 )
 
                 emitter.emit_status("<FEEDBACK_STATUS>실행 전략 평가 중...</FEEDBACK_STATUS>\n")
