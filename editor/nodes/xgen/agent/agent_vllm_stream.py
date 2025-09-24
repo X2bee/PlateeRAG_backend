@@ -28,6 +28,7 @@ class AgentVLLMStreamNode(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
         {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
+        {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
     ]
     outputs = [
         {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}
@@ -57,6 +58,7 @@ class AgentVLLMStreamNode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
+        plan: Optional[Dict[str, Any]] = None,
         model: str = "x2bee/Polar-14B",
         temperature: float = 0.7,
         max_tokens: int = 8192,
@@ -68,7 +70,7 @@ class AgentVLLMStreamNode(Node):
 
         try:
             default_prompt = prefix_prompt + default_prompt
-            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=True)
+            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=True, plan=plan)
 
             additional_rag_context = ""
             if rag_context:
@@ -79,7 +81,7 @@ class AgentVLLMStreamNode(Node):
                 default_prompt = create_json_output_prompt(args_schema, default_prompt)
 
             if tools_list and len(tools_list) > 0:
-                final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt)
+                final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt, plan=plan)
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(
                     agent=agent,
@@ -102,7 +104,7 @@ class AgentVLLMStreamNode(Node):
                 except Exception as e:
                     yield f"\nStreaming Error: {str(e)}\n"
             else:
-                final_prompt = create_context_prompt(additional_rag_context, default_prompt, strict_citation)
+                final_prompt = create_context_prompt(additional_rag_context, default_prompt, strict_citation, plan=plan)
                 chain = final_prompt | llm
                 for chunk in chain.stream(inputs):
                     yield chunk.content

@@ -28,6 +28,7 @@ class AgentOpenAINode(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
         {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
+        {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
     ]
     outputs = [
         {"id": "result", "name": "Result", "type": "STR"},
@@ -60,6 +61,7 @@ class AgentOpenAINode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
+        plan: Optional[Dict[str, Any]] = None,
         model: str = "gpt-5",
         temperature: float = 0.7,
         max_tokens: int = 8192,
@@ -70,7 +72,7 @@ class AgentOpenAINode(Node):
     ) -> str:
         try:
             default_prompt  = prefix_prompt+default_prompt
-            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=False)
+            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=False, plan=plan)
 
             additional_rag_context = None
             if rag_context:
@@ -81,7 +83,7 @@ class AgentOpenAINode(Node):
                 default_prompt = create_json_output_prompt(args_schema, default_prompt)
 
             if tools_list and len(tools_list) > 0:
-                final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt)
+                final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt, plan=plan)
                 agent = create_tool_calling_agent(llm, tools_list, final_prompt)
                 agent_executor = AgentExecutor(
                     agent=agent,
@@ -99,7 +101,7 @@ class AgentOpenAINode(Node):
                 return handler.get_formatted_output(output)
 
             else:
-                final_prompt = create_context_prompt(additional_rag_context, default_prompt, strict_citation)
+                final_prompt = create_context_prompt(additional_rag_context, default_prompt, strict_citation, plan=plan)
                 if args_schema:
                     parser = JsonOutputParser()
                 else:
