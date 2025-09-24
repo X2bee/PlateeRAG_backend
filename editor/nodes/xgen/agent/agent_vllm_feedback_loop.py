@@ -153,6 +153,7 @@ class AgentVLLMFeedbackLoopNode(Node):
                     todo_requires_tools=direct_requires_tools,
                     current_todo_id=None,
                     current_todo_title="Direct Execution",
+                    current_todo_description=text,
                     current_todo_index=1,
                     total_todos=0,
                     execution_mode="direct",
@@ -162,6 +163,9 @@ class AgentVLLMFeedbackLoopNode(Node):
                     last_result_signature=None,
                     last_result_duplicate=False,
                     stagnation_count=0,
+                    original_user_request=text,
+                    previous_results_context="",
+                    todo_directive=text,
                 )
 
                 import time

@@ -14,6 +14,7 @@ class FeedbackState(TypedDict):
     todo_requires_tools: Optional[bool]  # TODO가 도구 사용이 필요한지 여부
     current_todo_id: Optional[int]
     current_todo_title: Optional[str]
+    current_todo_description: Optional[str]
     current_todo_index: Optional[int]
     total_todos: Optional[int]
     execution_mode: Optional[str]
@@ -23,3 +24,6 @@ class FeedbackState(TypedDict):
     last_result_signature: Optional[str]
     last_result_duplicate: Optional[bool]
     stagnation_count: Optional[int]
+    original_user_request: Optional[str]
+    previous_results_context: Optional[str]
+    todo_directive: Optional[str]
