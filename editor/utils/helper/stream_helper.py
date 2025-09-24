@@ -197,6 +197,12 @@ def execute_agent_streaming(
                     return result
                 except Exception as e:
                     logger.error(f"Agent 실행 중 오류: {str(e)}", exc_info=True)
+                    # OpenAI API validation error에 대한 추가 정보 제공
+                    if "validation error" in str(e).lower() and "function.arguments" in str(e):
+                        logger.error("OpenAI Tool Calling validation error detected. This may be caused by:")
+                        logger.error("1. Tool with empty or None args_schema")
+                        logger.error("2. Tool function returning invalid argument format")
+                        logger.error("3. Pydantic schema validation failure")
                     handler.put_error(e)
                     execution_finished[0] = True
                     raise e

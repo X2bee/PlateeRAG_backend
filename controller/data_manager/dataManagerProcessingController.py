@@ -5,7 +5,7 @@ import logging
 import os
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-from controller.helper.singletonHelper import get_db_manager, get_data_manager_registry
+from controller.helper.singletonHelper import get_db_manager, get_data_manager_registry, get_config_composer
 from controller.helper.controllerHelper import extract_user_id_from_request
 
 router = APIRouter(prefix="/processing", tags=["data-manager"])
@@ -45,6 +45,47 @@ class RemoveNullRowsRequest(BaseModel):
     """NULL row 제거 요청"""
     manager_id: str = Field(..., description="매니저 ID")
     column_name: Optional[str] = Field(None, description="특정 컬럼명 (미지정시 전체 컬럼에서 NULL 체크)")
+
+class UploadToHfRequest(BaseModel):
+    """HuggingFace Hub 업로드 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    repo_id: str = Field(..., description="HuggingFace 리포지토리 ID (user/repo-name 또는 repo-name)")
+    filename: Optional[str] = Field(None, description="업로드할 파일명 (미지정시 자동 생성)")
+    private: bool = Field(False, description="프라이빗 리포지토리 여부")
+    hf_user_id: Optional[str] = Field(None, description="HuggingFace 사용자 ID (미지정시 설정값 사용)")
+    hub_token: Optional[str] = Field(None, description="HuggingFace Hub 토큰 (미지정시 설정값 사용)")
+
+class CopyColumnRequest(BaseModel):
+    """컬럼 복사 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    source_column: str = Field(..., description="복사할 원본 컬럼명")
+    new_column: str = Field(..., description="새로운 컬럼명")
+
+class RenameColumnRequest(BaseModel):
+    """컬럼 이름 변경 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    old_name: str = Field(..., description="기존 컬럼명")
+    new_name: str = Field(..., description="새로운 컬럼명")
+
+class FormatColumnsRequest(BaseModel):
+    """컬럼 문자열 포맷팅 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    column_names: List[str] = Field(..., description="사용할 컬럼명들", min_items=1)
+    template: str = Field(..., description="문자열 템플릿 (예: {col1}_aiaiaiai_{col2})")
+    new_column: str = Field(..., description="새로운 컬럼명")
+
+class CalculateColumnsRequest(BaseModel):
+    """컬럼 간 사칙연산 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    col1: str = Field(..., description="첫 번째 컬럼명")
+    col2: str = Field(..., description="두 번째 컬럼명")
+    operation: str = Field(..., description="연산자", pattern=r'^[+\-*/]$')
+    new_column: str = Field(..., description="새로운 컬럼명")
+
+class ExecuteCallbackRequest(BaseModel):
+    """사용자 콜백 코드 실행 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    callback_code: str = Field(..., description="실행할 PyArrow 코드", min_length=1)
 
 # ========== Helper Functions ==========
 def get_manager_with_auth(registry, manager_id: str, user_id: str):
@@ -433,3 +474,270 @@ async def remove_null_rows(request: Request, remove_request: RemoveNullRowsReque
     except Exception as e:
         logger.error("예상치 못한 오류: %s", e)
         raise HTTPException(status_code=500, detail="NULL row 제거 중 오류가 발생했습니다")
+
+
+@router.post("/upload-to-hf",
+    summary="HuggingFace Hub에 데이터셋 업로드",
+    description="현재 데이터셋을 parquet 파일로 변환하여 HuggingFace Hub에 업로드합니다.",
+    response_model=Dict[str, Any])
+async def upload_dataset_to_hf(request: Request, upload_request: UploadToHfRequest) -> Dict[str, Any]:
+    """데이터셋을 HuggingFace Hub에 업로드"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, upload_request.manager_id, user_id)
+
+        # config_composer에서 HuggingFace 설정 가져오기
+        config_composer = get_config_composer(request)
+
+        # HuggingFace 설정값 결정
+        hf_user_id = upload_request.hf_user_id
+        hub_token = upload_request.hub_token
+
+        if not hf_user_id:
+            try:
+                hf_user_id = config_composer.get_config_by_name("HUGGING_FACE_USER_ID").value
+            except Exception as e:
+                logger.warning("HUGGING_FACE_USER_ID 설정 가져오기 실패: %s", e)
+                raise HTTPException(status_code=400, detail="HuggingFace User ID가 제공되지 않았고, 설정값도 찾을 수 없습니다")
+
+        if not hub_token:
+            try:
+                hub_token = config_composer.get_config_by_name("HUGGING_FACE_HUB_TOKEN").value
+            except Exception as e:
+                logger.warning("HUGGING_FACE_HUB_TOKEN 설정 가져오기 실패: %s", e)
+                raise HTTPException(status_code=400, detail="HuggingFace Hub Token이 제공되지 않았고, 설정값도 찾을 수 없습니다")
+
+        # HuggingFace 업로드 실행
+        result_info = manager.upload_dataset_to_hf_repo(
+            repo_id=upload_request.repo_id,
+            hf_user_id=hf_user_id,
+            hub_token=hub_token,
+            filename=upload_request.filename,
+            private=upload_request.private
+        )
+
+        logger.info("HuggingFace 업로드 완료: 매니저 %s → %s",
+                   upload_request.manager_id, result_info["repo_id"])
+
+        return {
+            "success": True,
+            "manager_id": upload_request.manager_id,
+            "message": f"데이터셋이 HuggingFace Hub에 성공적으로 업로드되었습니다",
+            "upload_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("HuggingFace 업로드 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="HuggingFace 업로드 중 오류가 발생했습니다")
+
+
+@router.post("/copy-column",
+    summary="컬럼 복사",
+    description="특정 컬럼을 복사하여 새로운 컬럼으로 추가합니다.",
+    response_model=Dict[str, Any])
+async def copy_dataset_column(request: Request, copy_request: CopyColumnRequest) -> Dict[str, Any]:
+    """컬럼 복사"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, copy_request.manager_id, user_id)
+
+        # 컬럼 복사 실행
+        result_info = manager.copy_dataset_column(
+            copy_request.source_column,
+            copy_request.new_column
+        )
+
+        logger.info("컬럼 복사 완료: 매니저 %s, '%s' → '%s'",
+                   copy_request.manager_id, copy_request.source_column, copy_request.new_column)
+
+        return {
+            "success": True,
+            "manager_id": copy_request.manager_id,
+            "message": f"컬럼 '{copy_request.source_column}'이 '{copy_request.new_column}'으로 성공적으로 복사되었습니다",
+            "copy_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("컬럼 복사 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="컬럼 복사 중 오류가 발생했습니다")
+
+
+@router.post("/rename-column",
+    summary="컬럼 이름 변경",
+    description="특정 컬럼의 이름을 변경합니다.",
+    response_model=Dict[str, Any])
+async def rename_dataset_column(request: Request, rename_request: RenameColumnRequest) -> Dict[str, Any]:
+    """컬럼 이름 변경"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, rename_request.manager_id, user_id)
+
+        # 컬럼 이름 변경 실행
+        result_info = manager.rename_dataset_column(
+            rename_request.old_name,
+            rename_request.new_name
+        )
+
+        logger.info("컬럼 이름 변경 완료: 매니저 %s, '%s' → '%s'",
+                   rename_request.manager_id, rename_request.old_name, rename_request.new_name)
+
+        return {
+            "success": True,
+            "manager_id": rename_request.manager_id,
+            "message": f"컬럼 이름이 '{rename_request.old_name}'에서 '{rename_request.new_name}'으로 성공적으로 변경되었습니다",
+            "rename_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("컬럼 이름 변경 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="컬럼 이름 변경 중 오류가 발생했습니다")
+
+
+@router.post("/format-columns",
+    summary="컬럼 문자열 포맷팅",
+    description="여러 컬럼의 값들을 문자열 템플릿에 삽입하여 새로운 컬럼을 생성합니다.",
+    response_model=Dict[str, Any])
+async def format_dataset_columns(request: Request, format_request: FormatColumnsRequest) -> Dict[str, Any]:
+    """컬럼 문자열 포맷팅"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, format_request.manager_id, user_id)
+
+        # 컬럼 문자열 포맷팅 실행
+        result_info = manager.format_columns_to_string(
+            format_request.column_names,
+            format_request.template,
+            format_request.new_column
+        )
+
+        logger.info("컬럼 문자열 포맷팅 완료: 매니저 %s, %s → '%s'",
+                   format_request.manager_id, format_request.column_names, format_request.new_column)
+
+        return {
+            "success": True,
+            "manager_id": format_request.manager_id,
+            "message": f"컬럼들 {format_request.column_names}을 템플릿 '{format_request.template}'로 포맷팅하여 새로운 컬럼 '{format_request.new_column}'이 생성되었습니다",
+            "format_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("컬럼 문자열 포맷팅 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="컬럼 문자열 포맷팅 중 오류가 발생했습니다")
+
+
+@router.post("/calculate-columns",
+    summary="컬럼 간 사칙연산",
+    description="두 컬럼 간 사칙연산을 수행하여 새로운 컬럼을 생성합니다. 문자열과 숫자 타입에 따른 특별 처리 포함.",
+    response_model=Dict[str, Any])
+async def calculate_dataset_columns(request: Request, calc_request: CalculateColumnsRequest) -> Dict[str, Any]:
+    """컬럼 간 사칙연산"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, calc_request.manager_id, user_id)
+
+        # 컬럼 간 연산 실행
+        result_info = manager.calculate_columns_to_new(
+            calc_request.col1,
+            calc_request.col2,
+            calc_request.operation,
+            calc_request.new_column
+        )
+
+        logger.info("컬럼 간 연산 완료: 매니저 %s, %s %s %s → '%s'",
+                   calc_request.manager_id, calc_request.col1, calc_request.operation,
+                   calc_request.col2, calc_request.new_column)
+
+        return {
+            "success": True,
+            "manager_id": calc_request.manager_id,
+            "message": f"컬럼 '{calc_request.col1}' {calc_request.operation} '{calc_request.col2}' 연산이 수행되어 새로운 컬럼 '{calc_request.new_column}'이 생성되었습니다",
+            "calculation_info": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("컬럼 간 연산 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="컬럼 간 연산 중 오류가 발생했습니다")
+
+
+@router.post("/execute-callback",
+    summary="사용자 콜백 코드 실행",
+    description="사용자가 작성한 PyArrow 코드를 안전하게 실행하여 dataset을 조작합니다. 허용된 PyArrow 함수만 사용 가능합니다.",
+    response_model=Dict[str, Any])
+async def execute_dataset_callback(request: Request, callback_request: ExecuteCallbackRequest) -> Dict[str, Any]:
+    """사용자 콜백 코드 실행"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, callback_request.manager_id, user_id)
+
+        # 콜백 코드 실행
+        result_info = manager.execute_dataset_callback(callback_request.callback_code)
+
+        logger.info("사용자 콜백 실행 완료: 매니저 %s, %d행 → %d행, %d열 → %d열",
+                   callback_request.manager_id, result_info["original_rows"],
+                   result_info["final_rows"], result_info["original_columns"],
+                   result_info["final_columns"])
+
+        return {
+            "success": True,
+            "manager_id": callback_request.manager_id,
+            "message": f"사용자 콜백 코드가 성공적으로 실행되었습니다. {result_info['rows_changed']:+d}행, {result_info['columns_changed']:+d}열 변경",
+            "callback_result": result_info
+        }
+
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        logger.error("사용자 콜백 실행 실패: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("예상치 못한 오류: %s", e)
+        raise HTTPException(status_code=500, detail="사용자 콜백 실행 중 오류가 발생했습니다")

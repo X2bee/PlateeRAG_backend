@@ -42,6 +42,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
         {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema", "required": False},
+        {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
         {"id": "feedback_criteria", "name": "Feedback Criteria", "type": "FeedbackCrit", "multi": False, "required": False, "value": ""},
     ]
 
@@ -60,7 +61,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
         {"id": "max_iterations", "name": "Max Iterations", "type": "INT", "value": 5, "min": 1, "max": 20, "step": 1, "optional": True, "description": "최대 반복 횟수"},
         {"id": "feedback_threshold", "name": "Feedback Threshold", "type": "INT", "value": 8, "min": 1, "max": 10, "step": 1, "optional": True, "description": "만족스러운 결과로 간주할 점수 임계값 (1-10)"},
         {"id": "enable_auto_feedback", "name": "Enable Auto Feedback", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "자동 피드백 평가 활성화"},
-        {"id": "enable_formatted_output", "name": "Enable Formatted Output", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "형식화된 출력 활성화"},
+        {"id": "enable_formatted_output", "name": "Enable Formatted Output", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "형식화된 출력 활성화"},
         {"id": "format_style", "name": "Format Style", "type": "STR", "value": "detailed", "required": False, "optional": True, "options": [
             {"value": "summary", "label": "요약만 표시"},
             {"value": "detailed", "label": "상세 정보 표시"},
@@ -91,6 +92,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
+        plan: Optional[Dict[str, Any]] = None,
         feedback_criteria: str = "",
         model: str = "x2bee/Polar-14B",
         temperature: float = 0.7,
@@ -133,6 +135,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
                     max_tokens,
                     base_url,
                     streaming=True,
+                    plan=plan,
                 )
 
                 additional_rag_context = ""
@@ -145,11 +148,13 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
                 prompt_template_with_tool = create_tool_context_prompt(
                     additional_rag_context,
                     enhanced_prompt,
+                    plan=plan
                 )
                 prompt_template_without_tool = create_context_prompt(
                     additional_rag_context,
                     enhanced_prompt,
                     strict_citation,
+                    plan=plan
                 )
 
                 emitter.emit_status("<FEEDBACK_STATUS>실행 전략 평가 중...</FEEDBACK_STATUS>\n")

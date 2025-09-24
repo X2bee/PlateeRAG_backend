@@ -10,7 +10,7 @@ from editor.utils.feedback.todo_executor import todo_executor, build_final_summa
 from pydantic import BaseModel
 from editor.node_composer import Node
 from editor.nodes.xgen.agent.functions import (
-    prepare_llm_components, rag_context_builder, 
+    prepare_llm_components, rag_context_builder,
     create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 )
 from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput
@@ -18,7 +18,7 @@ from editor.utils.prefix_prompt import prefix_prompt
 
 logger = logging.getLogger(__name__)
 
-default_prompt = """You are a helpful AI assistant with feedback loop capabilities. 
+default_prompt = """You are a helpful AI assistant with feedback loop capabilities.
 You will execute tasks, evaluate results against user requirements, and iterate until satisfactory results are achieved."""
 
 class AgentFeedbackLoopNode(Node):
@@ -35,6 +35,7 @@ class AgentFeedbackLoopNode(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
         {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema", "required": False},
+        {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
         {"id": "feedback_criteria", "name": "Feedback Criteria", "type": "FeedbackCrit", "multi": False, "required": False, "value": ""},
     ]
     outputs = [
@@ -65,6 +66,7 @@ class AgentFeedbackLoopNode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
+        plan: Optional[Dict[str, Any]] = None,
         feedback_criteria: str = "",
         model: str = "gpt-4",
         temperature: float = 0.7,
@@ -82,7 +84,7 @@ class AgentFeedbackLoopNode(Node):
             # LLM 컴포넌트 준비
             enhanced_prompt = prefix_prompt + default_prompt
             llm, tools_list, chat_history = prepare_llm_components(
-                text, tools, memory, model, temperature, max_tokens, base_url, streaming=False
+                text, tools, memory, model, temperature, max_tokens, base_url, streaming=False, plan=plan
             )
 
             # RAG 컨텍스트 구성
@@ -95,8 +97,8 @@ class AgentFeedbackLoopNode(Node):
                 enhanced_prompt = create_json_output_prompt(args_schema, enhanced_prompt)
 
             # 프롬프트 템플릿 생성
-            prompt_template_with_tool = create_tool_context_prompt(additional_rag_context, enhanced_prompt)
-            prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, strict_citation)
+            prompt_template_with_tool = create_tool_context_prompt(additional_rag_context, enhanced_prompt, plan=plan)
+            prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, strict_citation, plan=plan)
 
             # 사용자 요청을 TODO로 분해하거나 직접 실행 모드 결정
             todo_plan = create_todos(llm, text, tools_list)
@@ -104,7 +106,7 @@ class AgentFeedbackLoopNode(Node):
             execution_mode = todo_plan.get("mode", "todo")
             todo_strategy_reason = todo_plan.get("reason", "")
             direct_tool_usage = todo_plan.get("tool_usage", "simple")
-            
+
             # 피드백 기준 설정
             if not feedback_criteria:
                 feedback_criteria = f"""
