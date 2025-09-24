@@ -62,6 +62,15 @@ KEYWORDS_REQUIRING_TOOLS = [
     "테스트",
 ]
 
+SUMMARY_KEYWORDS = [
+    "요약",
+    "정리",
+    "보고",
+    "summary",
+    "report",
+    "결과 공유",
+]
+
 
 def _safe_json_loads(content: str) -> Optional[Dict]:
     tries = [content]
@@ -113,6 +122,29 @@ def _keyword_hits(text: str) -> bool:
     return any(keyword.lower() in lowered for keyword in KEYWORDS_REQUIRING_TOOLS)
 
 
+def _contains_summary_task(todos: List[Dict]) -> bool:
+    for todo in todos:
+        combined = f"{todo.get('title', '')} {todo.get('description', '')}".lower()
+        if any(keyword.lower() in combined for keyword in SUMMARY_KEYWORDS):
+            return True
+    return False
+
+
+def _append_summary_todo(base_text: str, todos: List[Dict]) -> List[Dict]:
+    if _contains_summary_task(todos):
+        return todos
+
+    summary_id = (todos[-1]["id"] + 1) if todos else 1
+    summary_todo = {
+        "id": summary_id,
+        "title": "결과 요약 및 보고",
+        "description": "앞선 TODO 실행 결과와 핵심 인사이트를 정리하고 보고하세요.",
+        "priority": "medium",
+        "tool_required": "simple",
+    }
+    return todos + [summary_todo]
+
+
 def create_todos(llm, text: str, tools_list: Optional[List] = None) -> Dict:
     """LLM으로 TODO 리스트와 실행 모드 결정"""
 
@@ -160,6 +192,17 @@ def create_todos(llm, text: str, tools_list: Optional[List] = None) -> Dict:
             tool_usage = "complex"
         else:
             tool_usage = "simple"
+
+    todos = _append_summary_todo(text, todos)
+
+    if mode == "direct" and len(todos) > 1:
+        mode = "todo"
+        if not reason:
+            reason = "최종 결과 요약 단계를 포함하기 위해 TODO 모드로 전환"
+
+    if mode == "todo":
+        any_complex = any(todo.get("tool_required") == "complex" for todo in todos)
+        tool_usage = "complex" if has_tools and any_complex else "simple"
 
     return {
         "mode": mode,
