@@ -32,6 +32,7 @@ def create_feedback_graph(
     return_intermediate_steps=True,
     feedback_threshold=8,
     enable_auto_feedback=True,
+    tool_agent_max_iterations=6,
     stream_emitter=None,
 ):
         """LangGraph 피드백 루프 그래프 생성"""
@@ -45,7 +46,7 @@ def create_feedback_graph(
                 tools=tools_list,
                 verbose=True,
                 handle_parsing_errors=True,
-                max_iterations=3,
+                max_iterations=tool_agent_max_iterations,
                 max_execution_time=300,
             )
 
@@ -163,7 +164,15 @@ def create_feedback_graph(
                 }
 
                 result = ""
-                streaming_error = None
+
+                def _invoke_tool_sync() -> str:
+                    fallback_handler = (
+                        NonStreamingAgentHandlerWithToolOutput()
+                        if return_intermediate_steps
+                        else NonStreamingAgentHandler()
+                    )
+                    response = tool_agent_executor.invoke(inputs, {"callbacks": [fallback_handler]})
+                    return fallback_handler.get_formatted_output(response["output"])
 
                 # 도구 필요성에 따른 처리 분기
                 use_agent = bool(todo_requires_tools and tool_agent_executor)
@@ -176,49 +185,37 @@ def create_feedback_graph(
                             handler = EnhancedAgentStreamingHandler()
 
                         async_executor = lambda: tool_agent_executor.ainvoke(inputs, {"callbacks": [handler]})
-                        collected_chunks = []
                         try:
                             for chunk in execute_agent_streaming(async_executor, handler):
                                 if chunk:
                                     stream_emitter.emit_llm_chunk(todo_index, iteration, chunk)
-                                    collected_chunks.append(chunk)
                         except Exception as streaming_exc:  # pragma: no cover - runtime safety
-                            streaming_error = streaming_exc
                             logger.error(
                                 f"Streaming agent execution failed (iteration {iteration}): {streaming_exc}",
                                 exc_info=True,
                             )
                             stream_emitter.emit_iteration_error(todo_index, iteration, streaming_exc)
-
-                        raw_output = "".join(handler.streamed_tokens).strip()
-                        if return_intermediate_steps and handler.tool_logs:
-                            tool_log_text = "\n".join(handler.tool_logs)
-                            if tool_log_text and raw_output:
-                                result = f"{tool_log_text}\n\n{raw_output}"
-                            else:
-                                result = tool_log_text or raw_output
-                        else:
-                            result = raw_output
-
-                        if streaming_error:
-                            raise streaming_error
-
-                        # 스트리밍 중 수집된 결과가 비어있는 경우 안전한 fallback 수행
-                        if not result:
-                            fallback_handler = (
-                                NonStreamingAgentHandlerWithToolOutput()
-                                if return_intermediate_steps
-                                else NonStreamingAgentHandler()
+                            result = _invoke_tool_sync()
+                            logger.warning(
+                                "Streaming agent execution failed; synchronous fallback succeeded for iteration %s.",
+                                iteration,
                             )
-                            response = tool_agent_executor.invoke(inputs, {"callbacks": [fallback_handler]})
-                            result = fallback_handler.get_formatted_output(response["output"])
-                    else:
-                        if return_intermediate_steps:
-                            handler = NonStreamingAgentHandlerWithToolOutput()
                         else:
-                            handler = NonStreamingAgentHandler()
-                        response = tool_agent_executor.invoke(inputs, {"callbacks": [handler]})
-                        result = handler.get_formatted_output(response["output"])
+                            raw_output = "".join(handler.streamed_tokens).strip()
+                            if return_intermediate_steps and handler.tool_logs:
+                                tool_log_text = "\n".join(handler.tool_logs)
+                                if tool_log_text and raw_output:
+                                    result = f"{tool_log_text}\n\n{raw_output}"
+                                else:
+                                    result = tool_log_text or raw_output
+                            else:
+                                result = raw_output
+
+                            # 스트리밍 중 수집된 결과가 비어있는 경우 안전한 fallback 수행
+                            if not result:
+                                result = _invoke_tool_sync()
+                    else:
+                        result = _invoke_tool_sync()
                 else:
                     if stream_emitter:
                         chain = streaming_chain or (prompt_template_without_tool | llm)

@@ -116,16 +116,36 @@ def _keyword_hits(text: str) -> bool:
 def create_todos(llm, text: str, tools_list: Optional[List] = None) -> Dict:
     """LLM으로 TODO 리스트와 실행 모드 결정"""
 
+    def _planner_fallback(reason: str, llm_raw: str = "") -> Dict:
+        fallback_todos = _ensure_todo_structure(text, None)
+        return {
+            "mode": "direct",
+            "reason": reason,
+            "todos": [],
+            "tool_usage": "simple",
+            "raw_todos": fallback_todos,
+            "llm_raw": llm_raw,
+        }
+
     prompt = todo_generation_prompt.format(text=text)
-    response = llm.invoke([HumanMessage(content=prompt)])
-    content = getattr(response, "content", "") or ""
 
-    parsed = _safe_json_loads(content) or {}
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        content = getattr(response, "content", "") or ""
+    except Exception as invoke_error:  # pragma: no cover - runtime safety
+        logger.error("TODO planner invocation failed: %s", invoke_error, exc_info=True)
+        return _planner_fallback("TODO 계획 생성을 위해 LLM을 호출하지 못했습니다.")
 
-    todos = _ensure_todo_structure(text, parsed.get("todos"))
-    mode = parsed.get("mode", "todo")
-    reason = parsed.get("reason", "")
-    tool_usage = parsed.get("tool_usage", "simple")
+    try:
+        parsed = _safe_json_loads(content) or {}
+
+        todos = _ensure_todo_structure(text, parsed.get("todos"))
+        mode = parsed.get("mode", "todo")
+        reason = parsed.get("reason", "")
+        tool_usage = parsed.get("tool_usage", "simple")
+    except Exception as parse_error:  # pragma: no cover - runtime safety
+        logger.error("TODO planner parsing failed: %s", parse_error, exc_info=True)
+        return _planner_fallback("TODO 계획 응답을 파싱하지 못해 직접 실행으로 전환합니다.", llm_raw=content)
 
     if mode not in ("direct", "todo"):
         mode = "todo"

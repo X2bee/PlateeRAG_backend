@@ -145,6 +145,7 @@ class AgentFeedbackLoopNode(Node):
                 return_intermediate_steps,
                 feedback_threshold,
                 enable_auto_feedback,
+                tool_agent_max_iterations=max(3, max_iterations),
             )
 
             if execution_mode == "direct":
