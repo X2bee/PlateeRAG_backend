@@ -15,6 +15,7 @@ from service.database.models.train import TrainMeta
 from service.database.models.ml_model import MLModel
 from service.database.models.group import GroupMeta
 from service.database.models.backend import BackendLogs
+from service.database.models.prompts import Prompts
 
 # 사용 가능한 모델들
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     'GroupMeta',
     'BackendLogs',
     'MLModel'
+    'Prompts'
 ]
 
 # 애플리케이션에서 사용할 모델 목록
@@ -51,4 +53,5 @@ APPLICATION_MODELS = [
     GroupMeta,
     BackendLogs,
     MLModel
+    Prompts
 ]

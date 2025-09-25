@@ -1,33 +1,33 @@
-from typing import List, Any, TypedDict, Literal, Type, Optional, Union, Callable
+from typing import List, Any, TypedDict, Literal, Type, Optional, Union, Callable, NotRequired
 
 class Port(TypedDict):
     """노드의 입력 또는 출력 포트 구조를 정의합니다."""
     id: str
     name: str
     type: str
-    required: bool = False
-    multi: Optional[bool] = False
-    stream: Optional[bool] = False
+    required: NotRequired[Optional[bool]]
+    multi: NotRequired[Optional[bool]]
+    stream: NotRequired[Optional[bool]]
 
 class Parameter(TypedDict):
     """노드가 사용할 파라미터의 구조를 정의합니다."""
     id: str
     name: str
-    type: Literal["STRING", "INTEGER", "FLOAT", "BOOLEAN"]
+    type: Literal["STR", "INT", "FLOAT", "BOOL"]
     value: Any
-    required: bool = False
-    optional: bool = False  # True이면 advanced 모드에서만 표시
-    step: Optional[float] = None
-    min: Optional[float] = None
-    max: Optional[float] = None
-    options: Optional[Union[List[dict[str, Any]], Callable]] = None
-    is_api: bool = False  # API 호출 여부
-    api_name: Optional[str] = None  # API 호출 시 사용할 이름
-    handle_id: Optional[bool] = False  # True이면 id를 키로 사용
-    expandable: Optional[bool] = False  # True이면 확장 가능한 파라미터
-    description: Optional[str] = None  # 파라미터 설명
-    is_added: Optional[bool] = False  # True이면 추가된
-    dependency: Optional[str] = None  # 다른 파라미터에 의존하는 경우 그 파라미터의 id
+    required: NotRequired[Optional[bool]]
+    optional: NotRequired[Optional[bool]]  # True이면 advanced 모드에서만 표시
+    step: NotRequired[Optional[float]]
+    min: NotRequired[Optional[float]]
+    max: NotRequired[Optional[float]]
+    options: NotRequired[Optional[Union[List[dict[str, Any]], Callable]]]
+    is_api: NotRequired[bool]  # API 호출 여부
+    api_name: NotRequired[Optional[str]] # API 호출 시 사용할 이름
+    handle_id: NotRequired[Optional[bool]] # True이면 id를 키로 사용
+    expandable: NotRequired[Optional[bool]]  # True이면 확장 가능한 파라미터
+    description: NotRequired[Optional[str]]  # 파라미터 설명
+    is_added: NotRequired[Optional[bool]]  # True이면 추가된
+    dependency: NotRequired[Optional[str]]  # 다른 파라미터에 의존하는 경우 그 파라미터의 id
 
 
 class NodeSpec(TypedDict):

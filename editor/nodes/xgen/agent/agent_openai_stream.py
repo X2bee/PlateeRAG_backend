@@ -2,11 +2,14 @@ from typing import Dict, Any, Optional, Generator
 from pydantic import BaseModel
 import logging
 from editor.node_composer import Node
+from editor.utils.helper.async_helper import sync_run_async
 from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
 from editor.utils.prefix_prompt import prefix_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
+from editor.utils.helper.service_helper import AppServiceManager
+from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class AgentOpenAIStreamNode(Node):
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
         {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "중간 단계를 반환할지 여부입니다."},
+        {"id": "use_guarder", "name": "Use Guarder Service", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Guarder 서비스를 사용할지 여부입니다."},
     ]
 
     def execute(
@@ -67,9 +71,16 @@ class AgentOpenAIStreamNode(Node):
         strict_citation: bool = True,
         default_prompt: str = default_prompt,
         return_intermediate_steps: bool = False,
+        use_guarder: bool = False,
     ) -> Generator[str, None, None]:
 
         try:
+            if use_guarder:
+                is_safe, moderation_message = use_guarder_for_text_moderation(text)
+                if not is_safe:
+                    yield moderation_message
+                    return
+
             default_prompt= prefix_prompt+default_prompt
             llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=True, plan=plan)
             additional_rag_context = ""

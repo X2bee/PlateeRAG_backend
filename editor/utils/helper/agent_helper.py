@@ -2,8 +2,26 @@ import logging
 import re
 import json
 from langchain.callbacks.base import BaseCallbackHandler
+from editor.utils.helper.service_helper import AppServiceManager
+from editor.utils.helper.async_helper import sync_run_async
 
 logger = logging.getLogger(__name__)
+
+def use_guarder_for_text_moderation(text: str) -> tuple[bool, str]:
+    try:
+        guarder = AppServiceManager.get_guarder_service()
+        if guarder:
+            moderation_result = sync_run_async(guarder.moderate_text(text))
+            if not moderation_result.get("safe", True):
+                categories = moderation_result.get("categories", [])
+                categories_str = ", ".join(categories) if categories else "알 수 없는 이유"
+                return False, f"이러한 요청은 허용되지 않습니다. 원인: {categories_str}"
+            return True, ""
+        else:
+            return True, ""
+    except Exception as guarder_error:
+        logger.warning(f"Guarder 서비스를 사용할 수 없습니다: {guarder_error}")
+        return True, ""
 
 def _parse_document_citations(text: str) -> str:
     """문서 인용 정보를 파싱하여 JSON 형태로 변환"""

@@ -148,16 +148,51 @@ def _append_summary_todo(base_text: str, todos: List[Dict]) -> List[Dict]:
 def create_todos(llm, text: str, tools_list: Optional[List] = None) -> Dict:
     """LLM으로 TODO 리스트와 실행 모드 결정"""
 
+    def _planner_fallback(reason: str, llm_raw: str = "") -> Dict:
+        fallback_todos = [
+            {
+                "id": 1,
+                "title": "요청 이해 및 요구사항 정리",
+                "description": text,
+                "priority": "high",
+                "tool_required": "simple",
+            },
+            {
+                "id": 2,
+                "title": "결과 정리 및 응답 작성",
+                "description": "수집한 정보와 결론을 구조화하여 사용자에게 전달",
+                "priority": "medium",
+                "tool_required": "simple",
+            },
+        ]
+        return {
+            "mode": "todo",
+            "reason": reason,
+            "todos": fallback_todos,
+            "tool_usage": "simple",
+            "raw_todos": fallback_todos,
+            "llm_raw": llm_raw,
+        }
+
     prompt = todo_generation_prompt.format(text=text)
-    response = llm.invoke([HumanMessage(content=prompt)])
-    content = getattr(response, "content", "") or ""
 
-    parsed = _safe_json_loads(content) or {}
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        content = getattr(response, "content", "") or ""
+    except Exception as invoke_error:  # pragma: no cover - runtime safety
+        logger.error("TODO planner invocation failed: %s", invoke_error, exc_info=True)
+        return _planner_fallback("TODO 계획 생성을 위해 LLM을 호출하지 못했습니다.")
 
-    todos = _ensure_todo_structure(text, parsed.get("todos"))
-    mode = parsed.get("mode", "todo")
-    reason = parsed.get("reason", "")
-    tool_usage = parsed.get("tool_usage", "simple")
+    try:
+        parsed = _safe_json_loads(content) or {}
+
+        todos = _ensure_todo_structure(text, parsed.get("todos"))
+        mode = parsed.get("mode", "todo")
+        reason = parsed.get("reason", "")
+        tool_usage = parsed.get("tool_usage", "simple")
+    except Exception as parse_error:  # pragma: no cover - runtime safety
+        logger.error("TODO planner parsing failed: %s", parse_error, exc_info=True)
+        return _planner_fallback("TODO 계획 응답을 파싱하지 못해 기본 TODO 템플릿을 사용합니다.", llm_raw=content)
 
     if mode not in ("direct", "todo"):
         mode = "todo"

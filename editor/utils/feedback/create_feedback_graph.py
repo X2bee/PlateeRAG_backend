@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List
+from typing import Dict, List
 
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.schema.output_parser import StrOutputParser
@@ -32,6 +32,7 @@ def create_feedback_graph(
     return_intermediate_steps=True,
     feedback_threshold=8,
     enable_auto_feedback=True,
+    tool_agent_max_iterations=6,
     stream_emitter=None,
 ):
         """LangGraph 피드백 루프 그래프 생성"""
@@ -45,7 +46,7 @@ def create_feedback_graph(
                 tools=tools_list,
                 verbose=True,
                 handle_parsing_errors=True,
-                max_iterations=3,
+                max_iterations=tool_agent_max_iterations,
                 max_execution_time=300,
             )
 
@@ -227,7 +228,15 @@ def create_feedback_graph(
                 }
 
                 result = ""
-                streaming_error = None
+
+                def _invoke_tool_sync() -> str:
+                    fallback_handler = (
+                        NonStreamingAgentHandlerWithToolOutput()
+                        if return_intermediate_steps
+                        else NonStreamingAgentHandler()
+                    )
+                    response = tool_agent_executor.invoke(inputs, {"callbacks": [fallback_handler]})
+                    return fallback_handler.get_formatted_output(response["output"])
 
                 # 도구 필요성에 따른 처리 분기
                 use_agent = bool(todo_requires_tools and tool_agent_executor)
@@ -240,14 +249,11 @@ def create_feedback_graph(
                             handler = EnhancedAgentStreamingHandler()
 
                         async_executor = lambda: tool_agent_executor.ainvoke(inputs, {"callbacks": [handler]})
-                        collected_chunks = []
                         try:
                             for chunk in execute_agent_streaming(async_executor, handler):
                                 if chunk:
                                     stream_emitter.emit_llm_chunk(todo_index, iteration, chunk)
-                                    collected_chunks.append(chunk)
                         except Exception as streaming_exc:  # pragma: no cover - runtime safety
-                            streaming_error = streaming_exc
                             logger.error(
                                 f"Streaming agent execution failed (iteration {iteration}): {streaming_exc}",
                                 exc_info=True,
@@ -274,15 +280,22 @@ def create_feedback_graph(
                                 if return_intermediate_steps
                                 else NonStreamingAgentHandler()
                             )
-                            response = tool_agent_executor.invoke(inputs, {"callbacks": [fallback_handler]})
-                            result = fallback_handler.get_formatted_output(response["output"])
-                    else:
-                        if return_intermediate_steps:
-                            handler = NonStreamingAgentHandlerWithToolOutput()
                         else:
-                            handler = NonStreamingAgentHandler()
-                        response = tool_agent_executor.invoke(inputs, {"callbacks": [handler]})
-                        result = handler.get_formatted_output(response["output"])
+                            raw_output = "".join(handler.streamed_tokens).strip()
+                            if return_intermediate_steps and handler.tool_logs:
+                                tool_log_text = "\n".join(handler.tool_logs)
+                                if tool_log_text and raw_output:
+                                    result = f"{tool_log_text}\n\n{raw_output}"
+                                else:
+                                    result = tool_log_text or raw_output
+                            else:
+                                result = raw_output
+
+                            # 스트리밍 중 수집된 결과가 비어있는 경우 안전한 fallback 수행
+                            if not result:
+                                result = _invoke_tool_sync()
+                    else:
+                        result = _invoke_tool_sync()
                 else:
                     if stream_emitter:
                         chain = streaming_chain or (prompt_template_without_tool | llm)
@@ -335,6 +348,26 @@ def create_feedback_graph(
                             seen_results = seen_results[-9:]
                         seen_results.append(result_signature)
 
+                result_frequencies = state.get("result_frequencies") or {}
+                if result_signature:
+                    result_frequencies[result_signature] = (
+                        result_frequencies.get(result_signature, 0) + 1
+                    )
+                    if len(result_frequencies) > 25:
+                        # 오래된 항목 제거
+                        sorted_items = sorted(
+                            result_frequencies.items(),
+                            key=lambda item: item[1],
+                            reverse=True,
+                        )[:20]
+                        result_frequencies = dict(sorted_items)
+
+                duplicate_run_length = state.get("duplicate_run_length", 0)
+                if duplicate_result:
+                    duplicate_run_length += 1
+                else:
+                    duplicate_run_length = 0
+
                 tool_result = {
                     "iteration": iteration,
                     "result": result,
@@ -345,6 +378,11 @@ def create_feedback_graph(
                 
                 new_tool_results = state["tool_results"] + [tool_result]
                 
+                if duplicate_result and stream_emitter:
+                    stream_emitter.emit_status(
+                        f"<FEEDBACK_STATUS>경고: 동일한 출력이 연속 {duplicate_run_length}회 감지되었습니다. 접근 방식을 변경하세요.</FEEDBACK_STATUS>\n"
+                    )
+
                 return {
                     **state,
                     "tool_results": new_tool_results,
@@ -352,6 +390,8 @@ def create_feedback_graph(
                     "seen_results": seen_results,
                     "last_result_signature": result_signature,
                     "last_result_duplicate": duplicate_result,
+                    "result_frequencies": result_frequencies,
+                    "duplicate_run_length": duplicate_run_length,
                 }
                 
             except Exception as e:
@@ -385,6 +425,8 @@ def create_feedback_graph(
                     "seen_results": seen_results,
                     "last_result_signature": error_signature,
                     "last_result_duplicate": False,
+                    "result_frequencies": state.get("result_frequencies") or {},
+                    "duplicate_run_length": 0,
                 }
 
         def execute_direct(state: FeedbackState) -> FeedbackState:
@@ -692,8 +734,13 @@ def create_feedback_graph(
                     if reasoning_note:
                         improvements_list.append(reasoning_note)
                 duplicate_result = latest_result.get("duplicate") or state.get("last_result_duplicate", False)
+                duplicate_run_length = state.get("duplicate_run_length", 0)
                 if duplicate_result:
                     improvements_list.append("이전 출력과 동일합니다. 접근 방식을 변경하세요.")
+                    if duplicate_run_length >= 2:
+                        improvements_list.append(
+                            f"연속 {duplicate_run_length}회 동일 출력이 감지되었습니다. 다른 도구를 사용하거나 프롬프트 구조를 재구성하세요."
+                        )
 
                 if not _has_explicit_output(latest_clean):
                     reminder = "쿼리 실행 결과(데이터 또는 비어 있음을 명시)를 함께 제공하세요."
@@ -726,6 +773,9 @@ def create_feedback_graph(
                         stagnation_count += 1
                     else:
                         stagnation_count = 0
+
+                if duplicate_run_length >= 2:
+                    stagnation_count = max(stagnation_count, duplicate_run_length)
 
                 max_iterations = state.get("max_iterations", 5)
                 if max_iterations:
@@ -765,6 +815,9 @@ def create_feedback_graph(
                 return "finalize"
 
             if state.get("stagnation_count", 0) >= 2:
+                return "finalize"
+
+            if state.get("duplicate_run_length", 0) >= 3:
                 return "finalize"
 
             # 피드백 점수 확인 (enable_auto_feedback가 True일 때만)
