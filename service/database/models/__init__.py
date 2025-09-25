@@ -12,6 +12,7 @@ from service.database.models.deploy import DeployMeta
 from service.database.models.vectordb import VectorDB, VectorDBFolders, VectorDBChunkMeta, VectorDBChunkEdge
 from service.database.models.vast import VastInstance, VastExecutionLog
 from service.database.models.train import TrainMeta
+from service.database.models.ml_model import MLModel
 from service.database.models.group import GroupMeta
 from service.database.models.backend import BackendLogs
 from service.database.models.prompts import Prompts
@@ -28,6 +29,7 @@ __all__ = [
     'TrainMeta',
     'GroupMeta',
     'BackendLogs',
+    'MLModel'
     'Prompts'
 ]
 
@@ -50,5 +52,6 @@ APPLICATION_MODELS = [
     TrainMeta,
     GroupMeta,
     BackendLogs,
+    MLModel
     Prompts
 ]

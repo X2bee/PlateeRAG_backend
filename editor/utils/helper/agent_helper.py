@@ -94,13 +94,22 @@ class NonStreamingAgentHandlerWithToolOutput(BaseCallbackHandler):
 
     def on_tool_end(self, output, **kwargs) -> None:
         """도구 실행이 완료될 때 호출"""
-        tool_output = str(output)
+        if isinstance(output, (dict, list)):
+            try:
+                tool_output = json.dumps(output, ensure_ascii=False, indent=2)
+            except Exception:
+                tool_output = str(output)
+        else:
+            tool_output = str(output)
         self.tool_outputs.append(output)
 
-        # 문서 인용 정보 파싱
         parsed_output = _parse_document_citations(tool_output)
-        if parsed_output:
-            self.tool_logs.append(f"<TOOLOUTPUTLOG>{parsed_output}</TOOLOUTPUTLOG>")
+        display_output = parsed_output.strip() if parsed_output.strip() else tool_output.strip()
+
+        if len(display_output) > 1200:
+            display_output = display_output[:1200].rstrip() + "..."
+
+        self.tool_logs.append(f"<TOOLOUTPUTLOG>{display_output}</TOOLOUTPUTLOG>")
 
     def on_tool_error(self, error, **kwargs) -> None:
         """도구 실행 오류 시 호출"""
@@ -111,5 +120,7 @@ class NonStreamingAgentHandlerWithToolOutput(BaseCallbackHandler):
         if not self.tool_logs:
             return original_output
 
-        # 도구 로그를 출력 앞에 추가
-        return "\n".join(self.tool_logs) + "\n\n" + original_output
+        tool_section = "\n".join(self.tool_logs)
+        if original_output:
+            return f"{original_output}\n\n{tool_section}"
+        return tool_section
