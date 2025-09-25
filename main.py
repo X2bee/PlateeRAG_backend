@@ -3,6 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import logging
 import os
+import uuid
+import pyarrow.csv as pv
+from pathlib import Path
 from contextlib import asynccontextmanager
 from controller.node.nodeApiController import register_node_api_routes
 
@@ -26,6 +29,7 @@ from editor.node_composer import run_discovery, generate_json_spec, get_node_reg
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
 from service.database.models import APPLICATION_MODELS
+from service.database.models.prompts import Prompts
 
 from service.database import AppDatabaseManager
 from service.embedding.embedding_factory import EmbeddingFactory
@@ -62,6 +66,116 @@ def print_step_banner(step_num, title, description=""):
     └{'─' * 60}┘
     """
     print(banner)
+
+def generate_prompt_uid(act_text: str) -> str:
+    """act 텍스트로부터 prompt_uid 생성"""
+    # 공백을 _로 변경하고 소문자로 변환
+    base_uid = act_text.replace(' ', '_').lower()
+    # 특수문자 제거 (영문자, 숫자, _만 유지)
+    base_uid = ''.join(c for c in base_uid if c.isalnum() or c == '_')
+    # UUID 8자리 추가
+    unique_suffix = str(uuid.uuid4())[:8]
+    return f"{base_uid}_{unique_suffix}"
+
+def load_prompts_from_csv(app_db, csv_path: str):
+    """CSV 파일에서 프롬프트 데이터를 로드하여 데이터베이스에 저장"""
+    try:
+        # CSV 파일 존재 확인
+        if not Path(csv_path).exists():
+            logger.warning(f"⚠️  Prompts CSV file not found: {csv_path}")
+            return {"success": False, "error": "CSV file not found"}
+
+        # 이미 템플릿 프롬프트가 존재하는지 확인
+        existing_templates = app_db.find_by_condition(Prompts, {"is_template": True}, limit=1)
+        if existing_templates and len(existing_templates) > 0:
+            logger.info(f"⚠️  Template prompts already exist in database ({len(existing_templates)} records). Skipping CSV import.")
+            return {"success": True, "inserted_count": 0, "skipped": True, "message": "Templates already exist"}
+
+        # PyArrow로 CSV 파일 읽기
+        table = pv.read_csv(csv_path)
+        logger.info(f"📄 Loaded CSV with {len(table)} rows")
+
+        # 데이터를 딕셔너리 리스트로 변환
+        data = table.to_pydict()
+
+        # 필요한 컬럼 확인
+        required_columns = ['act', 'prompt', 'act_ko', 'prompt_ko']
+        missing_columns = [col for col in required_columns if col not in data]
+        if missing_columns:
+            error_msg = f"Missing required columns: {missing_columns}"
+            logger.error(f"❌ {error_msg}")
+            return {"success": False, "error": error_msg}
+
+        inserted_count = 0
+        skipped_count = 0
+
+        # 각 행에 대해 영어/한국어 데이터 쌍 생성
+        for i in range(len(data['act'])):
+            act = data['act'][i]
+            prompt = data['prompt'][i]
+            act_ko = data['act_ko'][i]
+            prompt_ko = data['prompt_ko'][i]
+
+            # prompt_uid 생성
+            prompt_uid_base = generate_prompt_uid(act)
+
+            # 영어 버전 저장
+            en_prompt = Prompts(
+                user_id=None,  # 기본 템플릿이므로 None
+                prompt_uid=f"{prompt_uid_base}_en",
+                prompt_title=act,
+                prompt_content=prompt,
+                public_available=True,
+                is_template=True,
+                language='en',
+                metadata={}
+            )
+
+            # 한국어 버전 저장
+            ko_prompt = Prompts(
+                user_id=None,  # 기본 템플릿이므로 None
+                prompt_uid=f"{prompt_uid_base}_ko",
+                prompt_title=act_ko,
+                prompt_content=prompt_ko,
+                public_available=True,
+                is_template=True,
+                language='ko',
+                metadata={}
+            )
+
+            try:
+                # 영어 버전 중복 체크 및 저장
+                existing_en = app_db.find_by_condition(Prompts, {"prompt_uid": f"{prompt_uid_base}_en"}, limit=1)
+                if not existing_en or len(existing_en) == 0:
+                    result_en = app_db.insert(en_prompt)
+                    if result_en and result_en.get("result") == "success":
+                        inserted_count += 1
+                else:
+                    skipped_count += 1
+                    logger.debug(f"🔄 Skipped existing English prompt: {prompt_uid_base}_en")
+
+                # 한국어 버전 중복 체크 및 저장
+                existing_ko = app_db.find_by_condition(Prompts, {"prompt_uid": f"{prompt_uid_base}_ko"}, limit=1)
+                if not existing_ko or len(existing_ko) == 0:
+                    result_ko = app_db.insert(ko_prompt)
+                    if result_ko and result_ko.get("result") == "success":
+                        inserted_count += 1
+                else:
+                    skipped_count += 1
+                    logger.debug(f"🔄 Skipped existing Korean prompt: {prompt_uid_base}_ko")
+
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to insert prompt pair {i+1}: {e}")
+                continue
+
+        logger.info(f"✅ Successfully processed {inserted_count + skipped_count} prompt records")
+        logger.info(f"📝 Inserted: {inserted_count}, Skipped: {skipped_count}")
+        return {"success": True, "inserted_count": inserted_count, "skipped_count": skipped_count}
+
+    except Exception as e:
+        error_msg = f"Error loading prompts from CSV: {e}"
+        logger.error(f"❌ {error_msg}")
+        return {"success": False, "error": error_msg}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -266,6 +380,28 @@ async def lifespan(app: FastAPI):
 
         logger.info(f"✅ Step 10: Node discovery completed! Registered {app.state.node_count} nodes")
 
+        # 11. 프롬프트 템플릿 데이터 로드
+        print_step_banner(11, "PROMPT TEMPLATES LOADING", "Loading prompt templates from CSV to database")
+        logger.info("⚙️  Step 11: Prompt templates loading starting...")
+
+        try:
+            constants_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "constants")
+            prompts_csv_path = os.path.join(constants_dir, "prompts_processed.csv")
+            load_result = load_prompts_from_csv(app.state.app_db, prompts_csv_path)
+
+            if load_result["success"]:
+                if load_result.get("skipped", False):
+                    logger.info(f"✅ Step 11: Prompt templates already exist - skipped loading")
+                else:
+                    inserted = load_result.get("inserted_count", 0)
+                    skipped = load_result.get("skipped_count", 0)
+                    logger.info(f"✅ Step 11: Prompt templates loaded successfully! "
+                               f"Inserted: {inserted}, Skipped: {skipped}")
+            else:
+                logger.warning(f"⚠️  Step 11: Prompt templates loading completed with issues. "
+                             f"Error: {load_result.get('error', 'Unknown error')}")
+        except Exception as e:
+            logger.error(f"❌ Step 11: Failed to load prompt templates: {e}")
 
         print_step_banner("FINAL", "XGEN STARTUP COMPLETE", "All systems operational! 🎉")
         logger.info("🎉 XGEN application startup complete! Ready to serve requests.")
