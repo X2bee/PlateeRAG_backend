@@ -14,7 +14,7 @@ class InputStringNode(Node):
     tags = ["input", "string", "text", "parameter", "source", "start_node", "user_input"]
 
     inputs = [
-        {"id": "args_schema", "name": "ArgsSchema", "type": "InputSchema", "required": False},
+        {"id": "args_schema", "name": "ArgsSchema", "type": "InputSchema", "required": False, "expandable": True},
     ]
     outputs = [
         {"id": "text", "name": "Text", "type": "STR"},
