@@ -11,7 +11,7 @@ uv.lock
 .Python
 build/
 exported_nodes.json
-/constants/config.json
+constants/config.json
 develop-eggs/
 dist/
 downloads/
