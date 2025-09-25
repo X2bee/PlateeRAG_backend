@@ -171,6 +171,8 @@ class AgentFeedbackLoopNode(Node):
                     last_result_signature=None,
                     last_result_duplicate=False,
                     stagnation_count=0,
+                    result_frequencies={},
+                    duplicate_run_length=0,
                 )
 
                 import time

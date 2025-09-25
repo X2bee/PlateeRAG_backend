@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List
+from typing import Dict, List
 
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.schema.output_parser import StrOutputParser
@@ -156,6 +156,14 @@ def create_feedback_graph(
                 if improvement_section:
                     iteration_brief.append(improvement_section)
 
+                duplicate_run_length = state.get("duplicate_run_length", 0)
+                if duplicate_run_length:
+                    iteration_brief.append(
+                        f"\n경고: 최근 {duplicate_run_length}회 연속으로 동일하거나 매우 유사한 출력이 발견되었습니다.\n"
+                        "- 해결책 접근 방식을 완전히 바꾸거나, 다른 도구/전략을 시도하세요.\n"
+                        "- 동일한 설명을 반복하지 말고, 새로운 중간 산출물을 생성하세요."
+                    )
+
                 enhanced_input = "\n\n".join(section.strip() for section in iteration_brief if section and section.strip())
                 inputs = {
                     "input": enhanced_input,
@@ -268,6 +276,26 @@ def create_feedback_graph(
                             seen_results = seen_results[-9:]
                         seen_results.append(result_signature)
 
+                result_frequencies = state.get("result_frequencies") or {}
+                if result_signature:
+                    result_frequencies[result_signature] = (
+                        result_frequencies.get(result_signature, 0) + 1
+                    )
+                    if len(result_frequencies) > 25:
+                        # 오래된 항목 제거
+                        sorted_items = sorted(
+                            result_frequencies.items(),
+                            key=lambda item: item[1],
+                            reverse=True,
+                        )[:20]
+                        result_frequencies = dict(sorted_items)
+
+                duplicate_run_length = state.get("duplicate_run_length", 0)
+                if duplicate_result:
+                    duplicate_run_length += 1
+                else:
+                    duplicate_run_length = 0
+
                 tool_result = {
                     "iteration": iteration,
                     "result": result,
@@ -278,6 +306,11 @@ def create_feedback_graph(
                 
                 new_tool_results = state["tool_results"] + [tool_result]
                 
+                if duplicate_result and stream_emitter:
+                    stream_emitter.emit_status(
+                        f"<FEEDBACK_STATUS>경고: 동일한 출력이 연속 {duplicate_run_length}회 감지되었습니다. 접근 방식을 변경하세요.</FEEDBACK_STATUS>\n"
+                    )
+
                 return {
                     **state,
                     "tool_results": new_tool_results,
@@ -285,6 +318,8 @@ def create_feedback_graph(
                     "seen_results": seen_results,
                     "last_result_signature": result_signature,
                     "last_result_duplicate": duplicate_result,
+                    "result_frequencies": result_frequencies,
+                    "duplicate_run_length": duplicate_run_length,
                 }
                 
             except Exception as e:
@@ -318,6 +353,8 @@ def create_feedback_graph(
                     "seen_results": seen_results,
                     "last_result_signature": error_signature,
                     "last_result_duplicate": False,
+                    "result_frequencies": state.get("result_frequencies") or {},
+                    "duplicate_run_length": 0,
                 }
 
         def execute_direct(state: FeedbackState) -> FeedbackState:
@@ -622,8 +659,13 @@ def create_feedback_graph(
                     if reasoning_note:
                         improvements_list.append(reasoning_note)
                 duplicate_result = latest_result.get("duplicate") or state.get("last_result_duplicate", False)
+                duplicate_run_length = state.get("duplicate_run_length", 0)
                 if duplicate_result:
                     improvements_list.append("이전 출력과 동일합니다. 접근 방식을 변경하세요.")
+                    if duplicate_run_length >= 2:
+                        improvements_list.append(
+                            f"연속 {duplicate_run_length}회 동일 출력이 감지되었습니다. 다른 도구를 사용하거나 프롬프트 구조를 재구성하세요."
+                        )
 
                 remediation_notes = state.get("remediation_notes") or []
                 combined_notes = improvements_list + remediation_notes
@@ -647,6 +689,9 @@ def create_feedback_graph(
                         stagnation_count += 1
                     else:
                         stagnation_count = 0
+
+                if duplicate_run_length >= 2:
+                    stagnation_count = max(stagnation_count, duplicate_run_length)
 
                 max_iterations = state.get("max_iterations", 5)
                 if max_iterations:
@@ -682,6 +727,9 @@ def create_feedback_graph(
                 return "finalize"
 
             if state.get("stagnation_count", 0) >= 2:
+                return "finalize"
+
+            if state.get("duplicate_run_length", 0) >= 3:
                 return "finalize"
 
             # 피드백 점수 확인 (enable_auto_feedback가 True일 때만)
