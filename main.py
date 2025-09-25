@@ -31,6 +31,7 @@ from service.database import AppDatabaseManager
 from service.embedding.embedding_factory import EmbeddingFactory
 from service.stt.stt_factory import STTFactory
 from service.tts.tts_factory import TTSFactory
+from service.guarder.guarder_factory import GuarderFactory
 from service.vast.vast_service import VastService
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
@@ -169,6 +170,22 @@ async def lifespan(app: FastAPI):
             print_step_banner(5.5, "TTS SERVICE SETUP", "TTS service is disabled in configuration")
             app.state.tts_service = None
 
+        # 5.7. Guarder 서비스 초기화
+        if config_composer.get_config_by_name("IS_AVAILABLE_GUARDER").value:
+            print_step_banner(5.7, "GUARDER SERVICE SETUP", "Setting up Text Moderation services")
+            try:
+                logger.info("⚙️  Step 5.7: Guarder service initialization starting...")
+                guarder_client = GuarderFactory.create_guarder_client(config_composer)
+                app.state.guarder_service = guarder_client
+                logger.info("✅ Step 5.7: Guarder service initialized successfully!")
+            except Exception as e:
+                logger.error(f"❌ Step 5.7: Failed to initialize Guarder service: {e}")
+                # Guarder 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
+                app.state.guarder_service = None
+        else:
+            print_step_banner(5.7, "GUARDER SERVICE SETUP", "Guarder service is disabled in configuration")
+            app.state.guarder_service = None
+
         # 6. vast_service Instance 생성
         print_step_banner(6, "VAST SERVICE SETUP", "Initializing cloud compute management")
         logger.info("⚙️  Step 6: VAST service initialization starting...")
@@ -290,6 +307,12 @@ async def lifespan(app: FastAPI):
             logger.info("🔄 Cleaning up TTS service...")
             await app.state.tts_service.cleanup()
             logger.info("✅ TTS service cleanup complete")
+
+        # Guarder 서비스 정리
+        if hasattr(app.state, 'guarder_service') and app.state.guarder_service:
+            logger.info("🔄 Cleaning up Guarder service...")
+            await app.state.guarder_service.cleanup()
+            logger.info("✅ Guarder service cleanup complete")
 
         # 애플리케이션 데이터베이스 정리
         if hasattr(app.state, 'app_db') and app.state.app_db:
