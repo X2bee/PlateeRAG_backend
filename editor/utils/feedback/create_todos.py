@@ -62,6 +62,15 @@ KEYWORDS_REQUIRING_TOOLS = [
     "테스트",
 ]
 
+SUMMARY_KEYWORDS = [
+    "요약",
+    "정리",
+    "보고",
+    "summary",
+    "report",
+    "결과 공유",
+]
+
 
 def _safe_json_loads(content: str) -> Optional[Dict]:
     tries = [content]
@@ -113,15 +122,53 @@ def _keyword_hits(text: str) -> bool:
     return any(keyword.lower() in lowered for keyword in KEYWORDS_REQUIRING_TOOLS)
 
 
+def _contains_summary_task(todos: List[Dict]) -> bool:
+    for todo in todos:
+        combined = f"{todo.get('title', '')} {todo.get('description', '')}".lower()
+        if any(keyword.lower() in combined for keyword in SUMMARY_KEYWORDS):
+            return True
+    return False
+
+
+def _append_summary_todo(base_text: str, todos: List[Dict]) -> List[Dict]:
+    if _contains_summary_task(todos):
+        return todos
+
+    summary_id = (todos[-1]["id"] + 1) if todos else 1
+    summary_todo = {
+        "id": summary_id,
+        "title": "결과 요약 및 보고",
+        "description": "앞선 TODO 실행 결과와 핵심 인사이트를 정리하고 보고하세요.",
+        "priority": "medium",
+        "tool_required": "simple",
+    }
+    return todos + [summary_todo]
+
+
 def create_todos(llm, text: str, tools_list: Optional[List] = None) -> Dict:
     """LLM으로 TODO 리스트와 실행 모드 결정"""
 
     def _planner_fallback(reason: str, llm_raw: str = "") -> Dict:
-        fallback_todos = _ensure_todo_structure(text, None)
+        fallback_todos = [
+            {
+                "id": 1,
+                "title": "요청 이해 및 요구사항 정리",
+                "description": text,
+                "priority": "high",
+                "tool_required": "simple",
+            },
+            {
+                "id": 2,
+                "title": "결과 정리 및 응답 작성",
+                "description": "수집한 정보와 결론을 구조화하여 사용자에게 전달",
+                "priority": "medium",
+                "tool_required": "simple",
+            },
+        ]
         return {
-            "mode": "direct",
+            "mode": "todo",
             "reason": reason,
-            "todos": [],
+            "todos": fallback_todos,
             "tool_usage": "simple",
             "raw_todos": fallback_todos,
             "llm_raw": llm_raw,
@@ -145,7 +192,7 @@ def create_todos(llm, text: str, tools_list: Optional[List] = None) -> Dict:
         tool_usage = parsed.get("tool_usage", "simple")
     except Exception as parse_error:  # pragma: no cover - runtime safety
         logger.error("TODO planner parsing failed: %s", parse_error, exc_info=True)
-        return _planner_fallback("TODO 계획 응답을 파싱하지 못해 직접 실행으로 전환합니다.", llm_raw=content)
+        return _planner_fallback("TODO 계획 응답을 파싱하지 못해 기본 TODO 템플릿을 사용합니다.", llm_raw=content)
 
     if mode not in ("direct", "todo"):
         mode = "todo"
@@ -180,6 +227,17 @@ def create_todos(llm, text: str, tools_list: Optional[List] = None) -> Dict:
             tool_usage = "complex"
         else:
             tool_usage = "simple"
+
+    todos = _append_summary_todo(text, todos)
+
+    if mode == "direct" and len(todos) > 1:
+        mode = "todo"
+        if not reason:
+            reason = "최종 결과 요약 단계를 포함하기 위해 TODO 모드로 전환"
+
+    if mode == "todo":
+        any_complex = any(todo.get("tool_required") == "complex" for todo in todos)
+        tool_usage = "complex" if has_tools and any_complex else "simple"
 
     return {
         "mode": mode,

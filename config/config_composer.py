@@ -281,6 +281,13 @@ class ConfigComposer:
         # 고정된 디렉토리 목록
         required_directories = ["constants", "downloads"]
 
+        try:
+            model_storage_config = self.get_config_by_name("MODEL_STORAGE_DIRECTORY")
+            if model_storage_config and model_storage_config.value:
+                required_directories.append(model_storage_config.value)
+        except KeyError:
+            pass
+
         for directory in required_directories:
             if not os.path.exists(directory):
                 os.makedirs(directory, exist_ok=True)

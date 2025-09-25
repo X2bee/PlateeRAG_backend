@@ -149,14 +149,28 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
     async def on_tool_end(self, output, **kwargs) -> None:
         """도구 실행이 완료될 때 호출"""
 
-        tool_output = str(output)
         self.tool_outputs.append(output)
 
+        if isinstance(output, (dict, list)):
+            try:
+                import json
+
+                tool_output = json.dumps(output, ensure_ascii=False, indent=2)
+            except Exception:
+                tool_output = str(output)
+        else:
+            tool_output = str(output)
+
         parsed_output = _parse_document_citations(tool_output)
-        log_entry = f"<TOOLOUTPUTLOG>{parsed_output}</TOOLOUTPUTLOG>"
+        display_output = parsed_output.strip() if parsed_output.strip() else tool_output.strip()
+
+        if len(display_output) > 1200:
+            display_output = display_output[:1200].rstrip() + "..."
+
+        log_entry = f"<TOOLOUTPUTLOG>{display_output}</TOOLOUTPUTLOG>"
         self.tool_logs.append(log_entry)
 
-        self.put_status(log_entry)
+        self.put_status(f"{log_entry}\n")
 
     async def on_tool_error(self, error, **kwargs) -> None:
         self.put_status(f"❌ 도구 실행 오류: {str(error)}\n")

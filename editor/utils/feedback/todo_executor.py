@@ -65,6 +65,7 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             3. 결과는 다음 단계에서 활용하기 쉽도록 명확하고 검증 가능한 형태로 정리하세요.
             4. 필요하다면 중간 계산 과정을 설명하되, 최종 답변은 현재 TODO에 필요한 핵심 결과만 포함하세요.
             5. 쿼리나 계산을 수행했다면 실행 결과(반환된 데이터 요약 또는 "결과 없음"과 같은 명시적 설명)를 반드시 포함하세요.
+            6. 이미 앞선 단계에서 언급한 내용이라도 현재 TODO 답변 안에 다시 명시하세요. "이전에 기록됨" 등의 표현으로 생략하지 마세요.
             """
         ).strip()
 
@@ -102,6 +103,8 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             last_result_signature=None,
             last_result_duplicate=False,
             stagnation_count=0,
+            result_frequencies={},
+            duplicate_run_length=0,
             original_user_request=text,
             previous_results_context=previous_context,
             todo_directive=todo_text,

@@ -24,6 +24,8 @@ class FeedbackState(TypedDict):
     last_result_signature: Optional[str]
     last_result_duplicate: Optional[bool]
     stagnation_count: Optional[int]
+    result_frequencies: Optional[Dict[str, int]]
+    duplicate_run_length: Optional[int]
     original_user_request: Optional[str]
     previous_results_context: Optional[str]
     todo_directive: Optional[str]

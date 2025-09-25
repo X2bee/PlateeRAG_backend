@@ -1,0 +1,182 @@
+"""Utility for loading models and running inference."""
+from __future__ import annotations
+
+import importlib
+import logging
+import pickle
+import sys
+import threading
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+try:  # Optional dependency for serialization
+    import joblib  # type: ignore
+except ImportError:  # pragma: no cover - fallback handled below
+    joblib = None
+
+try:  # Optional scientific stack
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover - fallback handled below
+    np = None
+
+logger = logging.getLogger("model-inference-service")
+
+MODULE_FALLBACKS = {
+    "tests.assets.sample_demo_model": "service.model.sample_demo_model",
+}
+
+
+class ModelInferenceService:
+    """Provides cached model loading and inference helpers."""
+
+    def __init__(self):
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.RLock()
+
+    def load_model(self, file_path: str) -> Any:
+        path = Path(file_path).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Model artifact not found: {path}")
+
+        with self._lock:
+            cache_entry = self._cache.get(str(path))
+            mtime = path.stat().st_mtime
+            if cache_entry and cache_entry.get("mtime") == mtime:
+                return cache_entry["model"]
+
+            try:
+                model = self._load_artifact(path)
+            except ModuleNotFoundError as exc:
+                missing_module = getattr(exc, "name", None)
+                if missing_module and self._ensure_fallback_module(missing_module):
+                    model = self._load_artifact(path)
+                else:
+                    raise
+
+            self._cache[str(path)] = {"model": model, "mtime": mtime}
+            logger.info("Loaded model from %s", path)
+            return model
+
+    @staticmethod
+    def _normalize_inputs(raw_inputs: Any, input_schema: Optional[List[str]] = None) -> Any:
+        if raw_inputs is None:
+            raise ValueError("Inputs are required for inference")
+
+        if isinstance(raw_inputs, list) and not raw_inputs:
+            raise ValueError("At least one record is required for inference")
+
+        # Single record passed as dictionary
+        if isinstance(raw_inputs, dict):
+            if not input_schema:
+                raise ValueError("Input schema required when passing a dictionary record")
+            row = [ModelInferenceService._coerce_value(raw_inputs[field]) for field in input_schema]
+            return ModelInferenceService._to_array([row])
+
+        if not isinstance(raw_inputs, list):
+            raise ValueError("Inputs must be a list, list of lists, or list of dicts")
+
+        first_item = raw_inputs[0]
+
+        if isinstance(first_item, dict):
+            if not input_schema:
+                raise ValueError("Input schema required when passing dictionaries")
+            rows: List[List[Any]] = []
+            for idx, item in enumerate(raw_inputs):
+                row = []
+                for field in input_schema:
+                    if field not in item:
+                        raise ValueError(f"Missing feature '{field}' in record index {idx}")
+                    row.append(ModelInferenceService._coerce_value(item[field]))
+                rows.append(row)
+            return ModelInferenceService._to_array(rows)
+
+        if isinstance(first_item, (list, tuple)):
+            rows = [
+                [ModelInferenceService._coerce_value(value) for value in list(item)]
+                for item in raw_inputs
+            ]
+            return ModelInferenceService._to_array(rows)
+
+        if isinstance(raw_inputs, (list, tuple)):
+            coerced = [ModelInferenceService._coerce_value(value) for value in raw_inputs]
+        else:
+            coerced = [ModelInferenceService._coerce_value(raw_inputs)]
+        return ModelInferenceService._to_array([coerced])
+
+    def predict(self,
+                file_path: str,
+                inputs: Any,
+                input_schema: Optional[List[str]] = None,
+                return_probabilities: bool = False) -> Dict[str, Any]:
+        model = self.load_model(file_path)
+        normalized_inputs = self._normalize_inputs(inputs, input_schema)
+
+        predictions = model.predict(normalized_inputs)
+        response: Dict[str, Any] = {
+            "predictions": self._to_serializable(predictions)
+        }
+
+        if return_probabilities and hasattr(model, "predict_proba"):
+            probabilities = model.predict_proba(normalized_inputs)
+            response["probabilities"] = self._to_serializable(probabilities)
+
+        return response
+
+    @staticmethod
+    def _to_serializable(value: Any) -> Any:
+        if np is not None and isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, (list, tuple)):
+            return [ModelInferenceService._to_serializable(item) for item in value]
+        if hasattr(value, "tolist"):
+            try:
+                return value.tolist()
+            except Exception:  # pragma: no cover - fallback handler
+                pass
+        return value
+
+    @staticmethod
+    def _to_array(rows: List[List[Any]]) -> Any:
+        if np is not None:
+            return np.array(rows, dtype=object)
+        return [list(row) for row in rows]
+
+    @staticmethod
+    def _coerce_value(value: Any) -> Any:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped == "":
+                return value
+            try:
+                return float(stripped)
+            except ValueError:
+                return value
+        return value
+
+    @staticmethod
+    def _load_artifact(path: Path) -> Any:
+        if joblib is not None:
+            return joblib.load(path)
+        with path.open("rb") as artifact:
+            return pickle.load(artifact)
+
+    def _ensure_fallback_module(self, module_name: str) -> bool:
+        fallback = MODULE_FALLBACKS.get(module_name)
+        if not fallback:
+            return False
+        try:
+            module = importlib.import_module(fallback)
+            sys.modules[module_name] = module
+            logger.warning(
+                "Registered fallback module mapping %s -> %s", module_name, fallback
+            )
+            return True
+        except ModuleNotFoundError:
+            logger.error("Fallback module %s not found", fallback)
+            return False
+
+    def clear_cache(self, file_path: str):
+        resolved = str(Path(file_path).expanduser().resolve())
+        with self._lock:
+            if resolved in self._cache:
+                del self._cache[resolved]

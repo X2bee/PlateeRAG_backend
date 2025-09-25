@@ -183,6 +183,8 @@ class AgentVLLMFeedbackLoopNode(Node):
                     last_result_signature=None,
                     last_result_duplicate=False,
                     stagnation_count=0,
+                    result_frequencies={},
+                    duplicate_run_length=0,
                     original_user_request=text,
                     previous_results_context="",
                     todo_directive=text,
