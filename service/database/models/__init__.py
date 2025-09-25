@@ -29,7 +29,7 @@ __all__ = [
     'TrainMeta',
     'GroupMeta',
     'BackendLogs',
-    'MLModel'
+    'MLModel',
     'Prompts'
 ]
 
@@ -52,6 +52,6 @@ APPLICATION_MODELS = [
     TrainMeta,
     GroupMeta,
     BackendLogs,
-    MLModel
+    MLModel,
     Prompts
 ]
