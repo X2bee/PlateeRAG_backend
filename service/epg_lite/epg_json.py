@@ -14,8 +14,8 @@ if __name__ == "__main__":
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-from service.epg2xml import EPGHandler
-from service.epg2xml.utils import get_cache_file_path, dump_json
+from service.epg_lite import EPGHandler
+from service.epg_lite.utils import get_cache_file_path, dump_json
 
 NAVER_CHANNELS = [
             { "Name": "롯데홈쇼핑", "ServiceId": "815100"},

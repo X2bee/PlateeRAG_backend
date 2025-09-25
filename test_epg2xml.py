@@ -5,9 +5,9 @@ from pathlib import Path
 # 현재 디렉토리를 Python path에 추가
 sys.path.insert(0, str(Path(__file__).parent))
 
-from service.epg2xml import EPGHandler
-from service.epg2xml.config import setup_root_logger
-from service.epg2xml.utils import get_cache_file_path
+from service.epg2xml_backup import EPGHandler
+from service.epg2xml_backup.config import setup_root_logger
+from service.epg2xml_backup.utils import get_cache_file_path
 
 
 def setup_test_config():
