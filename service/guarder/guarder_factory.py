@@ -85,6 +85,7 @@ class GuarderFactory:
             config = {
                 "model_name": guarder_config.QWEN3GUARD_MODEL_NAME.value,
                 "model_device": guarder_config.QWEN3GUARD_MODEL_DEVICE.value,
+                "rigorous_filter": guarder_config.GUARDER_RIGOROUS_FILTER.value,
             }
 
             # HuggingFace API 키가 있는 경우 추가

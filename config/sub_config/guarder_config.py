@@ -13,6 +13,12 @@ class GuarderConfig(BaseConfig):
             default_value=True,
             type_converter=convert_to_bool
         )
+        self.GUARDER_RIGOROUS_FILTER = self.create_persistent_config(
+            env_name="GUARDER_RIGOROUS_FILTER",
+            config_path="guarder.rigorous_filter",
+            default_value=False,
+            type_converter=convert_to_bool
+        )
         self.GUARDER_PROVIDER = self.create_persistent_config(
             env_name="GUARDER_PROVIDER",
             config_path="guarder.provider",

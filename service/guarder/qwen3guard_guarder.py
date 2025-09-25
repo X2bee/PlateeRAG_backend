@@ -18,6 +18,7 @@ class Qwen3GuardGuarder(BaseGuarder):
         super().__init__(config)
         self.model_name = config.get("model_name", "Qwen/Qwen3Guard-Gen-0.6B")
         self.model_device = config.get("model_device", "cpu")
+        self.rigorous_filter = config.get("rigorous_filter", False)
         self.api_key = config.get("api_key", "")
         self.tokenizer = None
         self.model = None
@@ -104,6 +105,7 @@ class Qwen3GuardGuarder(BaseGuarder):
             )
 
             logger.info("Text moderation completed for text: %s...", text[:50])
+            logger.info("Moderation result: %s", moderation_result)
             return moderation_result
 
         except (ValueError, ImportError, RuntimeError) as e:
@@ -150,7 +152,11 @@ class Qwen3GuardGuarder(BaseGuarder):
                 is_safe = False
             elif label == "Safe":
                 is_safe = True
-            # Controversial의 경우 카테고리 기반 판단 유지
+            elif label == "Controversial":
+                if self.rigorous_filter:
+                    is_safe = False
+                else:
+                    is_safe = True
 
             # 신뢰도 계산 (간단한 휴리스틱)
             confidence = 0.9 if label in ["Safe", "Unsafe"] else 0.7

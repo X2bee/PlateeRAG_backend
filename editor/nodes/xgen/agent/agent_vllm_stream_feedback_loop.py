@@ -19,6 +19,7 @@ from editor.nodes.xgen.tool.print_format import PrintAnyNode
 from editor.utils.feedback.create_feedback_graph import create_feedback_graph
 from editor.utils.feedback.create_todos import create_todos
 from editor.utils.helper.feedback_stream_helper import FeedbackStreamEmitter
+from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
 from editor.utils.feedback.todo_executor import todo_executor, build_final_summary
 from editor.utils.prefix_prompt import prefix_prompt
 from editor.type_model.feedback_state import FeedbackState
@@ -72,6 +73,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
         {"id": "show_timestamps", "name": "Show Timestamps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "타임스탬프를 표시할지 여부", "dependency": "enable_formatted_output"},
         {"id": "max_iteration_display", "name": "Max Iterations Display", "type": "INT", "value": 5, "min": 1, "max": 20, "step": 1, "optional": True, "description": "표시할 최대 반복 횟수", "dependency": "enable_formatted_output"},
         {"id": "show_todo_details", "name": "Show TODO Details", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "TODO 실행 과정을 상세히 표시할지 여부", "dependency": "enable_formatted_output"},
+        {"id": "use_guarder", "name": "Use Guarder Service", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Guarder 서비스를 사용할지 여부입니다."},
     ]
 
     def __init__(self):
@@ -110,6 +112,7 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
         show_timestamps: bool = False,
         max_iteration_display: int = 5,
         show_todo_details: bool = True,
+        use_guarder: bool = False,
         **kwargs,
     ) -> Generator[str, None, None]:
         stream_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue()
@@ -125,6 +128,12 @@ class AgentVLLMFeedbackLoopStreamNode(Node):
 
         def worker() -> None:
             try:
+                if use_guarder:
+                    is_safe, moderation_message = use_guarder_for_text_moderation(text)
+                    if not is_safe:
+                        emitter.emit_error(moderation_message)
+                        return
+
                 enhanced_prompt = prefix_prompt + default_prompt
                 llm, tools_list, chat_history = prepare_llm_components(
                     text,

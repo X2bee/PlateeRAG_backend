@@ -5,7 +5,7 @@ from editor.node_composer import Node
 from langchain.schema.output_parser import StrOutputParser
 from langchain_core.output_parsers import JsonOutputParser
 from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
-from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput
+from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput, use_guarder_for_text_moderation
 from editor.utils.prefix_prompt import prefix_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
@@ -52,6 +52,7 @@ class AgentOpenAINode(Node):
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
         {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Tool 사용시 해당 과정을 출력할지 여부를 결정합니다."},
         {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
+        {"id": "use_guarder", "name": "Use Guarder Service", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Guarder 서비스를 사용할지 여부입니다."},
     ]
 
     def execute(
@@ -69,8 +70,14 @@ class AgentOpenAINode(Node):
         strict_citation: bool = True,
         return_intermediate_steps: bool = False,
         default_prompt: str = default_prompt,
+        use_guarder: bool = False,
     ) -> str:
         try:
+            if use_guarder:
+                is_safe, moderation_message = use_guarder_for_text_moderation(text)
+                if not is_safe:
+                    return moderation_message
+
             default_prompt  = prefix_prompt+default_prompt
             llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=False, plan=plan)
 
