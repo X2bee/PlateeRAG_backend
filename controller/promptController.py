@@ -16,7 +16,7 @@ from controller.helper.controllerHelper import extract_user_id_from_request
 from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("prompt-controller")
-router = APIRouter(prefix="/prompt", tags=["prompt"])
+router = APIRouter(prefix="/api/prompt", tags=["prompt"])
 
 @router.get("/list")
 async def get_prompt_list(
