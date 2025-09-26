@@ -21,123 +21,151 @@ def extract_json_from_code_block(text: str) -> str:
     """
     마크다운 코드 블록에서 JSON 내용을 추출합니다.
     ```json...``` 또는 ```...``` 형태의 코드 블록을 처리합니다.
-    
+
     Args:
         text: 처리할 텍스트
-        
+
     Returns:
         추출된 JSON 내용 또는 원본 텍스트
     """
     import re
-    
+
     clean_data = text.strip()
-    
+
     # ```json으로 시작하고 ```로 끝나는 패턴 제거
     json_pattern = r'^```(?:json)?\s*\n?(.*?)\n?\s*```$'
     match = re.search(json_pattern, clean_data, re.DOTALL | re.IGNORECASE)
-    
+
     if match:
         return match.group(1).strip()
-    
+
     return clean_data
 
 def parse_json_safely(text: str, logger=None) -> tuple[Any, bool]:
     """
     텍스트를 JSON으로 안전하게 파싱합니다.
     코드 블록으로 감싸진 JSON도 자동으로 처리합니다.
-    
+
     Args:
         text: 파싱할 텍스트
         logger: 로깅을 위한 logger 객체 (선택사항)
-        
+
     Returns:
         (파싱된 데이터, 성공 여부) 튜플
     """
     import json
-    
+
     try:
         # 먼저 코드 블록에서 JSON 추출 시도
         json_content = extract_json_from_code_block(text)
-        
+
         if json_content != text and logger:
             logger.info(f"코드 블록에서 JSON 추출: {json_content}")
-        
+
         # JSON 파싱 시도
         parsed_data = json.loads(json_content)
-        
+
         if logger:
             logger.info(f"JSON 파싱 성공: {parsed_data}")
-        
+
         return parsed_data, True
-        
+
     except (json.JSONDecodeError, ValueError, AttributeError) as e:
         if logger:
             logger.info(f"JSON 파싱 실패 ({e}), 원본 텍스트 반환")
-        
+
         return text, False
 
 def collect_generator_data(generator, logger=None) -> tuple[str, int]:
     """
     Generator 객체에서 모든 데이터를 수집하여 문자열로 결합합니다.
-    
+
     Args:
         generator: 수집할 Generator 객체
         logger: 로깅을 위한 logger 객체 (선택사항)
-        
+
     Returns:
         (수집된 데이터, 청크 수) 튜플
-        
+
     Raises:
         StopIteration, GeneratorExit, RuntimeError, ValueError: Generator 처리 중 오류
     """
     chunks = []
-    
+
     for chunk in generator:
         if chunk is not None:
             chunks.append(str(chunk))
-    
+
     collected_data = ''.join(chunks) if chunks else ""
-    
+
     if logger:
         logger.info(f"Generator 수집 완료: 총 청크 수: {len(chunks)}, 결과 길이: {len(collected_data)}")
-    
+
     return collected_data, len(chunks)
 
 def process_generator_input(key: str, generator, logger=None) -> Any:
     """
     Generator 입력을 처리하여 적절한 데이터 형태로 변환합니다.
     JSON 파싱도 자동으로 시도합니다.
-    
+
     Args:
         key: 입력 키 이름 (로깅용)
         generator: 처리할 Generator 객체
         logger: 로깅을 위한 logger 객체 (선택사항)
-        
+
     Returns:
         처리된 데이터 (Dict, List 또는 문자열)
     """
     if logger:
         logger.info(f"Generator 입력 감지: {key} ({type(generator)})")
-    
+
     try:
         # Generator에서 데이터 수집
         collected_data, chunk_count = collect_generator_data(generator, logger)
-        
+
         # JSON 파싱 시도
         parsed_data, is_json = parse_json_safely(collected_data, logger)
-        
+
         if is_json:
             return parsed_data
         else:
             if logger:
                 logger.info(f"문자열로 처리: {key} = {collected_data[:100]}...")
             return collected_data
-            
+
     except (StopIteration, GeneratorExit, RuntimeError, ValueError) as e:
         error_msg = f"Generator 수집 오류: {e}"
         if logger:
             logger.error(f"Generator 수집 중 오류: {key}, {e}")
         return error_msg
+
+def clean_router_input_text(text: str) -> str:
+    """
+    RouterNode 입력 텍스트에서 불필요한 태그들을 제거합니다.
+
+    Args:
+        text: 정리할 텍스트
+
+    Returns:
+        정리된 텍스트
+    """
+    import re
+
+    if not isinstance(text, str):
+        return text
+
+    # 각종 태그들 제거
+    text = re.sub(r"<FEEDBACK_(LOOP|RESULT|STATUS)>.*?</FEEDBACK_(LOOP|RESULT|STATUS)>", '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<TODO_DETAILS>.*?</TODO_DETAILS>", '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<TOOLUSELOG>.*?</TOOLUSELOG>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<TOOLOUTPUTLOG>.*?</TOOLOUTPUTLOG>', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 여러 개의 연속된 공백/줄바꿈 정리
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
+    return text
 
 def get_route_key_from_data(data: Any, routing_criteria: str) -> str:
     """
@@ -404,9 +432,19 @@ class AsyncWorkflowExecutor:
                     for key, value in kwargs.items():
                         if hasattr(value, '__iter__') and hasattr(value, '__next__'):
                             # 헬퍼 함수를 사용하여 Generator 처리
-                            processed_kwargs[key] = process_generator_input(key, value, logger)
+                            processed_value = process_generator_input(key, value, logger)
+                            # RouterNode 전용 텍스트 정리 (마지막 전처리)
+                            if isinstance(processed_value, str):
+                                processed_value = clean_router_input_text(processed_value)
+                                logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
+                            processed_kwargs[key] = processed_value
                         else:
-                            processed_kwargs[key] = value
+                            # 일반 값도 문자열인 경우 정리 적용
+                            if isinstance(value, str):
+                                processed_kwargs[key] = clean_router_input_text(value)
+                                logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
+                            else:
+                                processed_kwargs[key] = value
 
                     kwargs = processed_kwargs
                     logger.info(" -> RouterNode 전처리 완료")
