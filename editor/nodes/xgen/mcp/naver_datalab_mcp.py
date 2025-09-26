@@ -37,7 +37,7 @@ class NaverDatalabMCP(Node):
     ]
 
     parameters = [
-        {"id": "description", "name": "Description", "type": "STR", "value": "해당 도구는 최신, 분야별 인기 검색어를 파악하는 도구입니다.", "required": True, "expandable": True, "description": "이 도구를 언제 사용하여야 하는지 설명합니다. AI는 해당 설명을 통해, 해당 도구를 언제 호출해야할지 결정할 수 있습니다."},
+        {"id": "description", "name": "Description", "type": "STR", "value": "해당 도구는 최신, 분야별 인기 검색어를 파악하는 도구입니다. 반드시 '패션의류', '패션잡화', '화장품/미용', '디지털/가전', '가구/인테리어', '출산/육아', '식품', '스포츠/레저', '생활/건강', '여가/생활편의', '도서' 중 하나의 카테고리를 선택하여야 합니다.", "required": True, "expandable": True, "description": "이 도구를 언제 사용하여야 하는지 설명합니다. AI는 해당 설명을 통해, 해당 도구를 언제 호출해야할지 결정할 수 있습니다."},
     ]
 
     def _get_category_code_by_name(self, category_name: str) -> tuple:
@@ -160,7 +160,7 @@ class NaverDatalabMCP(Node):
 
     def execute(self, description: str):
         if description.strip() == "" or len(description.strip()) < 1:
-            description = "해당 도구는 최신, 분야별 인기 검색어를 파악하는 도구입니다."
+            description = "해당 도구는 최신, 분야별 인기 검색어를 파악하는 도구입니다. 반드시 '패션의류', '패션잡화', '화장품/미용', '디지털/가전', '가구/인테리어', '출산/육아', '식품', '스포츠/레저', '생활/건강', '여가/생활편의', '도서' 중 하나의 카테고리를 선택하여야 합니다."
 
         def create_trend_rank_tool():
             class ShopTrendRank(BaseModel):
