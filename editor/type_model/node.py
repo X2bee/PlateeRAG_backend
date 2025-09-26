@@ -76,6 +76,7 @@ FUNCTION_LABEL_MAP = {
     'api_loader': 'API Loader',
     'mcp': 'MCP',
     'arithmetic':'Arithmetic',
+    'router': 'Router',
     'endnode': 'End Node',
     'startnode': 'Start Node',
 }
