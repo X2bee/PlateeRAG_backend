@@ -179,6 +179,13 @@ class AppDatabaseManager:
                     else:
                         where_clauses.append(f"{real_key} NOT LIKE ?")
                     values.append(f"%{value}%")
+                elif key.endswith("__not__"):
+                    real_key = key.removesuffix("__not__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{real_key} != %s")
+                    else:
+                        where_clauses.append(f"{real_key} != ?")
+                    values.append(value)
                 else:
                     if db_type == "postgresql":
                         where_clauses.append(f"{key} = %s")
@@ -296,6 +303,13 @@ class AppDatabaseManager:
                     else:
                         where_clauses.append(f"{table_name}.{real_key} NOT LIKE ?")
                     values.append(f"%{value}%")
+                elif key.endswith("__not__"):
+                    real_key = key.removesuffix("__not__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{table_name}.{real_key} != %s")
+                    else:
+                        where_clauses.append(f"{table_name}.{real_key} != ?")
+                    values.append(value)
                 else:
                     if db_type == "postgresql":
                         where_clauses.append(f"{table_name}.{key} = %s")
