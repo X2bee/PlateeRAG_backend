@@ -18,6 +18,7 @@ from service.database.logger_helper import create_logger
 from service.model.model_registry_service import ModelRegistryService
 from service.model.model_inference_service import ModelInferenceService
 from service.model.model_deletion_service import ModelDeletionService
+from service.model.mlflow_utils import extract_mlflow_info
 
 logger = logging.getLogger("model-controller")
 
@@ -332,6 +333,7 @@ async def run_inference(request: Request, payload: InferenceRequest):
             inputs=payload.inputs,
             input_schema=model_record.get_input_schema(),
             return_probabilities=payload.return_probabilities,
+            model_record=model_record,
         )
     except FileNotFoundError as exc:
         backend_log.error("Stored model artifact missing", exception=exc)
@@ -376,6 +378,8 @@ async def sync_model_artifacts(request: Request):
     removed_ids = []
 
     for model in models:
+        if extract_mlflow_info(model):
+            continue
         try:
             path = Path(model.file_path)
         except TypeError:
