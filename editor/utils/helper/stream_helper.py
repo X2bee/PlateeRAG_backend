@@ -149,14 +149,28 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
     async def on_tool_end(self, output, **kwargs) -> None:
         """도구 실행이 완료될 때 호출"""
 
-        tool_output = str(output)
         self.tool_outputs.append(output)
 
+        if isinstance(output, (dict, list)):
+            try:
+                import json
+
+                tool_output = json.dumps(output, ensure_ascii=False, indent=2)
+            except Exception:
+                tool_output = str(output)
+        else:
+            tool_output = str(output)
+
         parsed_output = _parse_document_citations(tool_output)
-        log_entry = f"<TOOLOUTPUTLOG>{parsed_output}</TOOLOUTPUTLOG>"
+        display_output = parsed_output.strip() if parsed_output.strip() else tool_output.strip()
+
+        if len(display_output) > 1200:
+            display_output = display_output[:1200].rstrip() + "..."
+
+        log_entry = f"<TOOLOUTPUTLOG>{display_output}</TOOLOUTPUTLOG>"
         self.tool_logs.append(log_entry)
 
-        self.put_status(log_entry)
+        self.put_status(f"{log_entry}\n")
 
     async def on_tool_error(self, error, **kwargs) -> None:
         self.put_status(f"❌ 도구 실행 오류: {str(error)}\n")
@@ -197,6 +211,12 @@ def execute_agent_streaming(
                     return result
                 except Exception as e:
                     logger.error(f"Agent 실행 중 오류: {str(e)}", exc_info=True)
+                    # OpenAI API validation error에 대한 추가 정보 제공
+                    if "validation error" in str(e).lower() and "function.arguments" in str(e):
+                        logger.error("OpenAI Tool Calling validation error detected. This may be caused by:")
+                        logger.error("1. Tool with empty or None args_schema")
+                        logger.error("2. Tool function returning invalid argument format")
+                        logger.error("3. Pydantic schema validation failure")
                     handler.put_error(e)
                     execution_finished[0] = True
                     raise e

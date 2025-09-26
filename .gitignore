@@ -11,6 +11,7 @@ uv.lock
 .Python
 build/
 exported_nodes.json
+constants/config.json
 develop-eggs/
 dist/
 downloads/
@@ -207,5 +208,7 @@ backup
 
 CLAUDE.md
 GEMINI.md
+tests/
+docs/
 
 docker-compose.yaml

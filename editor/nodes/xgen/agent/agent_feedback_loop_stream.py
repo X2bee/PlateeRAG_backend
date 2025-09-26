@@ -17,6 +17,7 @@ from editor.nodes.xgen.tool.print_format import PrintAnyNode
 from editor.utils.feedback.create_feedback_graph import create_feedback_graph
 from editor.utils.feedback.create_todos import create_todos
 from editor.utils.helper.feedback_stream_helper import FeedbackStreamEmitter
+from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
 from editor.utils.feedback.todo_executor import todo_executor, build_final_summary
 from editor.utils.prefix_prompt import prefix_prompt
 from editor.type_model.feedback_state import FeedbackState
@@ -40,6 +41,7 @@ class AgentFeedbackLoopStreamNode(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
         {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema", "required": False},
+        {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
         {"id": "feedback_criteria", "name": "Feedback Criteria", "type": "FeedbackCrit", "multi": False, "required": False, "value": ""},
     ]
 
@@ -58,7 +60,7 @@ class AgentFeedbackLoopStreamNode(Node):
         {"id": "max_iterations", "name": "Max Iterations", "type": "INT", "value": 5, "min": 1, "max": 20, "step": 1, "optional": True, "description": "최대 반복 횟수"},
         {"id": "feedback_threshold", "name": "Feedback Threshold", "type": "INT", "value": 8, "min": 1, "max": 10, "step": 1, "optional": True, "description": "만족스러운 결과로 간주할 점수 임계값 (1-10)"},
         {"id": "enable_auto_feedback", "name": "Enable Auto Feedback", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "자동 피드백 평가 활성화"},
-        {"id": "enable_formatted_output", "name": "Enable Formatted Output", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "형식화된 출력 활성화"},
+        {"id": "enable_formatted_output", "name": "Enable Formatted Output", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "형식화된 출력 활성화"},
         {"id": "format_style", "name": "Format Style", "type": "STR", "value": "detailed", "required": False, "optional": True, "options": [
             {"value": "summary", "label": "요약만 표시"},
             {"value": "detailed", "label": "상세 정보 표시"},
@@ -69,6 +71,7 @@ class AgentFeedbackLoopStreamNode(Node):
         {"id": "show_timestamps", "name": "Show Timestamps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "타임스탬프를 표시할지 여부", "dependency": "enable_formatted_output"},
         {"id": "max_iteration_display", "name": "Max Iterations Display", "type": "INT", "value": 5, "min": 1, "max": 20, "step": 1, "optional": True, "description": "표시할 최대 반복 횟수", "dependency": "enable_formatted_output"},
         {"id": "show_todo_details", "name": "Show TODO Details", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "TODO 실행 과정을 상세히 표시할지 여부", "dependency": "enable_formatted_output"},
+        {"id": "use_guarder", "name": "Use Guarder Service", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Guarder 서비스를 사용할지 여부입니다."},
     ]
 
     def __init__(self):
@@ -81,6 +84,7 @@ class AgentFeedbackLoopStreamNode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
+        plan: Optional[Dict[str, Any]] = None,
         feedback_criteria: str = "",
         model: str = "gpt-4",
         temperature: float = 0.7,
@@ -98,6 +102,7 @@ class AgentFeedbackLoopStreamNode(Node):
         show_timestamps: bool = False,
         max_iteration_display: int = 5,
         show_todo_details: bool = True,
+        use_guarder: bool = False,
         **kwargs,
     ) -> Generator[str, None, None]:
         stream_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue()
@@ -113,6 +118,12 @@ class AgentFeedbackLoopStreamNode(Node):
 
         def worker() -> None:
             try:
+                if use_guarder:
+                    is_safe, moderation_message = use_guarder_for_text_moderation(text)
+                    if not is_safe:
+                        emitter.emit_error(moderation_message)
+                        return
+
                 enhanced_prompt = prefix_prompt + default_prompt
                 llm, tools_list, chat_history = prepare_llm_components(
                     text,
@@ -123,6 +134,7 @@ class AgentFeedbackLoopStreamNode(Node):
                     max_tokens,
                     base_url,
                     streaming=True,
+                    plan=plan,
                 )
 
                 additional_rag_context = ""
@@ -135,11 +147,13 @@ class AgentFeedbackLoopStreamNode(Node):
                 prompt_template_with_tool = create_tool_context_prompt(
                     additional_rag_context,
                     enhanced_prompt,
+                    plan=plan,
                 )
                 prompt_template_without_tool = create_context_prompt(
                     additional_rag_context,
                     enhanced_prompt,
                     strict_citation,
+                    plan=plan,
                 )
 
                 emitter.emit_status("<FEEDBACK_STATUS>실행 전략 평가 중...</FEEDBACK_STATUS>\n")
@@ -176,6 +190,7 @@ class AgentFeedbackLoopStreamNode(Node):
                     return_intermediate_steps,
                     feedback_threshold,
                     enable_auto_feedback,
+                    tool_agent_max_iterations=max(3, max_iterations),
                     stream_emitter=emitter,
                 )
 
@@ -193,6 +208,7 @@ class AgentFeedbackLoopStreamNode(Node):
                         todo_requires_tools=direct_requires_tools,
                         current_todo_id=None,
                         current_todo_title="Direct Execution",
+                        current_todo_description=text,
                         current_todo_index=1,
                         total_todos=0,
                         execution_mode="direct",
@@ -202,6 +218,11 @@ class AgentFeedbackLoopStreamNode(Node):
                         last_result_signature=None,
                         last_result_duplicate=False,
                         stagnation_count=0,
+                        result_frequencies={},
+                        duplicate_run_length=0,
+                        original_user_request=text,
+                        previous_results_context="",
+                        todo_directive=text,
                     )
 
                     import time

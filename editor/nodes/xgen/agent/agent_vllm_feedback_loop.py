@@ -10,15 +10,16 @@ from pydantic import BaseModel
 from fastapi import Request
 from editor.node_composer import Node
 from editor.nodes.xgen.agent.functions import (
-    prepare_llm_components, rag_context_builder, 
+    prepare_llm_components, rag_context_builder,
     create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 )
 from editor.type_model.feedback_state import FeedbackState
+from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
 from editor.utils.prefix_prompt import prefix_prompt
 
 logger = logging.getLogger(__name__)
 
-default_prompt = """You are a helpful AI assistant with feedback loop capabilities. 
+default_prompt = """You are a helpful AI assistant with feedback loop capabilities.
 You will execute tasks, evaluate results against user requirements, and iterate until satisfactory results are achieved."""
 
 # TODO tool 결과에 대한 정보를 피드백 결과에 추가하기 현재는 안보이는것 같음
@@ -37,6 +38,7 @@ class AgentVLLMFeedbackLoopNode(Node):
         {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
         {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema", "required": False},
+        {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
         {"id": "feedback_criteria", "name": "Feedback Criteria", "type": "FeedbackCrit", "multi": False, "required": False, "value": ""},
     ]
     outputs = [
@@ -53,6 +55,7 @@ class AgentVLLMFeedbackLoopNode(Node):
         {"id": "max_iterations", "name": "Max Sub-task Iterations", "type": "INT", "value": 3, "min": 1, "max": 10, "step": 1, "optional": True, "description": "개별 TODO 실행 시 최대 반복 횟수"},
         {"id": "feedback_threshold", "name": "Feedback Threshold", "type": "INT", "value": 8, "min": 1, "max": 10, "step": 1, "optional": True, "description": "만족스러운 결과로 간주할 점수 임계값 (1-10)"},
         {"id": "enable_auto_feedback", "name": "Enable Auto Feedback", "type": "BOOL", "value": True, "required": False, "optional": True, "description": "자동 피드백 평가 활성화"},
+        {"id": "use_guarder", "name": "Use Guarder Service", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Guarder 서비스를 사용할지 여부입니다."},
     ]
 
     def __init__(self):
@@ -66,7 +69,7 @@ class AgentVLLMFeedbackLoopNode(Node):
         config_composer = get_config_composer(request)
         return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
 
-        
+
     def execute(
         self,
         text: str,
@@ -74,6 +77,7 @@ class AgentVLLMFeedbackLoopNode(Node):
         memory: Optional[Any] = None,
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
+        plan: Optional[Dict[str, Any]] = None,
         feedback_criteria: str = "",
         model: str = "x2bee/Polar-14B",
         temperature: float = 0.7,
@@ -85,13 +89,28 @@ class AgentVLLMFeedbackLoopNode(Node):
         max_iterations: int = 3,
         feedback_threshold: int = 8,
         enable_auto_feedback: bool = True,
+        use_guarder: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         try:
+            if use_guarder:
+                is_safe, moderation_message = use_guarder_for_text_moderation(text)
+                if not is_safe:
+                    return {
+                        "result": moderation_message,
+                        "todos_generated": 0,
+                        "todos_completed": 0,
+                        "total_iterations": 0,
+                        "final_score": 0,
+                        "average_score": 0,
+                        "completion_rate": 0,
+                        "error": True
+                    }
+
             # LLM 컴포넌트 준비
             enhanced_prompt = prefix_prompt + default_prompt
             llm, tools_list, chat_history = prepare_llm_components(
-                text, tools, memory, model, temperature, max_tokens, base_url, streaming=False
+                text, tools, memory, model, temperature, max_tokens, base_url, streaming=False, plan=plan
             )
 
             # RAG 컨텍스트 구성
@@ -104,8 +123,8 @@ class AgentVLLMFeedbackLoopNode(Node):
                 enhanced_prompt = create_json_output_prompt(args_schema, enhanced_prompt)
 
             # 프롬프트 템플릿 생성
-            prompt_template_with_tool = create_tool_context_prompt(additional_rag_context, enhanced_prompt)
-            prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, strict_citation)
+            prompt_template_with_tool = create_tool_context_prompt(additional_rag_context, enhanced_prompt, plan=plan)
+            prompt_template_without_tool = create_context_prompt(additional_rag_context, enhanced_prompt, strict_citation, plan=plan)
 
 
             # 사용자 요청을 TODO로 분해하거나 직접 실행 모드 결정
@@ -137,6 +156,7 @@ class AgentVLLMFeedbackLoopNode(Node):
                 return_intermediate_steps,
                 feedback_threshold,
                 enable_auto_feedback,
+                tool_agent_max_iterations=max(3, max_iterations),
             )
 
             if execution_mode == "direct":
@@ -153,6 +173,7 @@ class AgentVLLMFeedbackLoopNode(Node):
                     todo_requires_tools=direct_requires_tools,
                     current_todo_id=None,
                     current_todo_title="Direct Execution",
+                    current_todo_description=text,
                     current_todo_index=1,
                     total_todos=0,
                     execution_mode="direct",
@@ -162,6 +183,11 @@ class AgentVLLMFeedbackLoopNode(Node):
                     last_result_signature=None,
                     last_result_duplicate=False,
                     stagnation_count=0,
+                    result_frequencies={},
+                    duplicate_run_length=0,
+                    original_user_request=text,
+                    previous_results_context="",
+                    todo_directive=text,
                 )
 
                 import time

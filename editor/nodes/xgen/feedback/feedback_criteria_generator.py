@@ -140,7 +140,9 @@ class FeedbackCriteriaGeneratorNode(Node):
             # 커스텀 요구사항 추가
             if custom_requirements:
                 criteria += f"\n\n추가 요구사항:\n{custom_requirements}"
-            
+
+            criteria += self._add_feedback_loop_guidelines()
+
             # 점수 체계 가이드 추가
             if include_scoring:
                 criteria += self._add_scoring_guide()
@@ -265,6 +267,18 @@ class FeedbackCriteriaGeneratorNode(Node):
                 return value
         
         return f"\n{domain} 도메인 특화 기준을 고려하여 평가하세요.\n"
+
+    def _add_feedback_loop_guidelines(self) -> str:
+        """피드백 루프 전용 운영 지침 추가"""
+
+        return """
+
+피드백 루프 운영 지침:
+- TODO 단계별로 평가할 때는 해당 단계 목표 충족 여부만 검토하세요.
+- 이전 단계 결과와의 일관성, 다음 단계로 전달 가능한지 여부를 확인하세요.
+- 속도(불필요한 반복 없이 진행), 안정성(개선 사항 반영), 정확도(요구 충족)를 함께 고려하세요.
+- 이미 완료된 작업을 중복 수행했거나 다음 단계 작업을 선행한 경우 감점 사유로 기록하세요.
+"""
 
     def _add_scoring_guide(self) -> str:
         """점수 체계 가이드 추가"""

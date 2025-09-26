@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List
+from typing import Dict, List
 
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.schema.output_parser import StrOutputParser
@@ -32,6 +32,7 @@ def create_feedback_graph(
     return_intermediate_steps=True,
     feedback_threshold=8,
     enable_auto_feedback=True,
+    tool_agent_max_iterations=6,
     stream_emitter=None,
 ):
         """LangGraph 피드백 루프 그래프 생성"""
@@ -45,7 +46,7 @@ def create_feedback_graph(
                 tools=tools_list,
                 verbose=True,
                 handle_parsing_errors=True,
-                max_iterations=3,
+                max_iterations=tool_agent_max_iterations,
                 max_execution_time=300,
             )
 
@@ -62,8 +63,27 @@ def create_feedback_graph(
             if not isinstance(text, str):
                 text = str(text)
 
-            cleaned = re.sub(r"<TOOLUSELOG>.*?</TOOLUSELOG>", "", text, flags=re.DOTALL)
-            cleaned = re.sub(r"<TOOLOUTPUTLOG>.*?</TOOLOUTPUTLOG>", "", cleaned, flags=re.DOTALL)
+            def _compact_tool_block(label: str, block: str) -> str:
+                snippet = block.strip()
+                if not snippet:
+                    return ""
+                snippet = re.sub(r"\s+", " ", snippet)
+                if len(snippet) > 600:
+                    snippet = snippet[:600].rstrip() + "..."
+                return f"{label}: {snippet}"
+
+            cleaned = re.sub(
+                r"<TOOLUSELOG>(.*?)</TOOLUSELOG>",
+                lambda m: _compact_tool_block("도구 실행", m.group(1)),
+                text,
+                flags=re.DOTALL,
+            )
+            cleaned = re.sub(
+                r"<TOOLOUTPUTLOG>(.*?)</TOOLOUTPUTLOG>",
+                lambda m: _compact_tool_block("도구 결과", m.group(1)),
+                cleaned,
+                flags=re.DOTALL,
+            )
             cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
 
             if "작업 세부 요약:" in cleaned:
@@ -78,6 +98,61 @@ def create_feedback_graph(
 
             return "\n\n".join(paragraphs)
 
+        def _has_explicit_output(text: str) -> bool:
+            if not text:
+                return False
+
+            lowered = text.lower()
+            explicit_keywords = [
+                "도구 결과",
+                "결과 없음",
+                "데이터 없음",
+                "no result",
+                "no data",
+                "0 row",
+                "0개 행",
+                "행 없음",
+                "returned",
+                "rows",
+            ]
+            if any(keyword in lowered for keyword in explicit_keywords):
+                return True
+
+            if re.search(r"\|\s*[^|]+\|", text):
+                return True
+
+            json_blocks = re.findall(r"\{[^}]+\}", text)
+            for block in json_blocks:
+                lower_block = block.lower()
+                if "query" in lower_block and not any(token in lower_block for token in ("rows", "result", "data", "output", "value", "records")):
+                    continue
+                return True
+
+            list_blocks = re.findall(r"\[[^\]]+\]", text)
+            for block in list_blocks:
+                lower_block = block.lower()
+                if "query" in lower_block and not any(token in lower_block for token in ("rows", "result", "data", "output", "value", "records")):
+                    continue
+                return True
+
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            data_lines = []
+            for line in lines:
+                lower_line = line.lower()
+                if lower_line.startswith("select "):
+                    continue
+                if "query" in lower_line or "postgresql" in lower_line or "tool" in lower_line:
+                    continue
+                data_lines.append(line)
+
+            for line in data_lines:
+                if any(char.isdigit() for char in line):
+                    return True
+                if len(line.split()) >= 3:
+                    return True
+
+            return False
+
         def execute_task(state: FeedbackState) -> FeedbackState:
             nonlocal sync_chain
             """도구를 사용하여 작업 실행"""
@@ -90,16 +165,26 @@ def create_feedback_graph(
                 todo_title = state.get("current_todo_title", "")
                 todo_index = state.get("current_todo_index")
                 total_todos = state.get("total_todos")
+                todo_directive = state.get("todo_directive") or user_input
+                todo_description = state.get("current_todo_description", "")
+                previous_context = state.get("previous_results_context", "")
 
                 if stream_emitter:
                     stream_emitter.emit_iteration_start(todo_index, total_todos, iteration, todo_title)
 
                 # 이전 시도들의 컨텍스트 생성
-                previous_attempts = ""
+                previous_attempts_lines = []
                 if state["tool_results"]:
-                    previous_attempts = f"\n\nPrevious attempts:\n"
-                    for i, result in enumerate(state["tool_results"][-3:]):  # 최근 3개만
-                        previous_attempts += f"Attempt {i+1}: {result.get('result', '')}\nScore: {result.get('feedback_score', 'N/A')}\n\n"
+                    previous_attempts_lines.append("이전 반복 결과 요약:")
+                    recent_results = state["tool_results"][-3:]
+                    for idx, result_entry in enumerate(recent_results, start=1):
+                        raw = result_entry.get('clean_result') or result_entry.get('result') or ""
+                        summary = _sanitize_result_text(raw)
+                        if len(summary) > 350:
+                            summary = summary[:350].rstrip() + "..."
+                        score = result_entry.get('feedback_score', 'N/A')
+                        previous_attempts_lines.append(f"- #{idx} (점수 {score}): {summary}")
+                previous_attempts = "\n".join(previous_attempts_lines)
 
                 remediation_notes = [note for note in (state.get("remediation_notes") or []) if note]
                 improvement_section = ""
@@ -108,7 +193,34 @@ def create_feedback_graph(
                     formatted_notes = "\n".join(f"- {note}" for note in truncated_notes)
                     improvement_section = f"\n\n반영해야 할 개선 사항:\n{formatted_notes}"
 
-                enhanced_input = f"현재 시도: {user_input}{previous_attempts}{improvement_section}"
+                iteration_brief = [todo_directive]
+
+                iteration_brief.append(
+                    "결과 보고 시 이번 반복에서 확인한 실제 데이터(또는 비어 있음을 명시)를 직접 서술하고, '이전에 기록됨' 같은 표현으로 생략하지 마세요."
+                )
+
+                if todo_title or todo_description:
+                    todo_meta = f"\n현재 TODO 정보:\n- 제목: {todo_title or 'Untitled'}"
+                    if todo_description:
+                        todo_meta += f"\n- 설명: {todo_description.strip()}"
+                    if previous_context:
+                        todo_meta += f"\n\n{previous_context}"
+                    iteration_brief.append(todo_meta)
+
+                iteration_brief.append(f"\n현재 반복 번호: {iteration}")
+
+                if previous_attempts:
+                    iteration_brief.append("\n" + previous_attempts)
+
+                if improvement_section:
+                    iteration_brief.append(improvement_section)
+
+                if state.get("last_result_duplicate"):
+                    iteration_brief.append(
+                        "이전 반복 출력이 거의 동일했습니다. 완전히 다른 접근과 쿼리를 시도하세요."
+                    )
+
+                enhanced_input = "\n\n".join(section.strip() for section in iteration_brief if section and section.strip())
                 inputs = {
                     "input": enhanced_input,
                     "chat_history": chat_history,
@@ -116,7 +228,15 @@ def create_feedback_graph(
                 }
 
                 result = ""
-                streaming_error = None
+
+                def _invoke_tool_sync() -> str:
+                    fallback_handler = (
+                        NonStreamingAgentHandlerWithToolOutput()
+                        if return_intermediate_steps
+                        else NonStreamingAgentHandler()
+                    )
+                    response = tool_agent_executor.invoke(inputs, {"callbacks": [fallback_handler]})
+                    return fallback_handler.get_formatted_output(response["output"])
 
                 # 도구 필요성에 따른 처리 분기
                 use_agent = bool(todo_requires_tools and tool_agent_executor)
@@ -129,14 +249,11 @@ def create_feedback_graph(
                             handler = EnhancedAgentStreamingHandler()
 
                         async_executor = lambda: tool_agent_executor.ainvoke(inputs, {"callbacks": [handler]})
-                        collected_chunks = []
                         try:
                             for chunk in execute_agent_streaming(async_executor, handler):
                                 if chunk:
                                     stream_emitter.emit_llm_chunk(todo_index, iteration, chunk)
-                                    collected_chunks.append(chunk)
                         except Exception as streaming_exc:  # pragma: no cover - runtime safety
-                            streaming_error = streaming_exc
                             logger.error(
                                 f"Streaming agent execution failed (iteration {iteration}): {streaming_exc}",
                                 exc_info=True,
@@ -147,9 +264,9 @@ def create_feedback_graph(
                         if return_intermediate_steps and handler.tool_logs:
                             tool_log_text = "\n".join(handler.tool_logs)
                             if tool_log_text and raw_output:
-                                result = f"{tool_log_text}\n\n{raw_output}"
+                                result = f"{raw_output}\n\n{tool_log_text}"
                             else:
-                                result = tool_log_text or raw_output
+                                result = raw_output or tool_log_text
                         else:
                             result = raw_output
 
@@ -163,15 +280,22 @@ def create_feedback_graph(
                                 if return_intermediate_steps
                                 else NonStreamingAgentHandler()
                             )
-                            response = tool_agent_executor.invoke(inputs, {"callbacks": [fallback_handler]})
-                            result = fallback_handler.get_formatted_output(response["output"])
-                    else:
-                        if return_intermediate_steps:
-                            handler = NonStreamingAgentHandlerWithToolOutput()
                         else:
-                            handler = NonStreamingAgentHandler()
-                        response = tool_agent_executor.invoke(inputs, {"callbacks": [handler]})
-                        result = handler.get_formatted_output(response["output"])
+                            raw_output = "".join(handler.streamed_tokens).strip()
+                            if return_intermediate_steps and handler.tool_logs:
+                                tool_log_text = "\n".join(handler.tool_logs)
+                                if tool_log_text and raw_output:
+                                    result = f"{tool_log_text}\n\n{raw_output}"
+                                else:
+                                    result = tool_log_text or raw_output
+                            else:
+                                result = raw_output
+
+                            # 스트리밍 중 수집된 결과가 비어있는 경우 안전한 fallback 수행
+                            if not result:
+                                result = _invoke_tool_sync()
+                    else:
+                        result = _invoke_tool_sync()
                 else:
                     if stream_emitter:
                         chain = streaming_chain or (prompt_template_without_tool | llm)
@@ -204,12 +328,12 @@ def create_feedback_graph(
                             sync_chain = prompt_template_without_tool | llm | StrOutputParser()
                         result = sync_chain.invoke(inputs)
 
-                if stream_emitter:
-                    stream_emitter.emit_iteration_complete(todo_index, iteration, result)
-
                 # 도구 실행 결과 저장
                 import time
                 clean_result = _sanitize_result_text(result)
+
+                if stream_emitter:
+                    stream_emitter.emit_iteration_complete(todo_index, iteration, clean_result)
 
                 result_signature = clean_result.strip()
 
@@ -224,6 +348,26 @@ def create_feedback_graph(
                             seen_results = seen_results[-9:]
                         seen_results.append(result_signature)
 
+                result_frequencies = state.get("result_frequencies") or {}
+                if result_signature:
+                    result_frequencies[result_signature] = (
+                        result_frequencies.get(result_signature, 0) + 1
+                    )
+                    if len(result_frequencies) > 25:
+                        # 오래된 항목 제거
+                        sorted_items = sorted(
+                            result_frequencies.items(),
+                            key=lambda item: item[1],
+                            reverse=True,
+                        )[:20]
+                        result_frequencies = dict(sorted_items)
+
+                duplicate_run_length = state.get("duplicate_run_length", 0)
+                if duplicate_result:
+                    duplicate_run_length += 1
+                else:
+                    duplicate_run_length = 0
+
                 tool_result = {
                     "iteration": iteration,
                     "result": result,
@@ -234,6 +378,11 @@ def create_feedback_graph(
                 
                 new_tool_results = state["tool_results"] + [tool_result]
                 
+                if duplicate_result and stream_emitter:
+                    stream_emitter.emit_status(
+                        f"<FEEDBACK_STATUS>경고: 동일한 출력이 연속 {duplicate_run_length}회 감지되었습니다. 접근 방식을 변경하세요.</FEEDBACK_STATUS>\n"
+                    )
+
                 return {
                     **state,
                     "tool_results": new_tool_results,
@@ -241,6 +390,8 @@ def create_feedback_graph(
                     "seen_results": seen_results,
                     "last_result_signature": result_signature,
                     "last_result_duplicate": duplicate_result,
+                    "result_frequencies": result_frequencies,
+                    "duplicate_run_length": duplicate_run_length,
                 }
                 
             except Exception as e:
@@ -274,6 +425,8 @@ def create_feedback_graph(
                     "seen_results": seen_results,
                     "last_result_signature": error_signature,
                     "last_result_duplicate": False,
+                    "result_frequencies": state.get("result_frequencies") or {},
+                    "duplicate_run_length": 0,
                 }
 
         def execute_direct(state: FeedbackState) -> FeedbackState:
@@ -437,12 +590,37 @@ def create_feedback_graph(
                     }
                 
                 # 피드백 평가 프롬프트 생성
+                original_request = state.get("original_user_request") or state.get("user_input")
+                todo_description = state.get("current_todo_description", "")
+                todo_index = state.get("current_todo_index")
+                total_todos = state.get("total_todos")
+                previous_context = state.get("previous_results_context") or "이전 TODO 결과 없음"
+
+                todo_pos = ""
+                if todo_index and total_todos:
+                    todo_pos = f" (순번: {todo_index}/{total_todos})"
+
                 evaluation_prompt = f"""
-원본 사용자 요청: {state["user_input"]}
+원본 사용자 요청 요약: {original_request}
+
+현재 TODO 정보{todo_pos}:
+- 제목: {state.get("current_todo_title", 'Untitled')}
+- 설명: {todo_description or '설명 없음'}
+
+참고할 이전 TODO 결과:
+{previous_context}
 
 피드백 기준: {feedback_criteria if feedback_criteria else "일반적인 품질, 정확성, 완성도"}
 
-현재 결과: {latest_clean}
+현재 TODO 실행 결과: {latest_clean}
+
+중요: 오직 현재 TODO 목표 달성 여부만 평가하세요. 이후 TODO에서 처리될 내용을 현재 결과에 없다는 이유로 감점하지 마세요. 반복된 작업이나 이전 단계와의 불일치, 향후 단계 준비 미흡 여부는 정확성/안정성 평가에 반영하세요.
+
+추가 고려 사항:
+- 속도: 불필요한 반복 없이 목표를 달성했는가?
+- 안정성: 이전 개선 사항과 컨텍스트를 반영했는가?
+- 정확도: 현재 TODO 목표를 정확히 충족했는가?
+- 결과 적합성: 실행 결과가 실제 출력 데이터를 포함하거나, 데이터가 비어있을 경우 그 사실을 명시했는가? 단순히 쿼리만 제시하고 결과를 보고하지 않았다면 감점하세요.
 
 위 결과를 1-10점 척도로 평가해주세요. 다음 기준을 고려하세요:
 1-3: 매우 부족함, 요구사항을 전혀 충족하지 못함
@@ -526,7 +704,10 @@ def create_feedback_graph(
 
                 evaluation_result = parse_evaluation_result(llm_response.content)
 
-                score = evaluation_result.get("score", 0)
+                try:
+                    score = int(evaluation_result.get("score", 0))
+                except (TypeError, ValueError):
+                    score = 0
 
                 import re as _re
 
@@ -553,8 +734,22 @@ def create_feedback_graph(
                     if reasoning_note:
                         improvements_list.append(reasoning_note)
                 duplicate_result = latest_result.get("duplicate") or state.get("last_result_duplicate", False)
+                duplicate_run_length = state.get("duplicate_run_length", 0)
                 if duplicate_result:
                     improvements_list.append("이전 출력과 동일합니다. 접근 방식을 변경하세요.")
+                    if duplicate_run_length >= 2:
+                        improvements_list.append(
+                            f"연속 {duplicate_run_length}회 동일 출력이 감지되었습니다. 다른 도구를 사용하거나 프롬프트 구조를 재구성하세요."
+                        )
+
+                if not _has_explicit_output(latest_clean):
+                    reminder = "쿼리 실행 결과(데이터 또는 비어 있음을 명시)를 함께 제공하세요."
+                    if reminder not in improvements_list:
+                        improvements_list.append(reminder)
+                    score = min(score, feedback_threshold - 1, 6)
+
+                evaluation_result["score"] = score
+                evaluation_result["improvements"] = improvements_list
 
                 remediation_notes = state.get("remediation_notes") or []
                 combined_notes = improvements_list + remediation_notes
@@ -579,6 +774,9 @@ def create_feedback_graph(
                     else:
                         stagnation_count = 0
 
+                if duplicate_run_length >= 2:
+                    stagnation_count = max(stagnation_count, duplicate_run_length)
+
                 max_iterations = state.get("max_iterations", 5)
                 if max_iterations:
                     stagnation_count = min(stagnation_count, max_iterations)
@@ -590,7 +788,11 @@ def create_feedback_graph(
                 updated_tool_results = state["tool_results"][:-1] + [{
                     **latest_result,
                     "feedback_score": score,
-                    "evaluation": evaluation_result
+                    "evaluation": {
+                        **evaluation_result,
+                        "score": score,
+                        "improvements": improvements_list,
+                    }
                 }]
                 
                 return {
@@ -613,6 +815,9 @@ def create_feedback_graph(
                 return "finalize"
 
             if state.get("stagnation_count", 0) >= 2:
+                return "finalize"
+
+            if state.get("duplicate_run_length", 0) >= 3:
                 return "finalize"
 
             # 피드백 점수 확인 (enable_auto_feedback가 True일 때만)

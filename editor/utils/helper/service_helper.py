@@ -108,6 +108,50 @@ def get_config_composer() -> Optional[object]:
         logger.error(f"Config Composer 접근 중 오류: {e}")
         return None
 
+def get_guarder_service() -> Optional[object]:
+    """FastAPI 앱에서 Guarder 서비스를 가져오는 헬퍼 함수"""
+    try:
+        import sys
+
+        # 먼저 main 모듈에서 찾기
+        if 'main' in sys.modules:
+            main_module = sys.modules['main']
+            try:
+                if hasattr(main_module, 'app'):
+                    app = main_module.app
+                    if hasattr(app, 'state'):
+                        state = app.state
+                        if hasattr(state, 'guarder_service'):
+                            guarder_service = getattr(state, 'guarder_service', None)
+                            if guarder_service is not None:
+                                logger.info("main 모듈에서 Guarder 서비스를 찾았습니다.")
+                                return guarder_service
+            except Exception as app_error:
+                logger.debug(f"main 모듈에서 app.state 접근 실패: {app_error}")
+
+        # 다른 모듈들에서 찾기
+        for module_name, module in sys.modules.items():
+            try:
+                if hasattr(module, 'app'):
+                    app = getattr(module, 'app')
+                    if hasattr(app, 'state'):
+                        state = app.state
+                        if hasattr(state, 'guarder_service'):
+                            guarder_service = getattr(state, 'guarder_service', None)
+                            if guarder_service is not None:
+                                logger.info(f"{module_name} 모듈에서 Guarder 서비스를 찾았습니다.")
+                                return guarder_service
+            except Exception as app_error:
+                logger.debug(f"{module_name} 모듈에서 app.state 접근 실패: {app_error}")
+                continue
+
+        logger.warning("Guarder 서비스를 찾을 수 없습니다. 서버가 실행되지 않았을 수 있습니다.")
+        return None
+
+    except Exception as e:
+        logger.error(f"Guarder 서비스 접근 중 오류: {e}")
+        return None
+
 class RAGServiceManager:
     @classmethod
     def get_service(cls):
@@ -141,6 +185,17 @@ class ConfigComposerManager:
         """캐시 초기화"""
         cls._cached_composer = None
 
+class GuarderServiceManager:
+    @classmethod
+    def get_service(cls):
+        cls._cached_service = get_guarder_service()
+        return cls._cached_service
+
+    @classmethod
+    def clear_cache(cls):
+        """캐시 초기화"""
+        cls._cached_service = None
+
 # 통합 매니저 클래스
 class AppServiceManager:
     @staticmethod
@@ -157,3 +212,8 @@ class AppServiceManager:
     def get_config_composer():
         """Config Composer 반환"""
         return ConfigComposerManager.get_composer()
+
+    @staticmethod
+    def get_guarder_service():
+        """Guarder 서비스 반환"""
+        return GuarderServiceManager.get_service()

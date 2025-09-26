@@ -213,7 +213,9 @@ class DatabaseManager:
                 # PostgreSQL의 경우 RETURNING id를 쿼리에 포함해야 함
                 result = cursor.fetchone()
                 self.connection.commit()
-                if result:
+                if isinstance(result, dict):
+                    return result.get("id")
+                if isinstance(result, (list, tuple)) and result:
                     return result[0]  # id 값
                 return None
 

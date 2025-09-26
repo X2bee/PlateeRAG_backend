@@ -2,8 +2,26 @@ import logging
 import re
 import json
 from langchain.callbacks.base import BaseCallbackHandler
+from editor.utils.helper.service_helper import AppServiceManager
+from editor.utils.helper.async_helper import sync_run_async
 
 logger = logging.getLogger(__name__)
+
+def use_guarder_for_text_moderation(text: str) -> tuple[bool, str]:
+    try:
+        guarder = AppServiceManager.get_guarder_service()
+        if guarder:
+            moderation_result = sync_run_async(guarder.moderate_text(text))
+            if not moderation_result.get("safe", True):
+                categories = moderation_result.get("categories", [])
+                categories_str = ", ".join(categories) if categories else "알 수 없는 이유"
+                return False, f"이러한 요청은 허용되지 않습니다. 원인: {categories_str}"
+            return True, ""
+        else:
+            return True, ""
+    except Exception as guarder_error:
+        logger.warning(f"Guarder 서비스를 사용할 수 없습니다: {guarder_error}")
+        return True, ""
 
 def _parse_document_citations(text: str) -> str:
     """문서 인용 정보를 파싱하여 JSON 형태로 변환"""
@@ -76,13 +94,22 @@ class NonStreamingAgentHandlerWithToolOutput(BaseCallbackHandler):
 
     def on_tool_end(self, output, **kwargs) -> None:
         """도구 실행이 완료될 때 호출"""
-        tool_output = str(output)
+        if isinstance(output, (dict, list)):
+            try:
+                tool_output = json.dumps(output, ensure_ascii=False, indent=2)
+            except Exception:
+                tool_output = str(output)
+        else:
+            tool_output = str(output)
         self.tool_outputs.append(output)
 
-        # 문서 인용 정보 파싱
         parsed_output = _parse_document_citations(tool_output)
-        if parsed_output:
-            self.tool_logs.append(f"<TOOLOUTPUTLOG>{parsed_output}</TOOLOUTPUTLOG>")
+        display_output = parsed_output.strip() if parsed_output.strip() else tool_output.strip()
+
+        if len(display_output) > 1200:
+            display_output = display_output[:1200].rstrip() + "..."
+
+        self.tool_logs.append(f"<TOOLOUTPUTLOG>{display_output}</TOOLOUTPUTLOG>")
 
     def on_tool_error(self, error, **kwargs) -> None:
         """도구 실행 오류 시 호출"""
@@ -93,5 +120,7 @@ class NonStreamingAgentHandlerWithToolOutput(BaseCallbackHandler):
         if not self.tool_logs:
             return original_output
 
-        # 도구 로그를 출력 앞에 추가
-        return "\n".join(self.tool_logs) + "\n\n" + original_output
+        tool_section = "\n".join(self.tool_logs)
+        if original_output:
+            return f"{original_output}\n\n{tool_section}"
+        return tool_section

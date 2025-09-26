@@ -1,7 +1,36 @@
 import logging
+import textwrap
+from typing import List
+
 from editor.type_model.feedback_state import FeedbackState
 
 logger = logging.getLogger(__name__)
+
+def _trim_text(value: str, limit: int = 600) -> str:
+    """Limit long context strings to keep prompts efficient."""
+    if not value:
+        return ""
+    stripped = value.strip()
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[:limit].rstrip() + "..."
+
+
+def _format_previous_results(previous_results: List[dict]) -> str:
+    if not previous_results:
+        return ""
+
+    formatted_entries = []
+    for idx, prev in enumerate(previous_results, start=1):
+        title = prev.get('title') or f"TODO {idx}"
+        result_text = _trim_text(prev.get('result') or "결과 없음")
+        formatted_entries.append(f"{idx}. {title}: {result_text}")
+
+    if not formatted_entries:
+        return ""
+
+    return "이전 TODO 결과 요약:\n" + "\n".join(formatted_entries)
+
 
 def todo_executor(todos, text, max_iterations, workflow, return_intermediate_steps=False, stream_emitter=None):
     # 2단계: 각 TODO를 순차적으로 실행
@@ -16,15 +45,41 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
         if stream_emitter:
             stream_emitter.emit_todo_start(i + 1, len(todos), todo)
 
-        # 이전 TODO 결과들을 컨텍스트로 구성
-        previous_context = ""
-        if previous_todo_results:
-            previous_context = "\n\n이전 TODO 결과들:\n"
-            for idx, prev_result in enumerate(previous_todo_results):
-                previous_context += f"- TODO {idx+1} ({prev_result['title']}): {prev_result['result']}\n"
+        # TODO를 위한 명확한 지침과 컨텍스트 구성
+        title = todo.get('title', '').strip() or "Untitled"
+        description = todo.get('description', '').strip()
+        previous_context = _format_previous_results(previous_todo_results)
 
-        # TODO 실행을 위한 상태 설정 (이전 결과 포함)
-        todo_text = f"TODO: {todo.get('title', '')}\n설명: {todo.get('description', '')}\n\n원본 요청 컨텍스트: {text}{previous_context}"
+        directive_body = textwrap.dedent(
+            f"""
+            당신은 복합 요청을 단계별 TODO로 해결하는 보조자입니다.
+            현재 진행 중인 단계는 전체 {len(todos)}개 중 {i + 1}번째입니다.
+
+            현재 TODO 목표:
+            - 제목: {title}
+            - 설명: {description or '설명 없음'}
+
+            필수 지침:
+            1. 오직 현재 TODO 목표만 달성하세요. 다른 TODO의 요구사항을 미리 수행하지 마세요.
+            2. 이전 단계 결과는 참고만 하고 중복 작업을 피하세요.
+            3. 결과는 다음 단계에서 활용하기 쉽도록 명확하고 검증 가능한 형태로 정리하세요.
+            4. 필요하다면 중간 계산 과정을 설명하되, 최종 답변은 현재 TODO에 필요한 핵심 결과만 포함하세요.
+            5. 쿼리나 계산을 수행했다면 실행 결과(반환된 데이터 요약 또는 "결과 없음"과 같은 명시적 설명)를 반드시 포함하세요.
+            6. 이미 앞선 단계에서 언급한 내용이라도 현재 TODO 답변 안에 다시 명시하세요. "이전에 기록됨" 등의 표현으로 생략하지 마세요.
+            """
+        ).strip()
+
+        context_section = ""
+        if previous_context:
+            context_section = "\n\n" + previous_context
+
+        todo_text = (
+            directive_body
+            + "\n\n원본 사용자 요청:\n"
+            + _trim_text(text)
+            + context_section
+            + "\n\n출력 형식: 현재 TODO 목표를 충족하는 데 필요한 결과만 명확히 제시하고, 실행 결과 데이터 또는 '결과 없음'과 같은 확인 문구를 함께 제공하세요."
+        )
 
         initial_state = FeedbackState(
             messages=[{"role": "user", "content": todo_text}],
@@ -38,6 +93,7 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             todo_requires_tools=todo_requires_tools,  # 도구 필요성 전달
             current_todo_id=todo.get('id', i + 1),
             current_todo_title=todo.get('title', 'Untitled'),
+            current_todo_description=todo.get('description', ''),
             current_todo_index=i + 1,
             total_todos=len(todos),
             execution_mode="todo",
@@ -47,6 +103,11 @@ def todo_executor(todos, text, max_iterations, workflow, return_intermediate_ste
             last_result_signature=None,
             last_result_duplicate=False,
             stagnation_count=0,
+            result_frequencies={},
+            duplicate_run_length=0,
+            original_user_request=text,
+            previous_results_context=previous_context,
+            todo_directive=todo_text,
         )
 
         # TODO 실행

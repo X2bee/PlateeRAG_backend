@@ -15,6 +15,8 @@ from service.database.models.user import User
 from service.database.models.group import GroupMeta
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 
+from controller.utils.section_config import available_sections
+
 logger = logging.getLogger("auth-controller")
 
 # 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
@@ -586,7 +588,7 @@ async def get_group_available_sections(request: Request, user_id=None):
         user_type = user.user_type
 
         if user_type == "superuser":
-            return {"available_sections": ["canvas", "documents", "train", "workflows", "eval", "train-monitor", "model-storage", "data-station", "data-storage", "admin-page"]}
+            return {"available_sections": available_sections}
 
         if not groups or groups == None or groups == [] or len(groups) == 0:
             return {"available_sections": []}

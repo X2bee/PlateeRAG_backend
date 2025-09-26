@@ -2,6 +2,7 @@ from editor.node_composer import Node
 import logging
 import json
 from typing import List, Optional, Dict, Any
+from langchain.schema import SystemMessage, HumanMessage
 from editor.utils.helper.service_helper import AppServiceManager
 import re
 from collections import Counter
@@ -132,69 +133,161 @@ class DBMemoryNode(Node):
         
         return words
 
-    def _calculate_tf_idf(self, query_words: List[str], document_words: List[str], all_documents: List[List[str]]) -> float:
-        """TF-IDF 기반 유사도 계산"""
+    def _calculate_bm25(
+        self,
+        query_words: List[str],
+        document_words: List[str],
+        avg_doc_len: float,
+        doc_freq_cache: Dict[str, int],
+        total_docs: int,
+        k1: float = 1.5,
+        b: float = 0.75,
+    ) -> float:
+        """간단한 BM25 스코어 계산"""
         if not query_words or not document_words:
             return 0.0
-        
-        # TF (Term Frequency) 계산
-        doc_word_count = Counter(document_words)
-        query_word_count = Counter(query_words)
-        
-        total_words = len(document_words)
-        total_docs = len(all_documents)
-        
+
+        doc_len = len(document_words) or 1
+        word_counts = Counter(document_words)
         score = 0.0
-        
+
         for word in set(query_words):
-            if word in doc_word_count:
-                # TF 계산
-                tf = doc_word_count[word] / total_words
-                
-                # IDF 계산 (해당 단어가 포함된 문서 수)
-                docs_containing_word = sum(1 for doc in all_documents if word in doc)
-                idf = math.log(total_docs / (docs_containing_word + 1))
-                
-                # TF-IDF 스코어
-                tfidf = tf * idf
-                score += tfidf
-                
+            freq = word_counts.get(word)
+            if not freq:
+                continue
+
+            doc_freq = max(doc_freq_cache.get(word, 0), 1)
+            idf = math.log((total_docs - doc_freq + 0.5) / (doc_freq + 0.5) + 1)
+
+            numerator = freq * (k1 + 1)
+            denominator = freq + k1 * (1 - b + b * (doc_len / avg_doc_len))
+            score += idf * (numerator / denominator)
+
         return score
 
-    def _calculate_message_relevance(self, current_input: str, historical_messages: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    def _calculate_message_relevance(
+        self,
+        current_input: str,
+        historical_messages: List[Dict[str, str]],
+        embedding_fn=None,
+    ) -> List[Dict[str, Any]]:
         """현재 입력과 과거 메시지들 간의 관련도 계산"""
         if not current_input or not historical_messages:
             return []
-        
+
+        if embedding_fn:
+            try:
+                target_embedding = embedding_fn(current_input)
+                if target_embedding is None:
+                    raise ValueError("embedding_fn returned None")
+
+                scored_messages = []
+                for msg in historical_messages:
+                    content = msg.get("content", "")
+                    msg_embedding = embedding_fn(content)
+                    if msg_embedding is None:
+                        similarity = 0.0
+                    else:
+                        similarity = self._cosine_similarity(target_embedding, msg_embedding)
+                    scored_messages.append({
+                        "role": msg.get("role"),
+                        "content": content,
+                        "relevance_score": similarity,
+                    })
+
+                scored_messages.sort(key=lambda x: x["relevance_score"], reverse=True)
+                return scored_messages
+            except Exception as embedding_error:
+                logger.warning(
+                    "Embedding relevance calculation failed: %s. Falling back to lexical similarity.",
+                    embedding_error,
+                )
+
         query_words = self._preprocess_text(current_input)
         if not query_words:
             return []
-        
-        # 모든 문서(메시지)의 단어 리스트 생성
-        all_documents = []
+
+        document_word_lists = []
+        doc_freq_cache: Dict[str, int] = {}
+
         for msg in historical_messages:
-            content = msg.get('content', '')
+            content = msg.get("content", "")
             doc_words = self._preprocess_text(content)
-            all_documents.append(doc_words)
-        
-        # 각 메시지에 대해 관련도 계산
+            document_word_lists.append(doc_words)
+            unique_terms = set(doc_words)
+            for term in unique_terms:
+                doc_freq_cache[term] = doc_freq_cache.get(term, 0) + 1
+
+        total_docs = max(len(document_word_lists), 1)
+        avg_doc_len = sum(len(doc) for doc in document_word_lists) / total_docs if total_docs else 1.0
+
         messages_with_relevance = []
-        for i, msg in enumerate(historical_messages):
-            content = msg.get('content', '')
-            doc_words = all_documents[i]
-            
-            relevance_score = self._calculate_tf_idf(query_words, doc_words, all_documents)
-            
+        for doc_words, message in zip(document_word_lists, historical_messages):
+            score = self._calculate_bm25(
+                query_words,
+                doc_words,
+                avg_doc_len,
+                doc_freq_cache,
+                total_docs,
+            )
             messages_with_relevance.append({
-                'role': msg.get('role'),
-                'content': content,
-                'relevance_score': relevance_score
+                "role": message.get("role"),
+                "content": message.get("content", ""),
+                "relevance_score": score,
             })
-        
-        # 관련도 순으로 정렬
-        messages_with_relevance.sort(key=lambda x: x['relevance_score'], reverse=True)
-        
+
+        messages_with_relevance.sort(key=lambda x: x["relevance_score"], reverse=True)
         return messages_with_relevance
+
+    def _resolve_embedding_function(self):
+        """AppServiceManager에서 임베딩 서비스를 가져와 callable 형태로 반환"""
+        try:
+            get_service = getattr(AppServiceManager, "get_embedding_service", None)
+            if not callable(get_service):
+                return None
+
+            embedding_service = get_service()
+            if not embedding_service:
+                return None
+
+            if hasattr(embedding_service, "get_embedding"):
+                def _embed(text: str):
+                    if not text:
+                        return None
+                    try:
+                        vector = embedding_service.get_embedding(text)
+                        if vector is None:
+                            return None
+                        return list(vector)
+                    except Exception as embedding_error:
+                        logger.warning(
+                            "Embedding service get_embedding failed: %s", embedding_error
+                        )
+                        return None
+
+                return _embed
+
+            return None
+        except Exception as service_error:
+            logger.warning(
+                "Unable to resolve embedding function: %s", service_error
+            )
+            return None
+
+    @staticmethod
+    def _cosine_similarity(vec1, vec2) -> float:
+        if not vec1 or not vec2:
+            return 0.0
+
+        try:
+            dot_product = sum(a * b for a, b in zip(vec1, vec2))
+            norm1 = math.sqrt(sum(a * a for a in vec1))
+            norm2 = math.sqrt(sum(b * b for b in vec2))
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            return dot_product / (norm1 * norm2)
+        except Exception:
+            return 0.0
 
     @staticmethod
     @lru_cache(maxsize=1)
@@ -267,24 +360,52 @@ class DBMemoryNode(Node):
         
         return "\n".join(summary_parts)
 
-    def _select_and_summarize_relevant_messages(self, current_input: str, historical_messages: List[Dict[str, str]], n_messages: int = 5, llm=None, use_similarity_filter: bool = True) -> str:
+    def _select_and_summarize_relevant_messages(
+        self,
+        current_input: str,
+        historical_messages: List[Dict[str, str]],
+        n_messages: int = 5,
+        llm=None,
+        use_similarity_filter: bool = True,
+    ) -> str:
         """현재 입력과 관련된 메시지들을 선택하고 요약 (연결된 agent 모델 사용)"""
         if not historical_messages:
             return ""
         
         # 유사도 필터링 사용 여부에 따라 메시지 선택
         if use_similarity_filter:
-            # 관련도 계산
-            messages_with_relevance = self._calculate_message_relevance(current_input, historical_messages)
-            
-            # 상위 n개 메시지 선택
-            top_relevant_messages = messages_with_relevance[:n_messages]
-            
-            # 관련도가 0인 메시지들은 제외
-            meaningful_messages = [msg for msg in top_relevant_messages if msg['relevance_score'] > 0]
+            embedding_fn = self._resolve_embedding_function()
+
+            messages_with_relevance = self._calculate_message_relevance(
+                current_input,
+                historical_messages,
+                embedding_fn=embedding_fn,
+            )
+
+            top_relevant_messages = messages_with_relevance[: n_messages * 2]
+
+            meaningful_messages = [
+                msg for msg in top_relevant_messages if msg["relevance_score"] > 0
+            ]
+
+            if not meaningful_messages:
+                logger.info(
+                    "All relevance scores zero; falling back to recent messages for context."
+                )
+                recent_slice = historical_messages[-n_messages:]
+                meaningful_messages = [
+                    {"role": msg["role"], "content": msg["content"], "relevance_score": 0.0}
+                    for msg in recent_slice
+                ]
         else:
-            # 유사도 필터링 없이 모든 메시지 사용
-            meaningful_messages = [{'role': msg['role'], 'content': msg['content'], 'relevance_score': 1.0} for msg in historical_messages]
+            meaningful_messages = [
+                {
+                    "role": msg["role"],
+                    "content": msg["content"],
+                    "relevance_score": 1.0,
+                }
+                for msg in historical_messages
+            ]
         
         if not meaningful_messages:
             logger.info("No relevant messages found for current input")
@@ -304,90 +425,102 @@ class DBMemoryNode(Node):
         # agent에서 전달받은 LLM을 사용하여 요약
         if llm:
             try:
-                # 디버깅: meaningful_messages 내용 확인
-                logger.info(f"Processing {len(meaningful_messages)} meaningful messages for conversation pairing:")
+                logger.info(
+                    "Processing %s meaningful messages for conversation pairing:",
+                    len(meaningful_messages),
+                )
                 for i, msg in enumerate(meaningful_messages):
-                    content_preview = msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
-                    logger.info(f"  Message {i+1}: role={msg['role']}, content='{content_preview}'")
-                
-                # 요약할 메시지들 구성 (user-ai 쌍으로 그룹화)
+                    preview = msg["content"][:50] + "..." if len(msg["content"]) > 50 else msg["content"]
+                    logger.info(
+                        "  Message %s: role=%s, content='%s'",
+                        i + 1,
+                        msg["role"],
+                        preview,
+                    )
+
                 conversation_pairs = []
                 current_pair = {}
-                
+
                 for msg in meaningful_messages:
-                    if msg['role'] == "user":
-                        # 이전 쌍이 완성되었다면 저장
+                    role = msg["role"]
+                    content = msg.get("content", "")
+
+                    if role == "user":
                         if current_pair:
-                            logger.debug(f"Completing previous pair: {current_pair}")
                             conversation_pairs.append(current_pair)
-                        current_pair = {"user": msg['content'], "ai": ""}
-                        
-                    elif msg['role'] == "ai":
-                        if current_pair:  # current_pair 체크 제거하여 AI 메시지만 있어도 처리
-                            current_pair["ai"] = msg['content']
-                            logger.debug(f"Added AI response to current pair")
+                        current_pair = {"user": content, "ai": ""}
+                    elif role == "ai":
+                        if current_pair:
+                            current_pair["ai"] = content
                         else:
-                            # AI 메시지만 있는 경우 새로운 쌍 시작
-                            current_pair = {"user": "", "ai": msg['content']}
-                
-                # 마지막 쌍 저장
+                            current_pair = {"user": "", "ai": content}
+
                 if current_pair:
-                    logger.debug(f"Saving final pair: {current_pair}")
                     conversation_pairs.append(current_pair)
-                
-                logger.info(f"Created {len(conversation_pairs)} conversation pairs")
-                
-                # 대화 쌍을 텍스트로 변환
+
+                logger.info("Created %s conversation pairs", len(conversation_pairs))
+
                 conversation_text = ""
+                char_limit = 4000
                 for i, pair in enumerate(conversation_pairs, 1):
-                    conversation_text += f"[대화 {i}]\n"
-                    
-                    user_content = pair.get('user', '').strip()
-                    ai_content = pair.get('ai', '').strip()
-                    
+                    segment = f"[대화 {i}]\n"
+                    user_content = pair.get("user", "").strip()
+                    ai_content = pair.get("ai", "").strip()
+
                     if user_content:
-                        conversation_text += f"사용자: {user_content}\n"
+                        segment += f"사용자: {user_content}\n"
                     if ai_content:
-                        conversation_text += f"AI: {ai_content}\n"
-                    conversation_text += "\n"
-                
-                logger.info(f"Generated conversation text ({len(conversation_text)} characters)")
-                
-                # conversation_text가 비어있다면 간단한 방식으로 재시도
+                        segment += f"AI: {ai_content}\n"
+                    segment += "\n"
+
+                    if len(conversation_text) + len(segment) > char_limit:
+                        remaining = char_limit - len(conversation_text)
+                        if remaining > 0:
+                            conversation_text += segment[:remaining]
+                        break
+
+                    conversation_text += segment
+
+                logger.info(
+                    "Generated conversation text (%s characters)",
+                    len(conversation_text),
+                )
+
                 if not conversation_text.strip():
-                    logger.warning("Conversation text is empty! Trying simple message concatenation")
+                    logger.warning(
+                        "Conversation text is empty! Trying simple message concatenation"
+                    )
                     conversation_text = ""
                     for i, msg in enumerate(meaningful_messages, 1):
-                        role = "사용자" if msg['role'] == "user" else "AI"
+                        role = "사용자" if msg["role"] == "user" else "AI"
                         conversation_text += f"[메시지 {i}] {role}: {msg['content']}\n\n"
-                
-                # 여전히 비어있다면 simple summary로 완전 fallback
+
                 if not conversation_text.strip():
-                    logger.warning("All conversation text generation failed! Using simple summary")
-                    fallback_summary = self._simple_message_summary(meaningful_messages)
-                    return fallback_summary
-                
-                summary_prompt = f"""/no_think 다음은 이전 대화 내용입니다. 현재 사용자의 질문에 답변하기 위해 필요한 핵심 내용을 중심으로 요약해주세요.
+                    logger.warning(
+                        "All conversation text generation failed! Using simple summary"
+                    )
+                    return self._simple_message_summary(meaningful_messages)
 
-{conversation_text}
+                summary_prompt_messages = [
+                    SystemMessage(
+                        content="이전 대화에서 현재 사용자 질문 해결에 필요한 정보를 5-7문장으로 정리하세요."
+                    ),
+                    HumanMessage(content=conversation_text),
+                ]
 
-요약 조건:
-1. 사용자의 질문에 답변할 수 있도록 충분한 정보 포함
-2. 각 대화 쌍의 핵심 내용과 답변의 중요한 세부사항을 정리
-3. 맥락과 연관성을 유지하면서 구체적인 정보 보존
-4. 사용자 질문 해결에 도움이 되는 배경 지식과 사실 정보 포함
-5. 5-7문장으로 충분히 상세하게 요약
+                response = llm.invoke(summary_prompt_messages)
+                summary = getattr(response, "content", "").strip()
 
-요약:"""
-                
-                response = llm.invoke(summary_prompt)
-                summary = response.content.strip()
-                
+                if not summary:
+                    raise ValueError("Empty summary response")
+
                 logger.info(f"Generated summary: {summary}")
                 return summary
-                
+
             except Exception as e:
-                logger.warning(f"LLM summarization failed: {e}. Using simple concatenation.")
+                logger.warning(
+                    "LLM summarization failed: %s. Using simple concatenation.", e
+                )
                 fallback_summary = self._simple_message_summary(meaningful_messages)
                 return fallback_summary
         else:
@@ -442,12 +575,26 @@ class DBMemoryNode(Node):
         if not current_input or not messages or top_n <= 0:
             return messages
 
-        query_words = self._preprocess_text(current_input)
-        if not query_words:
-            return messages
-
         conversation_pairs = self._group_messages_into_pairs(messages)
         if not conversation_pairs:
+            return messages
+
+        embedding_fn = self._resolve_embedding_function()
+        query_embedding = None
+        if embedding_fn:
+            try:
+                query_embedding = embedding_fn(current_input)
+                if not query_embedding:
+                    embedding_fn = None
+            except Exception as embedding_error:
+                logger.warning(
+                    "Failed to create query embedding: %s. Falling back to lexical scoring.",
+                    embedding_error,
+                )
+                embedding_fn = None
+
+        query_words = self._preprocess_text(current_input) if not embedding_fn else []
+        if not embedding_fn and not query_words:
             return messages
 
         if min_tokens_for_similarity and min_tokens_for_similarity > 0:
@@ -475,23 +622,55 @@ class DBMemoryNode(Node):
             processed_pairs.append({
                 "index": index,
                 "pair": pair,
-                "doc_words": doc_words
+                "doc_words": doc_words,
+                "combined_text": combined_text,
             })
             all_documents.append(doc_words)
 
         if not processed_pairs:
             return messages
 
+        total_docs = max(len(all_documents), 1)
+        avg_doc_len = (
+            sum(len(doc) for doc in all_documents) / total_docs if total_docs else 1.0
+        )
+        doc_freq_cache: Dict[str, int] = {}
+        for doc in all_documents:
+            for term in set(doc):
+                doc_freq_cache[term] = doc_freq_cache.get(term, 0) + 1
+
         for entry in processed_pairs:
-            relevance_score = self._calculate_tf_idf(query_words, entry["doc_words"], all_documents)
+            if embedding_fn and query_embedding:
+                pair_embedding = embedding_fn(entry["combined_text"])
+                relevance_score = (
+                    self._cosine_similarity(query_embedding, pair_embedding)
+                    if pair_embedding
+                    else 0.0
+                )
+            else:
+                relevance_score = self._calculate_bm25(
+                    query_words,
+                    entry["doc_words"],
+                    avg_doc_len,
+                    doc_freq_cache,
+                    total_docs,
+                )
             entry["relevance_score"] = relevance_score
 
-        meaningful_pairs = [entry for entry in processed_pairs if entry["relevance_score"] > 0]
+        meaningful_pairs = [
+            entry for entry in processed_pairs if entry["relevance_score"] > 0
+        ]
         meaningful_pairs.sort(key=lambda x: x["relevance_score"], reverse=True)
 
         top_pairs = meaningful_pairs[:top_n]
         if not top_pairs:
-            return []
+            logger.info("No relevant pairs identified; reverting to most recent pairs")
+            start_index = max(len(conversation_pairs) - top_n, 0)
+            fallback_pairs = conversation_pairs[start_index:]
+            top_pairs = [
+                {"index": start_index + idx, "pair": pair, "relevance_score": 0.0}
+                for idx, pair in enumerate(fallback_pairs)
+            ]
 
         # 시간 순서를 유지하기 위해 원래 인덱스 순으로 재정렬
         top_pairs.sort(key=lambda x: x["index"])
