@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 def process_hsmoa_response(raw_data, include_image=False):
     """
     HSMOA API 응답 데이터를 전처리합니다.
-    필요한 정보만 추출: 카테고리, 이미지주소, 상품명, name_query, 가격, 리뷰개수, 사이트
+    필요한 정보만 추출: 카테고리, 이미지주소, 상품명, name_query, 가격, 리뷰개수, 사이트, 상품URL
 
     Args:
         raw_data (dict): 원본 API 응답 데이터
@@ -31,7 +31,8 @@ def process_hsmoa_response(raw_data, include_image=False):
             'name_query': item.get('name_query'),
             'price': item.get('price'),
             'review_count': item.get('review_count'),
-            'site': item.get('site')
+            'site': item.get('site'),
+            'product_url': item.get('url')
         }
 
         # include_image가 True일 때만 이미지 정보 포함
@@ -52,6 +53,7 @@ def process_hsmoa_response(raw_data, include_image=False):
 def process_hsmoa_v1_response(raw_data, include_image=False):
     """
     HSMOA V1 API 응답 데이터를 전처리합니다.
+    필요한 정보 추출: pid, 방송정보, 리뷰개수, 상품명, 가격, 사이트, 카테고리, 상품URL
 
     Args:
         raw_data (dict): 원본 API 응답 데이터
@@ -75,7 +77,8 @@ def process_hsmoa_v1_response(raw_data, include_image=False):
             'site': item.get('site'),
             'category1': item.get('category1'),
             'category2': item.get('category2'),
-            'category3': item.get('category3')
+            'category3': item.get('category3'),
+            'product_url': item.get('url')
         }
 
         # include_image가 True일 때만 이미지 정보 포함
