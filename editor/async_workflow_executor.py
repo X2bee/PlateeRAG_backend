@@ -15,6 +15,213 @@ from editor.node_composer import NODE_CLASS_REGISTRY
 from service.monitoring.performance_logger import PerformanceLogger
 from service.database.models.executor import ExecutionIO
 
+# WorkflowExecutor를 위한 helper 함수들
+
+def extract_json_from_code_block(text: str) -> str:
+    """
+    마크다운 코드 블록에서 JSON 내용을 추출합니다.
+    ```json...``` 또는 ```...``` 형태의 코드 블록을 처리합니다.
+
+    Args:
+        text: 처리할 텍스트
+
+    Returns:
+        추출된 JSON 내용 또는 원본 텍스트
+    """
+    import re
+
+    clean_data = text.strip()
+
+    # ```json으로 시작하고 ```로 끝나는 패턴 제거
+    json_pattern = r'^```(?:json)?\s*\n?(.*?)\n?\s*```$'
+    match = re.search(json_pattern, clean_data, re.DOTALL | re.IGNORECASE)
+
+    if match:
+        return match.group(1).strip()
+
+    return clean_data
+
+def parse_json_safely(text: str, logger=None) -> tuple[Any, bool]:
+    """
+    텍스트를 JSON으로 안전하게 파싱합니다.
+    코드 블록으로 감싸진 JSON도 자동으로 처리합니다.
+
+    Args:
+        text: 파싱할 텍스트
+        logger: 로깅을 위한 logger 객체 (선택사항)
+
+    Returns:
+        (파싱된 데이터, 성공 여부) 튜플
+    """
+    import json
+
+    try:
+        # 먼저 코드 블록에서 JSON 추출 시도
+        json_content = extract_json_from_code_block(text)
+
+        if json_content != text and logger:
+            logger.info(f"코드 블록에서 JSON 추출: {json_content}")
+
+        # JSON 파싱 시도
+        parsed_data = json.loads(json_content)
+
+        if logger:
+            logger.info(f"JSON 파싱 성공: {parsed_data}")
+
+        return parsed_data, True
+
+    except (json.JSONDecodeError, ValueError, AttributeError) as e:
+        if logger:
+            logger.info(f"JSON 파싱 실패 ({e}), 원본 텍스트 반환")
+
+        return text, False
+
+def collect_generator_data(generator, logger=None) -> tuple[str, int]:
+    """
+    Generator 객체에서 모든 데이터를 수집하여 문자열로 결합합니다.
+
+    Args:
+        generator: 수집할 Generator 객체
+        logger: 로깅을 위한 logger 객체 (선택사항)
+
+    Returns:
+        (수집된 데이터, 청크 수) 튜플
+
+    Raises:
+        StopIteration, GeneratorExit, RuntimeError, ValueError: Generator 처리 중 오류
+    """
+    chunks = []
+
+    for chunk in generator:
+        if chunk is not None:
+            chunks.append(str(chunk))
+
+    collected_data = ''.join(chunks) if chunks else ""
+
+    if logger:
+        logger.info(f"Generator 수집 완료: 총 청크 수: {len(chunks)}, 결과 길이: {len(collected_data)}")
+
+    return collected_data, len(chunks)
+
+def process_generator_input(key: str, generator, logger=None) -> Any:
+    """
+    Generator 입력을 처리하여 적절한 데이터 형태로 변환합니다.
+    JSON 파싱도 자동으로 시도합니다.
+
+    Args:
+        key: 입력 키 이름 (로깅용)
+        generator: 처리할 Generator 객체
+        logger: 로깅을 위한 logger 객체 (선택사항)
+
+    Returns:
+        처리된 데이터 (Dict, List 또는 문자열)
+    """
+    if logger:
+        logger.info(f"Generator 입력 감지: {key} ({type(generator)})")
+
+    try:
+        # Generator에서 데이터 수집
+        collected_data, chunk_count = collect_generator_data(generator, logger)
+
+        # JSON 파싱 시도
+        parsed_data, is_json = parse_json_safely(collected_data, logger)
+
+        if is_json:
+            return parsed_data
+        else:
+            if logger:
+                logger.info(f"문자열로 처리: {key} = {collected_data[:100]}...")
+            return collected_data
+
+    except (StopIteration, GeneratorExit, RuntimeError, ValueError) as e:
+        error_msg = f"Generator 수집 오류: {e}"
+        if logger:
+            logger.error(f"Generator 수집 중 오류: {key}, {e}")
+        return error_msg
+
+def clean_router_input_text(text: str) -> str:
+    """
+    RouterNode 입력 텍스트에서 불필요한 태그들을 제거합니다.
+
+    Args:
+        text: 정리할 텍스트
+
+    Returns:
+        정리된 텍스트
+    """
+    import re
+
+    if not isinstance(text, str):
+        return text
+
+    # 각종 태그들 제거
+    text = re.sub(r"<FEEDBACK_(LOOP|RESULT|STATUS)>.*?</FEEDBACK_(LOOP|RESULT|STATUS)>", '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<TODO_DETAILS>.*?</TODO_DETAILS>", '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<TOOLUSELOG>.*?</TOOLUSELOG>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<TOOLOUTPUTLOG>.*?</TOOLOUTPUTLOG>', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 여러 개의 연속된 공백/줄바꿈 정리
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
+    return text
+
+def get_route_key_from_data(data: Any, routing_criteria: str) -> str:
+    """
+    RouterNode의 데이터와 라우팅 기준을 바탕으로 라우팅 키를 결정합니다.
+    Boolean과 String 값에 대해 강건한 처리를 제공합니다.
+    """
+    if not routing_criteria or routing_criteria.strip() == "":
+        return "default"
+
+    if not isinstance(data, dict):
+        return "default"
+
+    routing_key = routing_criteria.strip()
+    if routing_key not in data:
+        return "default"
+
+    route_value = data[routing_key]
+
+    # Boolean 값에 대한 강건한 처리 (실제 Python bool 타입만)
+    if isinstance(route_value, bool):
+        return "true" if route_value else "false"
+
+    # None 값 처리
+    if route_value is None:
+        return "null"
+
+    # 숫자 타입 처리 (int, float)
+    if isinstance(route_value, (int, float)):
+        return str(route_value)
+
+    # 문자열로 변환 후 정규화
+    str_value = str(route_value).strip()
+
+    # 빈 문자열 처리
+    if str_value == "":
+        return "empty"
+
+    # Boolean-like 문자열들을 정규화 (대소문자 구분 없이)
+    # 단, 순수 숫자 문자열은 제외
+    str_lower = str_value.lower()
+
+    # 순수 숫자 문자열인지 확인
+    try:
+        float(str_value)
+        # 숫자 문자열이면 소문자로만 변환하여 반환
+        return str_lower
+    except ValueError:
+        # 숫자가 아닌 문자열에 대해서만 Boolean-like 변환 적용
+        if str_lower in ["true", "yes", "on", "enabled"]:
+            return "true"
+        elif str_lower in ["false", "no", "off", "disabled"]:
+            return "false"
+
+        # 일반 문자열은 소문자로 정규화하여 반환
+        return str_lower
+
 logger = logging.getLogger('Async-Workflow-Executor')
 
 # 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
@@ -96,6 +303,58 @@ class AsyncWorkflowExecutor:
 
         return sorted_nodes
 
+    def _is_port_match(self, port_id: str, route_key: str) -> bool:
+        """
+        포트 ID와 라우팅 키가 매칭되는지 강건하게 확인합니다.
+        Boolean, 문자열, 숫자 등 다양한 타입에 대해 유연한 매칭을 제공합니다.
+        """
+        if not port_id or not route_key:
+            return False
+
+        # 정확한 매칭 (대소문자 구분 없음)
+        if port_id.lower().strip() == route_key.lower().strip():
+            return True
+
+        # Boolean 값들에 대한 추가 매칭
+        port_lower = port_id.lower().strip()
+        route_lower = route_key.lower().strip()
+
+        # true 계열 매칭
+        true_variants = ["true", "1", "yes", "on", "enabled", "t", "y"]
+        if port_lower in true_variants and route_lower in true_variants:
+            return True
+
+        # false 계열 매칭
+        false_variants = ["false", "0", "no", "off", "disabled", "f", "n"]
+        if port_lower in false_variants and route_lower in false_variants:
+            return True
+
+        # 숫자 매칭 (문자열로 된 숫자와 실제 숫자)
+        try:
+            port_num = float(port_id)
+            route_num = float(route_key)
+            return port_num == route_num
+        except (ValueError, TypeError):
+            pass
+
+        return False
+
+    def _exclude_node_and_descendants(self, node_id: str, excluded_nodes: set) -> None:
+        """
+        RouterNode에서 선택되지 않은 경로의 노드와 그 후속 노드들을 제외합니다.
+        DFS를 사용하여 재귀적으로 모든 후속 노드들을 찾습니다.
+        """
+        if node_id in excluded_nodes:
+            return  # 이미 제외된 노드면 스킵
+
+        excluded_nodes.add(node_id)
+
+        # 이 노드에서 나가는 모든 edge를 찾아 후속 노드들도 제외
+        outgoing_edges = [edge for edge in self.edges if edge['source']['nodeId'] == node_id]
+        for edge in outgoing_edges:
+            target_node_id = edge['target']['nodeId']
+            self._exclude_node_and_descendants(target_node_id, excluded_nodes)
+
     def _execute_workflow_sync(self) -> Generator[Any, None, None]:
         """
         동기 워크플로우 실행 (기존 로직과 동일)
@@ -110,6 +369,8 @@ class AsyncWorkflowExecutor:
 
             node_outputs: Dict[str, Dict[str, Any]] = {}
             start_node_data: Optional[Dict[str, Any]] = None
+            # 라우팅으로 인해 제외된 노드들을 추적
+            excluded_nodes: set = set()
 
             logger.info("--- 워크플로우 실행 시작 ---")
             logger.info(f"실행 순서: {' -> '.join(execution_order)}")
@@ -117,6 +378,11 @@ class AsyncWorkflowExecutor:
             streaming_output_started = False
 
             for node_id in execution_order:
+                # 라우팅으로 인해 제외된 노드는 건너뛰기
+                if node_id in excluded_nodes:
+                    logger.info(" -> 노드 '%s'는 라우팅으로 인해 제외되어 건너뜁니다.", node_id)
+                    continue
+
                 node_info: Dict[str, Any] = self.nodes[node_id]
                 node_spec_id: str = node_info['data']['id']
 
@@ -155,6 +421,34 @@ class AsyncWorkflowExecutor:
                             kwargs[param_key] = param_value
 
                 logger.info(f"\n[실행] {node_info['data']['nodeName']} ({node_id})")
+
+                # RouterNode를 위한 특별한 전처리: Generator 입력 수집
+                function_id: str = node_info['data']['functionId']
+                if function_id == 'router':
+                    logger.info(" -> RouterNode 감지: Generator 입력 확인 중...")
+
+                    # 모든 입력 값에서 generator가 있는지 확인하고 수집
+                    processed_kwargs = {}
+                    for key, value in kwargs.items():
+                        if hasattr(value, '__iter__') and hasattr(value, '__next__'):
+                            # 헬퍼 함수를 사용하여 Generator 처리
+                            processed_value = process_generator_input(key, value, logger)
+                            # RouterNode 전용 텍스트 정리 (마지막 전처리)
+                            if isinstance(processed_value, str):
+                                processed_value = clean_router_input_text(processed_value)
+                                logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
+                            processed_kwargs[key] = processed_value
+                        else:
+                            # 일반 값도 문자열인 경우 정리 적용
+                            if isinstance(value, str):
+                                processed_kwargs[key] = clean_router_input_text(value)
+                                logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
+                            else:
+                                processed_kwargs[key] = value
+
+                    kwargs = processed_kwargs
+                    logger.info(" -> RouterNode 전처리 완료")
+
                 logger.info(f" -> 입력: {kwargs}")
 
                 # 노드 인스턴스 생성 및 실행
@@ -185,8 +479,7 @@ class AsyncWorkflowExecutor:
                     logger.error("Error executing node %s: %s", node_id, str(e), exc_info=True)
                     raise
 
-                # functionId에 따른 특별 처리
-                function_id: str = node_info['data']['functionId']
+                # functionId에 따른 특별 처리 (이미 위에서 선언됨)
 
                 if function_id == 'startnode':
                     start_node_data = {
@@ -227,16 +520,89 @@ class AsyncWorkflowExecutor:
 
                 if function_id != 'endnode':
                     if not node_info['data']['outputs']:
-                        logger.info(f" -> 출력 없음. (결과: {result})")
+                        logger.info(" -> 출력 없음. (결과: %s)", result)
                         node_outputs[node_id] = {}
                         continue
 
-                    if not node_info['data']['outputs'][0].get('id'):
-                        raise ValueError(f"노드 '{node_info['data']['nodeName']}'의 첫 번째 출력 포트에 ID가 정의되어 있지 않습니다.")
+                    # RouterNode의 특별한 처리
+                    if function_id == 'router':
+                        logger.info(" -> RouterNode 결과 처리 중...")
 
-                    output_port_id: str = node_info['data']['outputs'][0]['id']
-                    node_outputs[node_id] = {output_port_id: result}
-                    logger.info(f" -> 출력: {node_outputs[node_id]}")
+                        # routing_criteria 파라미터 찾기
+                        routing_criteria = ""
+                        for param in node_info['data'].get('parameters', []):
+                            if param.get('id') == 'routing_criteria':
+                                routing_criteria = param.get('value', '')
+                                break
+
+                        # 라우팅 키 결정
+                        routed_port_id = get_route_key_from_data(result, routing_criteria)
+                        output_ports = node_info['data']['outputs']
+
+                        logger.info(" -> 라우팅 기준: '%s', 결정된 포트: '%s'", routing_criteria, routed_port_id)
+
+                        # 선택된 포트와 선택되지 않은 포트들 분리
+                        selected_port = None
+                        unselected_ports = []
+
+                        for port in output_ports:
+                            port_id = port.get('id', '').strip()
+
+                            # 강건한 포트 ID 매칭
+                            if self._is_port_match(port_id, routed_port_id):
+                                selected_port = port
+                            else:
+                                unselected_ports.append(port)
+
+                        # 선택되지 않은 포트들로 연결된 노드들을 excluded_nodes에 추가
+                        for port in unselected_ports:
+                            port_id = port.get('id')
+                            # 이 포트와 연결된 모든 다음 노드들을 찾아서 제외
+                            connected_edges = [edge for edge in self.edges
+                                             if edge['source']['nodeId'] == node_id and edge['source']['portId'] == port_id]
+
+                            for edge in connected_edges:
+                                target_node_id = edge['target']['nodeId']
+                                # 해당 노드와 그 후속 노드들을 모두 제외
+                                self._exclude_node_and_descendants(target_node_id, excluded_nodes)
+                                logger.info(" -> 라우팅으로 인해 노드 '%s' 및 후속 노드들 제외", target_node_id)
+
+                        # 선택된 포트로만 데이터 전달
+                        if selected_port:
+                            actual_port_id = selected_port.get('id')
+                            node_outputs[node_id] = {actual_port_id: result}
+                            logger.info(" -> 라우팅 성공: 포트 '%s'로 데이터 전달", actual_port_id)
+                        else:
+                            # 매칭되는 포트가 없으면 default 포트 또는 첫 번째 포트 사용
+                            default_port = None
+                            for port in output_ports:
+                                if port.get('id') == 'default':
+                                    default_port = port
+                                    break
+
+                            if default_port:
+                                node_outputs[node_id] = {'default': result}
+                                logger.info(" -> 기본 포트 'default'로 데이터 전달")
+                            elif output_ports:
+                                first_port_id = output_ports[0].get('id')
+                                if first_port_id:
+                                    node_outputs[node_id] = {first_port_id: result}
+                                    logger.info(" -> 첫 번째 포트 '%s'로 데이터 전달", first_port_id)
+                                else:
+                                    raise ValueError(f"RouterNode '{node_info['data']['nodeName']}'의 출력 포트에 ID가 정의되어 있지 않습니다.")
+                            else:
+                                logger.warning(" -> RouterNode에 출력 포트가 없습니다.")
+                                node_outputs[node_id] = {}
+
+                        logger.info(" -> 라우팅 완료: %s", node_outputs[node_id])
+                    else:
+                        # 일반 노드의 기존 처리 로직
+                        if not node_info['data']['outputs'][0].get('id'):
+                            raise ValueError(f"노드 '{node_info['data']['nodeName']}'의 첫 번째 출력 포트에 ID가 정의되어 있지 않습니다.")
+
+                        output_port_id: str = node_info['data']['outputs'][0]['id']
+                        node_outputs[node_id] = {output_port_id: result}
+                        logger.info(" -> 출력: %s", node_outputs[node_id])
 
             if not streaming_output_started:
                 logger.info("\n--- 워크플로우 실행 완료 ---")

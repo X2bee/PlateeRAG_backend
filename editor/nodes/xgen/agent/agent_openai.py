@@ -46,7 +46,7 @@ class AgentOpenAINode(Node):
                 {"value": "gpt-5-mini", "label": "GPT-5 Mini"},
             ]
         },
-        {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
+        {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 1, "required": False, "optional": True, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "required": False, "optional": True, "min": 1, "max": 65536, "step": 1},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "required": False, "optional": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
@@ -64,7 +64,7 @@ class AgentOpenAINode(Node):
         args_schema: Optional[BaseModel] = None,
         plan: Optional[Dict[str, Any]] = None,
         model: str = "gpt-5",
-        temperature: float = 0.7,
+        temperature: float = 1,
         max_tokens: int = 8192,
         base_url: str = "https://api.openai.com/v1",
         strict_citation: bool = True,
