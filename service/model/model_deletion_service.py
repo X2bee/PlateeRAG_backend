@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-from pathlib import Path
 from typing import Optional
 
 from service.database.connection import AppDatabaseManager
@@ -35,7 +34,12 @@ class ModelDeletionService:
 
         if remove_artifact:
             mlflow_info = extract_mlflow_info(target)
-            if mlflow_info:
+            if not mlflow_info:
+                logger.warning(
+                    "MLflow metadata missing for model %s; skipping remote artifact deletion",
+                    target.id,
+                )
+            else:
                 try:
                     self._delete_mlflow_artifact(mlflow_info)
                 except RuntimeError:
@@ -43,21 +47,6 @@ class ModelDeletionService:
                 except Exception as exc:  # pragma: no cover - best effort remote cleanup
                     logger.error("Failed to remove MLflow artifact: %s", exc, exc_info=True)
                     raise RuntimeError("MODEL_ARTIFACT_DELETE_FAILED") from exc
-            else:
-                file_path = getattr(target, "file_path", None)
-                if file_path:
-                    try:
-                        path = Path(file_path).expanduser()
-                    except (TypeError, ValueError):
-                        path = None
-
-                    if path and path.exists():
-                        try:
-                            path.unlink()
-                            logger.info("Removed model artifact: %s", path)
-                        except OSError as exc:
-                            logger.error("Failed to remove artifact %s: %s", path, exc)
-                            raise RuntimeError("MODEL_ARTIFACT_DELETE_FAILED") from exc
 
         return self.app_db.delete(MLModel, target.id)
 

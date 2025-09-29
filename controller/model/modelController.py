@@ -8,12 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List
 
-import aiofiles
+import tempfile
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from controller.helper.controllerHelper import extract_user_id_from_request
-from controller.helper.singletonHelper import get_db_manager, get_config_composer, get_mlflow_service
+from controller.helper.singletonHelper import get_db_manager, get_mlflow_service
 from service.database.logger_helper import create_logger
 from service.model.model_registry_service import ModelRegistryService
 from service.model.model_inference_service import ModelInferenceService
@@ -53,20 +53,6 @@ def _sanitize_name(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", value).strip("_.")
     return cleaned or "model"
 
-
-def _ensure_model_directory(request: Request) -> Path:
-    config_composer = get_config_composer(request)
-    try:
-        storage_config = config_composer.get_config_by_name("MODEL_STORAGE_DIRECTORY")
-        base_dir = storage_config.value
-    except KeyError:
-        base_dir = "models"
-
-    base_path = Path(base_dir)
-    if not base_path.is_absolute():
-        base_path = Path.cwd() / base_path
-    base_path.mkdir(parents=True, exist_ok=True)
-    return base_path
 
 
 def _parse_optional_json(raw_value: Optional[str], field_name: str) -> Optional[Any]:
@@ -125,6 +111,13 @@ def _resolve_mlflow_binding(
     return None, None
 
 
+def _get_mlflow_service_or_none(request: Request):
+    try:
+        return get_mlflow_service(request)
+    except HTTPException:
+        return None
+
+
 def _serialize_backend_log(log: BackendLogs) -> Dict[str, Any]:
     payload = log.to_dict()
     metadata = payload.get("metadata")
@@ -165,11 +158,14 @@ async def upload_model(
         file.filename,
     )
 
-    try:
-        mlflow_service = get_mlflow_service(request)
-    except HTTPException as exc:
-        backend_log.error("MLflow service unavailable", exception=exc)
-        raise
+    mlflow_service = _get_mlflow_service_or_none(request)
+    if not mlflow_service:
+        logger.error(
+            "[upload_model] MLflow service unavailable | user_id=%s",
+            user_id,
+        )
+        backend_log.error("MLflow service unavailable for upload")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
 
     framework_normalized = framework.lower().strip() if framework else DEFAULT_FRAMEWORK
     if framework_normalized not in {DEFAULT_FRAMEWORK}:
@@ -212,45 +208,50 @@ async def upload_model(
         )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="MODEL_ALREADY_REGISTERED")
 
-    storage_root = _ensure_model_directory(request)
     safe_model_name = _sanitize_name(model_name)
-    target_dir = storage_root / safe_model_name
-    if model_version:
-        target_dir = target_dir / _sanitize_name(model_version)
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     artifact_name_parts = [safe_model_name]
     if model_version:
         artifact_name_parts.append(_sanitize_name(model_version))
     artifact_name_parts.append(timestamp)
     artifact_filename = "__".join(artifact_name_parts) + suffix
-    artifact_path = target_dir / artifact_filename
 
+    temp_path: Optional[Path] = None
     hasher = hashlib.sha256()
     total_bytes = 0
 
     try:
-        async with aiofiles.open(artifact_path, "wb") as buffer:
+        with tempfile.NamedTemporaryFile(prefix="upload_", suffix=suffix, delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
             while True:
                 chunk = await file.read(1024 * 1024)
                 if not chunk:
                     break
                 total_bytes += len(chunk)
                 hasher.update(chunk)
-                await buffer.write(chunk)
+                temp_file.write(chunk)
     except Exception as exc:  # pragma: no cover - IO failure path
         logger.exception(
-            "[upload_model] Failed to persist artifact | user_id=%s path=%s",
+            "[upload_model] Failed to buffer upload | user_id=%s",
             user_id,
-            artifact_path,
         )
-        if artifact_path.exists():
-            artifact_path.unlink(missing_ok=True)
-        backend_log.error("Model upload failed during write", exception=exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_UPLOAD_FAILED") from exc
+        if temp_path:
+            temp_path.unlink(missing_ok=True)
+        backend_log.error("Model upload failed during buffering", exception=exc)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_UPLOAD_FAILED") from exc
     finally:
         await file.close()
+
+    if total_bytes == 0 or not temp_path:
+        logger.warning(
+            "[upload_model] Empty upload detected | user_id=%s model_name=%s",
+            user_id,
+            model_name,
+        )
+        backend_log.warn("Empty model upload rejected", metadata={"model_name": model_name})
+        if temp_path:
+            temp_path.unlink(missing_ok=True)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="EMPTY_MODEL_FILE")
 
     checksum = hasher.hexdigest()
     logger.info(
@@ -268,7 +269,8 @@ async def upload_model(
             checksum,
             duplicate_artifact.id,
         )
-        artifact_path.unlink(missing_ok=True)
+        if temp_path:
+            temp_path.unlink(missing_ok=True)
         backend_log.warn(
             "Duplicate artifact detected via checksum",
             metadata={
@@ -277,7 +279,7 @@ async def upload_model(
                 "existing_model_id": duplicate_artifact.id,
             }
         )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="MODEL_ARTIFACT_ALREADY_EXISTS")
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="MODEL_ARTIFACT_ALREADY_EXISTS")
 
     parsed_metadata = _parse_optional_json(metadata, "metadata") or {}
     parsed_input_schema = _parse_optional_json(input_schema, "input_schema")
@@ -298,48 +300,55 @@ async def upload_model(
             user_id,
             run_error,
         )
-        backend_log.error("Invalid MLflow run parameters", exception=run_error)
-        artifact_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(run_error)) from run_error
+        if temp_path:
+            temp_path.unlink(missing_ok=True)
+        backend_log.error(
+            "Invalid MLflow run information",
+            metadata={"error": str(run_error)},
+        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="INVALID_MLFLOW_RUN") from run_error
 
-    resolved_experiment_id = mlflow_experiment_id or mlflow_service.default_experiment_id
+    resolved_experiment_id: Optional[str] = mlflow_experiment_id or mlflow_service.default_experiment_id
 
     try:
         artifact_relative_path = mlflow_service.log_artifact(
             resolved_run_id,
-            artifact_path,
+            temp_path,
             artifact_dir=artifact_directory,
         )
-        try:
-            run_info = mlflow_service.client.get_run(resolved_run_id)
-            resolved_experiment_id = getattr(run_info.info, "experiment_id", resolved_experiment_id)
-        except Exception:  # pragma: no cover
-            pass
-        artifact_uri = mlflow_service.build_artifact_uri(resolved_run_id, artifact_relative_path)
     except Exception as mlflow_exc:
         logger.exception(
-            "[upload_model] Failed to store artifact in MLflow | user_id=%s run_id=%s",
+            "[upload_model] Failed to upload artifact to MLflow | user_id=%s run_id=%s",
             user_id,
             resolved_run_id,
         )
+        if temp_path:
+            temp_path.unlink(missing_ok=True)
         backend_log.error("Failed to upload artifact to MLflow", exception=mlflow_exc)
-        artifact_path.unlink(missing_ok=True)
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_UPLOAD_FAILED") from mlflow_exc
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_ARTIFACT_UPLOAD_FAILED") from mlflow_exc
     finally:
-        artifact_path.unlink(missing_ok=True)
+        if temp_path:
+            temp_path.unlink(missing_ok=True)
 
-    parsed_metadata.update(
-        {
-            "mlflow_run_id": resolved_run_id,
-            "mlflow_artifact_path": artifact_relative_path,
-            "mlflow_artifact_uri": artifact_uri,
-            "mlflow_tracking_uri": mlflow_service.tracking_uri,
-        }
-    )
+    artifact_uri = mlflow_service.build_artifact_uri(resolved_run_id, artifact_relative_path)
+
+    mlflow_metadata = {
+        "mlflow_run_id": resolved_run_id,
+        "mlflow_artifact_path": artifact_relative_path,
+        "mlflow_artifact_uri": artifact_uri,
+        "mlflow_tracking_uri": mlflow_service.tracking_uri,
+        "mlflow_model_uri": artifact_uri,
+    }
     if resolved_experiment_id:
-        parsed_metadata.setdefault("mlflow_experiment_id", resolved_experiment_id)
+        mlflow_metadata["mlflow_experiment_id"] = resolved_experiment_id
     if run_name_for_mlflow:
-        parsed_metadata.setdefault("mlflow_run_name", run_name_for_mlflow)
+        mlflow_metadata["mlflow_run_name"] = run_name_for_mlflow
+    if mlflow_service.default_experiment_id:
+        mlflow_metadata.setdefault("mlflow_default_experiment_id", mlflow_service.default_experiment_id)
+
+    parsed_metadata.update(mlflow_metadata)
+    parsed_metadata.setdefault("artifact_sha256", checksum)
+    parsed_metadata.setdefault("artifact_size_bytes", total_bytes)
 
     model_payload: Dict[str, Any] = {
         "model_name": model_name,
@@ -635,38 +644,52 @@ async def run_inference(request: Request, payload: InferenceRequest):
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MODEL_NOT_FOUND")
 
-    local_model_path = model_record.file_path
     run_id, artifact_path = _resolve_mlflow_binding(model_record.metadata, model_record.file_path)
-    if run_id and artifact_path:
-        try:
-            mlflow_service = get_mlflow_service(request)
-        except HTTPException as exc:
-            backend_log.error("MLflow service unavailable", exception=exc)
-            raise
+    if not (run_id and artifact_path):
+        logger.error(
+            "[run_inference] Missing MLflow binding | user_id=%s model_id=%s",
+            user_id,
+            model_record.id,
+        )
+        backend_log.error(
+            "Model metadata missing MLflow binding",
+            metadata={"model_id": model_record.id},
+        )
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_MLFLOW_METADATA_MISSING")
 
-        artifact_uri = mlflow_service.build_artifact_uri(run_id, artifact_path)
-        try:
-            cached_path = mlflow_service.ensure_local_artifact(
-                artifact_uri,
-                expected_checksum=model_record.file_checksum,
-            )
-            local_model_path = str(cached_path)
-            logger.info(
-                "[run_inference] Resolved MLflow artifact | user_id=%s run_id=%s artifact_path=%s local_path=%s",
-                user_id,
-                run_id,
-                artifact_path,
-                local_model_path,
-            )
-        except Exception as exc:
-            logger.exception(
-                "[run_inference] Failed to download MLflow artifact | user_id=%s run_id=%s artifact_path=%s",
-                user_id,
-                run_id,
-                artifact_path,
-            )
-            backend_log.error("Failed to download MLflow artifact", exception=exc)
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_ARTIFACT_UNAVAILABLE") from exc
+    mlflow_service = _get_mlflow_service_or_none(request)
+    if not mlflow_service:
+        logger.error(
+            "[run_inference] MLflow service unavailable | user_id=%s run_id=%s",
+            user_id,
+            run_id,
+        )
+        backend_log.error("MLflow service unavailable for inference", metadata={"run_id": run_id})
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
+
+    artifact_uri = mlflow_service.build_artifact_uri(run_id, artifact_path)
+    try:
+        cached_path = mlflow_service.ensure_local_artifact(
+            artifact_uri,
+            expected_checksum=model_record.file_checksum,
+        )
+        local_model_path = str(cached_path)
+        logger.info(
+            "[run_inference] Resolved MLflow artifact | user_id=%s run_id=%s artifact_path=%s local_path=%s",
+            user_id,
+            run_id,
+            artifact_path,
+            local_model_path,
+        )
+    except Exception as exc:
+        logger.exception(
+            "[run_inference] Failed to download MLflow artifact | user_id=%s run_id=%s artifact_path=%s",
+            user_id,
+            run_id,
+            artifact_path,
+        )
+        backend_log.error("Failed to download MLflow artifact", exception=exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_ARTIFACT_UNAVAILABLE") from exc
 
     try:
         inference_result = _inference_service.predict(
@@ -743,37 +766,33 @@ async def sync_model_artifacts(request: Request):
     models = registry_service.list_models(limit=10_000)
     removed_ids = []
 
-    try:
-        mlflow_service = get_mlflow_service(request)
-    except HTTPException:
-        mlflow_service = None
+    mlflow_service = _get_mlflow_service_or_none(request)
+    if not mlflow_service:
+        logger.error(
+            "[sync_model_artifacts] MLflow service unavailable | user_id=%s",
+            user_id,
+        )
+        backend_log.error("MLflow service unavailable for sync")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
 
     for model in models:
         run_id, artifact_path = _resolve_mlflow_binding(model.metadata, model.file_path)
-        if run_id and artifact_path:
-            if not mlflow_service:
-                logger.warning(
-                    "[sync_model_artifacts] MLflow service unavailable; skipping remote check | model_id=%s",
-                    model.id,
-                )
-                continue
-            if not mlflow_service.artifact_exists(run_id, artifact_path):
-                logger.warning(
-                    "[sync_model_artifacts] Missing MLflow artifact detected | model_id=%s run_id=%s path=%s",
-                    model.id,
-                    run_id,
-                    artifact_path,
-                )
-                if deletion_service.delete(model.id, model=model, remove_artifact=False):
-                    removed_ids.append(model.id)
+        if not (run_id and artifact_path):
+            logger.warning(
+                "[sync_model_artifacts] Model missing MLflow metadata | model_id=%s",
+                model.id,
+            )
+            if deletion_service.delete(model.id, model=model, remove_artifact=False):
+                removed_ids.append(model.id)
             continue
 
-        try:
-            path = Path(model.file_path)
-        except (TypeError, ValueError):
-            path = None
-
-        if not path or not path.exists():
+        if not mlflow_service.artifact_exists(run_id, artifact_path):
+            logger.warning(
+                "[sync_model_artifacts] Missing MLflow artifact detected | model_id=%s run_id=%s path=%s",
+                model.id,
+                run_id,
+                artifact_path,
+            )
             if deletion_service.delete(model.id, model=model, remove_artifact=False):
                 removed_ids.append(model.id)
 
@@ -821,14 +840,20 @@ async def delete_model(request: Request, model_id: int):
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MODEL_NOT_FOUND")
 
-    remove_local_artifact = True
     run_id, artifact_path = _resolve_mlflow_binding(existing.metadata, existing.file_path)
     if run_id and artifact_path:
-        try:
-            mlflow_service = get_mlflow_service(request)
-        except HTTPException as exc:
-            backend_log.error("MLflow service unavailable", exception=exc)
-            raise
+        mlflow_service = _get_mlflow_service_or_none(request)
+        if not mlflow_service:
+            logger.error(
+                "[delete_model] MLflow service unavailable; cannot delete artifact | user_id=%s model_id=%s",
+                user_id,
+                model_id,
+            )
+            backend_log.error(
+                "MLflow service unavailable; remote artifact not deleted",
+                metadata={"model_id": model_id, "run_id": run_id},
+            )
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
 
         try:
             mlflow_service.delete_artifact(run_id, artifact_path)
@@ -849,14 +874,22 @@ async def delete_model(request: Request, model_id: int):
             )
             backend_log.error("Failed to delete MLflow artifact", exception=exc)
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_DELETE_FAILED") from exc
-
-        remove_local_artifact = False
+    else:
+        logger.warning(
+            "[delete_model] MLflow binding missing; deleting registry entry only | user_id=%s model_id=%s",
+            user_id,
+            model_id,
+        )
+        backend_log.warn(
+            "Model metadata missing MLflow binding during delete",
+            metadata={"model_id": model_id},
+        )
 
     try:
         deleted = deletion_service.delete(
             model_id,
             model=existing,
-            remove_artifact=remove_local_artifact,
+            remove_artifact=False,
         )
     except RuntimeError as exc:
         logger.exception(
