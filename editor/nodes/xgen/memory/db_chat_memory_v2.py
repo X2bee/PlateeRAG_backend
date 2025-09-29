@@ -19,7 +19,9 @@ class DBMemoryNode(Node):
     description = "DB에서 대화 기록을 로드하여 ConversationBufferMemory로 반환하는 노드입니다."
     tags = ["memory", "database", "chat_history", "xgen"]
 
-    inputs = []
+    inputs = [
+        {"id": "current_input", "name": "Current Input", "type": "STR", "multi": False, "required": False},
+    ]
     outputs = [
         {"id": "memory", "name": "Memory", "type": "OBJECT"},
     ]
@@ -779,6 +781,14 @@ class DBMemoryNode(Node):
                 # 빈 메모리 객체 반환
                 return self.load_memory_from_db([])
 
+            # 입력 타입을 안정적으로 처리
+            if isinstance(current_input, list):
+                current_input = current_input[0] if current_input else ""
+            elif current_input is None:
+                current_input = ""
+            elif not isinstance(current_input, str):
+                current_input = str(current_input)
+
             # 유사도 필터링 적용 (활성화된 경우)
             if enable_similarity_filter and current_input:
                 original_messages = db_messages
@@ -795,6 +805,8 @@ class DBMemoryNode(Node):
                 else:
                     logger.info(f"Applied similarity filtering with top {top_n_messages} messages")
                 db_messages = filtered_messages
+            elif enable_similarity_filter and not current_input:
+                logger.info("Similarity filtering enabled but current_input was empty; skipping filter")
 
             memory = self.load_memory_from_db(db_messages)
 
