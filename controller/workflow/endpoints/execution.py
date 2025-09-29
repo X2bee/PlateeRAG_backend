@@ -17,6 +17,7 @@ from service.database.execution_meta_service import get_or_create_execution_meta
 from service.database.models.executor import ExecutionIO
 from editor.async_workflow_executor import execution_manager
 from service.database.logger_helper import create_logger
+from service.database.models.workflow import WorkflowMeta
 
 logger = logging.getLogger("execution-endpoints")
 router = APIRouter()
@@ -54,23 +55,30 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
 
         ## 워크플로우 실행인 경우, 해당하는 워크플로우 파일을 찾아서 사용.
         else:
-            downloads_path = os.path.join(os.getcwd(), "downloads")
-            download_path_id = os.path.join(downloads_path, extracted_user_id)
+            # downloads_path = os.path.join(os.getcwd(), "downloads")
+            # download_path_id = os.path.join(downloads_path, extracted_user_id)
 
-            if not request_body.workflow_name.endswith('.json'):
-                filename = f"{request_body.workflow_name}.json"
-            else:
-                filename = request_body.workflow_name
-            file_path = os.path.join(download_path_id, filename)
-            with open(file_path, 'r', encoding='utf-8') as f:
-                workflow_data = json.load(f)
+            # if not request_body.workflow_name.endswith('.json'):
+            #     filename = f"{request_body.workflow_name}.json"
+            # else:
+            #     filename = request_body.workflow_name
+            # file_path = os.path.join(download_path_id, filename)
+            # with open(file_path, 'r', encoding='utf-8') as f:
+            #     workflow_data = json.load(f)
+
+            #### DB방식으로 변경중
+            workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": extracted_user_id, "workflow_name": request_body.workflow_name}, limit=1)
+            workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+            if isinstance(workflow_data, str):
+                workflow_data = json.loads(workflow_data)
+
             workflow_data = await workflow_parameter_helper(request_body, workflow_data)
             backend_log.info("Loaded custom workflow",
-                           metadata={"file_path": file_path, "extracted_user_id": extracted_user_id})
+                           metadata={"extracted_user_id": extracted_user_id})
 
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
             backend_log.error("Invalid workflow data structure",
-                            metadata={"file_path": file_path, "has_nodes": 'nodes' in workflow_data if workflow_data else False,
+                            metadata={"has_nodes": 'nodes' in workflow_data if workflow_data else False,
                                     "has_edges": 'edges' in workflow_data if workflow_data else False})
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
 
@@ -281,19 +289,26 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             backend_log.info("Using default mode workflow for streaming",
                            metadata={"file_path": file_path})
         else:
-            downloads_path = os.path.join(os.getcwd(), "downloads")
-            download_path_id = os.path.join(downloads_path, extracted_user_id)
-            filename = f"{request_body.workflow_name}.json" if not request_body.workflow_name.endswith('.json') else request_body.workflow_name
-            file_path = os.path.join(download_path_id, filename)
-            with open(file_path, 'r', encoding='utf-8') as f:
-                workflow_data = json.load(f)
+            # downloads_path = os.path.join(os.getcwd(), "downloads")
+            # download_path_id = os.path.join(downloads_path, extracted_user_id)
+            # filename = f"{request_body.workflow_name}.json" if not request_body.workflow_name.endswith('.json') else request_body.workflow_name
+            # file_path = os.path.join(download_path_id, filename)
+            # with open(file_path, 'r', encoding='utf-8') as f:
+            #     workflow_data = json.load(f)
+
+            #### DB방식으로 변경중
+            workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": extracted_user_id, "workflow_name": request_body.workflow_name}, limit=1)
+            workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+            if isinstance(workflow_data, str):
+                workflow_data = json.loads(workflow_data)
+
             workflow_data = await workflow_parameter_helper(request_body, workflow_data)
             backend_log.info("Loaded custom workflow for streaming",
-                           metadata={"file_path": file_path, "extracted_user_id": extracted_user_id})
+                           metadata={"extracted_user_id": extracted_user_id})
 
         if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
             backend_log.error("Invalid workflow data structure for streaming",
-                            metadata={"file_path": file_path, "has_nodes": 'nodes' in workflow_data if workflow_data else False,
+                            metadata={"has_nodes": 'nodes' in workflow_data if workflow_data else False,
                                     "has_edges": 'edges' in workflow_data if workflow_data else False})
             raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
 

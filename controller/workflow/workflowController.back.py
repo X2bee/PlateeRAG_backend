@@ -242,6 +242,12 @@ async def load_workflow(request: Request, workflow_name: str, user_id):
         filename = f"{workflow_name}.json"
         file_path = os.path.join(download_path_id, filename)
 
+        workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": using_id, "workflow_name": workflow_name}, limit=1)
+        workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+        if isinstance(workflow_data, str):
+            # 문자열인 경우 JSON으로 파싱 시도
+            workflow_data = json.loads(workflow_data)
+
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
