@@ -212,3 +212,5 @@ tests/
 docs/
 
 docker-compose.yaml
+
+mlruns/
