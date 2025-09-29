@@ -43,6 +43,7 @@ from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 from service.data_manager.data_manager_register import DataManagerRegistry
+from service.mlflow.mlflow_artifact_service import MLflowArtifactService
 from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
 from controller.helper.utils.workflow_helpers import workflow_data_synchronizer
 
@@ -319,6 +320,35 @@ async def lifespan(app: FastAPI):
         logger.info("⚙️  Step 7.5: Data manager registry initialization starting...")
         app.state.data_manager_registry = DataManagerRegistry()
         logger.info("✅ Step 7.5: Data manager registry initialized successfully!")
+
+        # 7.7. MLflow artifact service initialization
+        print_step_banner(7.7, "MLFLOW ARTIFACT SERVICE", "Integrating MLflow tracking and artifacts")
+        mlflow_tracking_uri = os.getenv("MLFLOW_URL", "").strip()
+        mlflow_default_experiment_id = os.getenv("MLFLOW_DEFAULT_EXPERIMENT_ID")
+        mlflow_cache_dir = os.getenv("MLFLOW_CACHE_DIR")
+        mlflow_token = os.getenv("MLFLOW_TRACKING_TOKEN")
+
+        if mlflow_tracking_uri:
+            try:
+                logger.info("⚙️  Step 7.7: MLflow artifact service initialization starting...")
+                mlflow_service = MLflowArtifactService(
+                    tracking_uri=mlflow_tracking_uri,
+                    default_experiment_id=mlflow_default_experiment_id,
+                    cache_dir=mlflow_cache_dir,
+                    tracking_token=mlflow_token,
+                )
+                app.state.mlflow_service = mlflow_service
+                logger.info("✅ Step 7.7: MLflow artifact service initialized successfully!")
+            except Exception as mlflow_error:
+                app.state.mlflow_service = None
+                logger.error(
+                    "❌ Step 7.7: Failed to initialize MLflow service: %s",
+                    mlflow_error,
+                    exc_info=True,
+                )
+        else:
+            app.state.mlflow_service = None
+            logger.warning("⚠️  MLflow tracking URI not configured. MLflow integration is disabled.")
 
         print_step_banner(8, "SYSTEM VALIDATION", "Validating configurations and directories")
         logger.info("⚙️  Step 8: System validation starting...")

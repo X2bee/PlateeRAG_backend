@@ -9,6 +9,7 @@ from service.retrieval.rag_service import RAGService
 from service.database.performance_controller_helper import PerformanceControllerHelper
 from service.stt.huggingface_stt import HuggingFaceSTT
 from service.data_manager.data_manager_register import DataManagerRegistry
+from service.mlflow.mlflow_artifact_service import MLflowArtifactService
 
 def get_db_manager(request: Request) -> AppDatabaseManager:
     """데이터베이스 매니저 의존성 주입"""
@@ -98,3 +99,10 @@ def get_data_manager_registry(request: Request) -> DataManagerRegistry:
         return request.app.state.data_manager_registry
     else:
         raise HTTPException(status_code=500, detail="DataManagerRegistry가 초기화되지 않았습니다")
+
+
+def get_mlflow_service(request: Request) -> MLflowArtifactService:
+    """MLflow artifact service dependency"""
+    if hasattr(request.app.state, 'mlflow_service') and request.app.state.mlflow_service:
+        return request.app.state.mlflow_service
+    raise HTTPException(status_code=500, detail="MLflow service not available")
