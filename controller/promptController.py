@@ -54,9 +54,13 @@ async def get_prompt_list(
             },
         )
 
+        my_prompt_conditions = {"user_id": user_id}
+        if language:
+            my_prompt_conditions["language"] = language
+
         my_prompts = app_db.find_by_condition(
             Prompts,
-            conditions={"user_id": user_id},
+            conditions=my_prompt_conditions,
             limit=1000,
             orderby="id",
             orderby_asc=False,
@@ -81,9 +85,13 @@ async def get_prompt_list(
             prompt_list.append(prompt_data)
 
     try:
+        template_conditions = {"is_template": True}
+        if language:
+            template_conditions["language"] = language
+
         template_prompts = app_db.find_by_condition(
             Prompts,
-            conditions={"is_template": True},
+            conditions=template_conditions,
             limit=limit,
             offset=offset,
             orderby="id",
@@ -106,9 +114,13 @@ async def get_prompt_list(
             }
             prompt_list.append(prompt_data)
 
+        shared_conditions = {"public_available": True, "is_template": False, "user_id__not__": user_id} if user_id else {"public_available": True, "is_template": False}
+        if language:
+            shared_conditions["language"] = language
+
         shared_prompts = app_db.find_by_condition(
             Prompts,
-            conditions={"public_available": True, "is_template": False, "user_id__not__": user_id} if user_id else {"public_available": True, "is_template": False},
+            conditions=shared_conditions,
             limit=limit,
             offset=offset,
             orderby="id",
