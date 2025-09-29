@@ -14,7 +14,7 @@ from editor.nodes.xgen.agent.functions import (
     create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 )
 from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput, use_guarder_for_text_moderation
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class AgentFeedbackLoopNode(Node):
                     }
 
             # LLM 컴포넌트 준비
-            enhanced_prompt = prefix_prompt + default_prompt
+            enhanced_prompt = get_prefix_prompt() + default_prompt
             llm, tools_list, chat_history = prepare_llm_components(
                 text, tools, memory, model, temperature, max_tokens, base_url, streaming=False, plan=plan
             )

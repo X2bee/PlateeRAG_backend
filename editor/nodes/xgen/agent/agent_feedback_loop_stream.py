@@ -19,7 +19,7 @@ from editor.utils.feedback.create_todos import create_todos
 from editor.utils.helper.feedback_stream_helper import FeedbackStreamEmitter
 from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
 from editor.utils.feedback.todo_executor import todo_executor, build_final_summary
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 from editor.type_model.feedback_state import FeedbackState
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ class AgentFeedbackLoopStreamNode(Node):
                         emitter.emit_error(moderation_message)
                         return
 
-                enhanced_prompt = prefix_prompt + default_prompt
+                enhanced_prompt = get_prefix_prompt() + default_prompt
                 llm, tools_list, chat_history = prepare_llm_components(
                     text,
                     tools,

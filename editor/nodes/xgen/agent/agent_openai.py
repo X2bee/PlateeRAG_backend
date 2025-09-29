@@ -6,7 +6,7 @@ from langchain.schema.output_parser import StrOutputParser
 from langchain_core.output_parsers import JsonOutputParser
 from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput, use_guarder_for_text_moderation
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 
@@ -78,7 +78,7 @@ class AgentOpenAINode(Node):
                 if not is_safe:
                     return moderation_message
 
-            default_prompt  = prefix_prompt+default_prompt
+            default_prompt  = get_prefix_prompt()+default_prompt
             llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=False, plan=plan)
 
             additional_rag_context = None
