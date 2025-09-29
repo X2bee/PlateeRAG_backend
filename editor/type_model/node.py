@@ -43,6 +43,7 @@ class NodeSpec(TypedDict):
     inputs: List[Port]
     outputs: List[Port]
     parameters: List[Parameter]
+    disable: NotRequired[Optional[bool]]  # 노드 비활성화 여부
 
 
 CATEGORIES_LABEL_MAP = {

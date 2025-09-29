@@ -5,7 +5,7 @@ from editor.node_composer import Node
 from editor.utils.helper.async_helper import sync_run_async
 from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from editor.utils.helper.service_helper import AppServiceManager
@@ -81,7 +81,7 @@ class AgentOpenAIStreamNode(Node):
                     yield moderation_message
                     return
 
-            default_prompt= prefix_prompt+default_prompt
+            default_prompt= get_prefix_prompt()+default_prompt
             llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=True, plan=plan)
             additional_rag_context = ""
             if rag_context:

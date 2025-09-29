@@ -5,7 +5,7 @@ from editor.node_composer import Node
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, execute_agent_streaming
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.async_helper import sync_run_async
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
@@ -23,6 +23,7 @@ class AgentKTStreamNode(Node):
     nodeName = "Agent KT Mi:dm Stream"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드"
     tags = ["agent", "chat", "rag", "vllm", "stream"]
+    disable = True
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
@@ -71,7 +72,7 @@ class AgentKTStreamNode(Node):
     ) -> Generator[str, None, None]:
 
         try:
-            default_prompt = prefix_prompt + default_prompt
+            enhanced_prompt = get_prefix_prompt() + default_prompt
             llm, tools_list, chat_history = self._prepare_llm_and_inputs(tools, memory, model, temperature, max_tokens, base_url)
 
             additional_rag_context = ""
@@ -119,12 +120,12 @@ class AgentKTStreamNode(Node):
                 parser = JsonOutputParser(pydantic_object=args_schema)
                 format_instructions = parser.get_format_instructions()
                 escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
-                default_prompt = f"{default_prompt}\n\n{escaped_instructions}"
+                enhanced_prompt = f"{enhanced_prompt}\n\n{escaped_instructions}"
 
             if tools_list:
                 if additional_rag_context and additional_rag_context.strip():
                     final_prompt = ChatPromptTemplate.from_messages([
-                        ("system", default_prompt),
+                        ("system", enhanced_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
                         ("user", "{additional_rag_context}"),
@@ -132,7 +133,7 @@ class AgentKTStreamNode(Node):
                     ])
                 else:
                     final_prompt = ChatPromptTemplate.from_messages([
-                        ("system", default_prompt),
+                        ("system", enhanced_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
                         MessagesPlaceholder(variable_name="agent_scratchpad")
@@ -162,16 +163,16 @@ class AgentKTStreamNode(Node):
             else:
                 if additional_rag_context and additional_rag_context.strip():
                     if strict_citation:
-                        default_prompt = default_prompt + citation_prompt
+                        enhanced_prompt = enhanced_prompt + citation_prompt
                     final_prompt = ChatPromptTemplate.from_messages([
-                        ("system", default_prompt),
+                        ("system", enhanced_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}"),
                         ("user", "{additional_rag_context}"),
                     ])
                 else:
                     final_prompt = ChatPromptTemplate.from_messages([
-                        ("system", default_prompt),
+                        ("system", enhanced_prompt),
                         MessagesPlaceholder(variable_name="chat_history", n_messages=n_messages),
                         ("user", "{input}")
                     ])

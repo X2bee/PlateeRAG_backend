@@ -96,15 +96,31 @@ async def refresh_nodes(request: Request):
     backend_log = create_logger(app_db, user_id, request)
     try:
         from editor.node_composer import NODE_REGISTRY
+        from config.config_composer import config_composer
+
+        # 노드 재탐색 수행
         run_force_discovery(user_id=user_id)
-        output_filename = f"./constants/{user_id}/exported_nodes.json"
-        generate_json_spec(output_path=output_filename)
-        if not os.path.exists(output_filename):
+
+        # 1. user_id별 노드 파일 생성
+        user_output_filename = f"./constants/{user_id}/exported_nodes.json"
+        generate_json_spec(output_path=user_output_filename)
+
+        # 2. 기본 경로의 노드 파일도 갱신 (main.py에서 사용하는 기본 경로)
+        try:
+            configs = config_composer.get_all_configs()
+            if configs and "node" in configs:
+                default_registry_path = configs["node"].REGISTRY_FILE_PATH.value
+                generate_json_spec(output_path=default_registry_path)
+                backend_log.info("Default registry also refreshed", metadata={"default_file": default_registry_path})
+        except Exception as default_error:
+            backend_log.warning("Failed to refresh default registry", metadata={"error": str(default_error)})
+
+        if not os.path.exists(user_output_filename):
             backend_log.error("Failed to generate nodes JSON file.")
             raise HTTPException(status_code=500, detail="Failed to generate nodes JSON file.")
         else:
-            backend_log.info("Nodes exported successfully", metadata={"file": output_filename})
-            return {"status": "success", "message": "Nodes exported successfully", "file": output_filename}
+            backend_log.info("Nodes exported successfully", metadata={"file": user_output_filename})
+            return {"status": "success", "message": "Nodes exported successfully (including default registry)", "file": user_output_filename}
 
     except Exception as e:
         backend_log.error("Error listing nodes", metadata={"error": str(e)})

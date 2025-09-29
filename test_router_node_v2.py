@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from editor.nodes.xgen.tool.router import RouterNode
+from editor.nodes.xgen.router.router import RouterNode
 
 def test_router_node():
     """RouterNode의 기본 동작을 테스트합니다."""

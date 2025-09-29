@@ -7,7 +7,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 from editor.utils.citation_prompt import citation_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
@@ -25,6 +25,7 @@ class AgentKTNode(Node):
     nodeName = "Agent KT Mi:dm"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드"
     tags = ["agent", "chat", "rag", "vllm"]
+    disable = True
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
@@ -144,7 +145,7 @@ class AgentKTNode(Node):
                         context_text = "\n".join(context_parts)
                         additional_rag_context = f"""{rag_context['search_params']['enhance_prompt']}
 {context_text}"""
-            prompt = prefix_prompt+default_prompt
+            prompt = get_prefix_prompt()+default_prompt
 
             # OpenAI API를 사용하여 응답 생성
             response = self._generate_chat_response(text, prompt, model, tools, memory, temperature, max_tokens, n_messages, base_url, strict_citation, additional_rag_context)
