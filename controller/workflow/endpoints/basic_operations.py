@@ -126,7 +126,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
                 },
                 limit=1
             )
-            if not deploy_data[0].is_accepted:
+            if deploy_data and len(deploy_data) > 0 and not deploy_data[0].is_accepted:
                 backend_log.warn("Workflow access denied - permissions revoked",
                                metadata={"workflow_name": workflow_request.workflow_name})
                 raise HTTPException(status_code=400, detail="해당 이름의 워크플로우에 대한 권한이 박탈되었습니다. 해당 이름 사용이 불가능합니다.")
@@ -166,13 +166,13 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             has_startnode=has_startnode,
             has_endnode=has_endnode,
             is_completed=(has_startnode and has_endnode),
-            is_shared=existing_data[0].is_shared if existing_data else False,
-            share_group=existing_data[0].share_group if existing_data else None,
-            share_permissions=existing_data[0].share_permissions if existing_data else 'read',
+            is_shared=existing_data[0].is_shared if existing_data and len(existing_data) > 0 else False,
+            share_group=existing_data[0].share_group if existing_data and len(existing_data) > 0 else None,
+            share_permissions=existing_data[0].share_permissions if existing_data and len(existing_data) > 0 else 'read',
             workflow_data=workflow_data,
         )
 
-        if existing_data:
+        if existing_data and len(existing_data) > 0:
             existing_data_id = existing_data[0].id
             workflow_meta.id = existing_data_id
             insert_result = app_db.update(workflow_meta)
@@ -200,7 +200,7 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
                 },
                 limit=1
             )
-            if existing_deploy_data:
+            if existing_deploy_data and len(existing_deploy_data) > 0:
                 deploy_meta.id = existing_deploy_data[0].id
                 deploy_meta.is_deployed = existing_deploy_data[0].is_deployed
                 deploy_meta.is_accepted = existing_deploy_data[0].is_accepted
@@ -392,9 +392,40 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
             workflow_data=workflow_data,
         )
 
-        app_db.insert(workflow_meta)
+        insert_result = app_db.insert(workflow_meta)
         # with open(target_path, 'w', encoding='utf-8') as wf:
         #     json.dump(workflow_data, wf, ensure_ascii=False, indent=2)
+
+        if insert_result and insert_result.get("result") == "success":
+            # copy 데이터의 Deploy metadata 생성
+            deploy_meta = DeployMeta(
+                user_id=user_id,
+                workflow_id=workflow_data.get('workflow_id'),
+                workflow_name=copy_workflow_name,
+                is_deployed=False,
+                is_accepted=True,
+                inquire_deploy=False,
+                deploy_key=""
+            )
+
+            # 기존 Deploy metadata 확인 및 생성/업데이트
+            existing_deploy_data = app_db.find_by_condition(
+                DeployMeta,
+                {
+                    "user_id": user_id,
+                    "workflow_name": copy_workflow_name,
+                },
+                limit=1
+            )
+            if existing_deploy_data and len(existing_deploy_data) > 0:
+                deploy_meta.id = existing_deploy_data[0].id
+                deploy_meta.is_deployed = existing_deploy_data[0].is_deployed
+                deploy_meta.is_accepted = existing_deploy_data[0].is_accepted
+                deploy_meta.inquire_deploy = existing_deploy_data[0].inquire_deploy
+                deploy_meta.deploy_key = existing_deploy_data[0].deploy_key
+                app_db.update(deploy_meta)
+            else:
+                app_db.insert(deploy_meta)
 
         logger.info(f"Workflow duplicated successfully: {workflow_name}")
         return {"success": True, "message": f"Workflow '{workflow_name}' duplicated successfully", "filename": copy_workflow_name}
