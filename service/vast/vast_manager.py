@@ -596,14 +596,31 @@ class VastAIManager:
             f"-e VLLM_PORT={vllm_port}",
             f"-e VLLM_HOST_IP={vllm_host}",
             f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
-            f"-e VLLM_MODEL_NAME={vast_config_request.get('VLLM_SERVE_MODEL_NAME').value}",
-            f"-e VLLM_MAX_MODEL_LEN={vast_config_request.get('VLLM_MAX_MODEL_LEN').value}",
-            f"-e VLLM_GPU_MEMORY_UTILIZATION={vast_config_request.get('VLLM_GPU_MEMORY_UTILIZATION').value}",
-            f"-e VLLM_PIPELINE_PARALLEL_SIZE={vast_config_request.get('VLLM_PIPELINE_PARALLEL_SIZE').value}",
-            f"-e VLLM_TENSOR_PARALLEL_SIZE={vast_config_request.get('VLLM_TENSOR_PARALLEL_SIZE').value}",
-            f"-e VLLM_DTYPE={vast_config_request.get('VLLM_DTYPE').value}",
-            f"-e VLLM_TOOL_CALL_PARSER={vast_config_request.get('VLLM_TOOL_CALL_PARSER').value}",
         ])
+
+        # vast_config_request에서 값을 안전하게 가져와서 유효한 값만 추가
+        if vast_config_request:
+            config_keys = [
+                ('VLLM_SERVE_MODEL_NAME', 'VLLM_MODEL_NAME'),
+                ('VLLM_MAX_MODEL_LEN', 'VLLM_MAX_MODEL_LEN'),
+                ('VLLM_GPU_MEMORY_UTILIZATION', 'VLLM_GPU_MEMORY_UTILIZATION'),
+                ('VLLM_PIPELINE_PARALLEL_SIZE', 'VLLM_PIPELINE_PARALLEL_SIZE'),
+                ('VLLM_TENSOR_PARALLEL_SIZE', 'VLLM_TENSOR_PARALLEL_SIZE'),
+                ('VLLM_DTYPE', 'VLLM_DTYPE'),
+                ('VLLM_TOOL_CALL_PARSER', 'VLLM_TOOL_CALL_PARSER'),
+            ]
+
+            for config_key, env_key in config_keys:
+                config_obj = vast_config_request.get(config_key)
+                if config_obj and hasattr(config_obj, 'value'):
+                    value = config_obj.value
+                    # 유효한 값인지 확인 (None, 빈 문자열, "none" 문자열 제외)
+                    if value and str(value).lower() not in ['none', 'null', '']:
+                        env_params.append(f"-e {env_key}={value}")
+                    else:
+                        logger.warning(f"⚠️ {config_key} 값이 유효하지 않아 환경변수에서 제외: {value}")
+                else:
+                    logger.warning(f"⚠️ {config_key} 설정을 찾을 수 없어 환경변수에서 제외")
 
         # 환경 변수 문자열로 결합
         env_string = " ".join(env_params).strip()
@@ -757,14 +774,31 @@ class VastAIManager:
                 f"-e VLLM_HOST_IP={vllm_host}",
                 f"-e VLLM_PORT={vllm_port}",
                 f"-e VLLM_CONTROLLER_PORT={vllm_controller_port}",
-                f"-e VLLM_MODEL_NAME={vast_config_request.get('VLLM_SERVE_MODEL_NAME').value}",
-                f"-e VLLM_MAX_MODEL_LEN={vast_config_request.get('VLLM_MAX_MODEL_LEN').value}",
-                f"-e VLLM_GPU_MEMORY_UTILIZATION={vast_config_request.get('VLLM_GPU_MEMORY_UTILIZATION').value}",
-                f"-e VLLM_PIPELINE_PARALLEL_SIZE={vast_config_request.get('VLLM_PIPELINE_PARALLEL_SIZE').value}",
-                f"-e VLLM_TENSOR_PARALLEL_SIZE={vast_config_request.get('VLLM_TENSOR_PARALLEL_SIZE').value}",
-                f"-e VLLM_DTYPE={vast_config_request.get('VLLM_DTYPE').value}",
-                f"-e VLLM_TOOL_CALL_PARSER={vast_config_request.get('VLLM_TOOL_CALL_PARSER').value}",
             ]
+
+            # vast_config_request에서 값을 안전하게 가져와서 유효한 값만 추가
+            config_keys = [
+                ('VLLM_SERVE_MODEL_NAME', 'VLLM_MODEL_NAME'),
+                ('VLLM_MAX_MODEL_LEN', 'VLLM_MAX_MODEL_LEN'),
+                ('VLLM_GPU_MEMORY_UTILIZATION', 'VLLM_GPU_MEMORY_UTILIZATION'),
+                ('VLLM_PIPELINE_PARALLEL_SIZE', 'VLLM_PIPELINE_PARALLEL_SIZE'),
+                ('VLLM_TENSOR_PARALLEL_SIZE', 'VLLM_TENSOR_PARALLEL_SIZE'),
+                ('VLLM_DTYPE', 'VLLM_DTYPE'),
+                ('VLLM_TOOL_CALL_PARSER', 'VLLM_TOOL_CALL_PARSER'),
+            ]
+
+            for config_key, env_key in config_keys:
+                config_obj = vast_config_request.get(config_key) if vast_config_request else None
+                if config_obj and hasattr(config_obj, 'value'):
+                    value = config_obj.value
+                    # 유효한 값인지 확인 (None, 빈 문자열, "none" 문자열 제외)
+                    if value and str(value).lower() not in ['none', 'null', '']:
+                        env_params.append(f"-e {env_key}={value}")
+                    else:
+                        logger.warning(f"⚠️ {config_key} 값이 유효하지 않아 환경변수에서 제외: {value}")
+                else:
+                    logger.warning(f"⚠️ {config_key} 설정을 찾을 수 없어 환경변수에서 제외")
+
             env_string = " ".join(env_params).strip()
             name = self.config_composer.get_config_by_name("VAST_IMAGE_NAME").value
             tag = self.config_composer.get_config_by_name("VAST_IMAGE_TAG").value
