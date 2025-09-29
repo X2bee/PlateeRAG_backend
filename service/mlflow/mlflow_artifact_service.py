@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -205,11 +206,15 @@ class MLflowArtifactService:
         target.parent.mkdir(parents=True, exist_ok=True)
 
         if target.exists():
-            if expected_checksum and self._compute_checksum(target) != expected_checksum:
-                LOGGER.warning(
-                    "Cached artifact checksum mismatch; redownloading | uri=%s", artifact_uri
-                )
-                target.unlink(missing_ok=True)
+            if expected_checksum and target.is_file():
+                if self._compute_checksum(target) != expected_checksum:
+                    LOGGER.warning(
+                        "Cached artifact checksum mismatch; redownloading | uri=%s",
+                        artifact_uri,
+                    )
+                    target.unlink(missing_ok=True)
+                else:
+                    return target
             else:
                 return target
 
@@ -217,10 +222,13 @@ class MLflowArtifactService:
             self.client.download_artifacts(run_id, artifact_path, dst_path=str(target.parent))
         )
 
-        if downloaded_path.is_dir():  # pragma: no cover - defensive guard
-            raise ValueError(
-                f"Artifact path '{artifact_path}' refers to a directory. Expected a file."
-            )
+        if downloaded_path.is_dir():
+            if target.exists() and target.is_file():
+                target.unlink()
+            elif target.exists() and target.is_dir():
+                shutil.rmtree(target)
+            downloaded_path.replace(target)
+            return target
 
         if downloaded_path != target:
             downloaded_path.replace(target)

@@ -19,6 +19,7 @@ from service.model.model_registry_service import ModelRegistryService
 from service.model.model_inference_service import ModelInferenceService
 from service.model.model_deletion_service import ModelDeletionService
 from service.database.models.backend import BackendLogs
+from service.model.mlflow_utils import extract_mlflow_info
 
 logger = logging.getLogger("model-controller")
 
@@ -100,6 +101,16 @@ def _resolve_mlflow_binding(
     if isinstance(model_metadata, dict):
         run_id = model_metadata.get("mlflow_run_id")
         artifact_path = model_metadata.get("mlflow_artifact_path")
+
+        mlflow_block = model_metadata.get("mlflow")
+        if isinstance(mlflow_block, dict):
+            run_id = run_id or mlflow_block.get("run_id")
+            artifact_path = artifact_path or mlflow_block.get("artifact_path")
+
+            additional = mlflow_block.get("additional_metadata")
+            if isinstance(additional, dict):
+                run_id = run_id or additional.get("run_id")
+                artifact_path = artifact_path or additional.get("artifact_path")
 
     if run_id and artifact_path:
         return str(run_id), str(artifact_path)
@@ -753,52 +764,83 @@ async def run_inference(request: Request, payload: InferenceRequest):
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MODEL_NOT_FOUND")
 
-    run_id, artifact_path = _resolve_mlflow_binding(model_record.metadata, model_record.file_path)
-    if not (run_id and artifact_path):
+    mlflow_info = extract_mlflow_info(model_record, model_record.file_path)
+    local_model_path: Optional[str] = None
+
+    if mlflow_info and isinstance(mlflow_info.model_uri, str) and mlflow_info.model_uri.startswith(("models:/", "models://")):
+        local_model_path = mlflow_info.model_uri
+        logger.info(
+            "[run_inference] Using MLflow registry URI for inference | user_id=%s model_id=%s uri=%s",
+            user_id,
+            model_record.id,
+            local_model_path,
+        )
+    else:
+        run_id = mlflow_info.run_id if mlflow_info and mlflow_info.run_id else None
+        artifact_path = mlflow_info.artifact_path if mlflow_info and mlflow_info.artifact_path else None
+
+        if not (run_id and artifact_path):
+            resolved_run_id, resolved_artifact_path = _resolve_mlflow_binding(model_record.metadata, model_record.file_path)
+            run_id = run_id or resolved_run_id
+            artifact_path = artifact_path or resolved_artifact_path
+
+        if not (run_id and artifact_path):
+            logger.error(
+                "[run_inference] Missing MLflow binding | user_id=%s model_id=%s",
+                user_id,
+                model_record.id,
+            )
+            backend_log.error(
+                "Model metadata missing MLflow binding",
+                metadata={"model_id": model_record.id},
+            )
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_MLFLOW_METADATA_MISSING")
+
+        mlflow_service = _get_mlflow_service_or_none(request)
+        if not mlflow_service:
+            logger.error(
+                "[run_inference] MLflow service unavailable | user_id=%s run_id=%s",
+                user_id,
+                run_id,
+            )
+            backend_log.error("MLflow service unavailable for inference", metadata={"run_id": run_id})
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
+
+        artifact_uri = mlflow_service.build_artifact_uri(run_id, artifact_path)
+        try:
+            cached_path = mlflow_service.ensure_local_artifact(
+                artifact_uri,
+                expected_checksum=model_record.file_checksum,
+            )
+            local_model_path = str(cached_path)
+            logger.info(
+                "[run_inference] Resolved MLflow artifact | user_id=%s run_id=%s artifact_path=%s local_path=%s",
+                user_id,
+                run_id,
+                artifact_path,
+                local_model_path,
+            )
+        except Exception as exc:
+            logger.exception(
+                "[run_inference] Failed to download MLflow artifact | user_id=%s run_id=%s artifact_path=%s",
+                user_id,
+                run_id,
+                artifact_path,
+            )
+            backend_log.error("Failed to download MLflow artifact", exception=exc)
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_ARTIFACT_UNAVAILABLE") from exc
+
+    if not local_model_path:
         logger.error(
-            "[run_inference] Missing MLflow binding | user_id=%s model_id=%s",
+            "[run_inference] Unable to resolve model path | user_id=%s model_id=%s",
             user_id,
             model_record.id,
         )
         backend_log.error(
-            "Model metadata missing MLflow binding",
+            "Failed to resolve model path for inference",
             metadata={"model_id": model_record.id},
         )
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_MLFLOW_METADATA_MISSING")
-
-    mlflow_service = _get_mlflow_service_or_none(request)
-    if not mlflow_service:
-        logger.error(
-            "[run_inference] MLflow service unavailable | user_id=%s run_id=%s",
-            user_id,
-            run_id,
-        )
-        backend_log.error("MLflow service unavailable for inference", metadata={"run_id": run_id})
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
-
-    artifact_uri = mlflow_service.build_artifact_uri(run_id, artifact_path)
-    try:
-        cached_path = mlflow_service.ensure_local_artifact(
-            artifact_uri,
-            expected_checksum=model_record.file_checksum,
-        )
-        local_model_path = str(cached_path)
-        logger.info(
-            "[run_inference] Resolved MLflow artifact | user_id=%s run_id=%s artifact_path=%s local_path=%s",
-            user_id,
-            run_id,
-            artifact_path,
-            local_model_path,
-        )
-    except Exception as exc:
-        logger.exception(
-            "[run_inference] Failed to download MLflow artifact | user_id=%s run_id=%s artifact_path=%s",
-            user_id,
-            run_id,
-            artifact_path,
-        )
-        backend_log.error("Failed to download MLflow artifact", exception=exc)
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_ARTIFACT_UNAVAILABLE") from exc
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_ARTIFACT_MISSING")
 
     try:
         inference_result = _inference_service.predict(
