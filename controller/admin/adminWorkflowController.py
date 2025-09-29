@@ -388,7 +388,7 @@ async def delete_workflow(request: Request, user_id, workflow_name: str):
 
         # os.remove(file_path)
 
-        logger.info(f"Workflow deleted successfully: {filename}")
+        logger.info(f"Workflow deleted successfully: {workflow_name}")
         return JSONResponse(content={
             "success": True,
             "message": f"Workflow '{workflow_name}' deleted successfully"
