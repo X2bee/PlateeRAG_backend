@@ -20,6 +20,7 @@ from controller.helper.utils.llm_evaluators import evaluate_with_llm
 from service.database.models.executor import ExecutionIO
 from editor.async_workflow_executor import execution_manager
 from service.database.logger_helper import create_logger
+from service.database.models.workflow import WorkflowMeta
 
 logger = logging.getLogger("tester-endpoints")
 router = APIRouter()
@@ -45,17 +46,23 @@ async def execute_single_workflow_for_tester_with_callback(
     start_time = time.time()
 
     try:
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        download_path_id = os.path.join(downloads_path, user_id)
+        # downloads_path = os.path.join(os.getcwd(), "downloads")
+        # download_path_id = os.path.join(downloads_path, user_id)
 
-        filename = f"{workflow_name}.json" if not workflow_name.endswith('.json') else workflow_name
-        file_path = os.path.join(download_path_id, filename)
+        # filename = f"{workflow_name}.json" if not workflow_name.endswith('.json') else workflow_name
+        # file_path = os.path.join(download_path_id, filename)
 
-        if not os.path.exists(file_path):
-            raise ValueError(f"워크플로우 파일을 찾을 수 없습니다: {file_path}")
+        # if not os.path.exists(file_path):
+        #     raise ValueError(f"워크플로우 파일을 찾을 수 없습니다: {file_path}")
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            workflow_data = json.load(f)
+        # with open(file_path, 'r', encoding='utf-8') as f:
+        #     workflow_data = json.load(f)
+
+        #### DB방식으로 변경중
+        workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": user_id, "workflow_name": workflow_name}, limit=1)
+        workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+        if isinstance(workflow_data, str):
+            workflow_data = json.loads(workflow_data)
 
         temp_request = WorkflowRequest(
             workflow_name=workflow_name,

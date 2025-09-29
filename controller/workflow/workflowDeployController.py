@@ -16,6 +16,7 @@ from service.database.execution_meta_service import get_or_create_execution_meta
 from controller.workflow.helper import _workflow_parameter_helper, _default_workflow_parameter_helper
 from controller.helper.singletonHelper import get_db_manager
 from controller.workflow.models.requests import WorkflowRequest
+from service.database.models.workflow import WorkflowMeta
 
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/deploy", tags=["workflow"])
@@ -26,19 +27,26 @@ async def load_workflow(request: Request, user_id: str, workflow_id: str):
     특정 workflow를 로드합니다.
     """
     try:
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        download_path_id = os.path.join(downloads_path, user_id)
+        # downloads_path = os.path.join(os.getcwd(), "downloads")
+        # download_path_id = os.path.join(downloads_path, user_id)
 
-        filename = f"{workflow_id}.json"
-        file_path = os.path.join(download_path_id, filename)
+        # filename = f"{workflow_id}.json"
+        # file_path = os.path.join(download_path_id, filename)
 
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+        # if not os.path.exists(file_path):
+        #     raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            workflow_data = json.load(f)
+        # with open(file_path, 'r', encoding='utf-8') as f:
+        #     workflow_data = json.load(f)
+        #### DB방식으로 변경중
+        app_db = get_db_manager(request)
 
-        logger.info(f"Workflow loaded successfully: {filename}")
+        workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": user_id, "workflow_name": workflow_id}, limit=1)
+        workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+        if isinstance(workflow_data, str):
+            workflow_data = json.loads(workflow_data)
+
+        logger.info(f"Workflow loaded successfully: {workflow_id}")
         return JSONResponse(content=workflow_data)
 
     except FileNotFoundError:
@@ -65,16 +73,24 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
 
         ## 워크플로우 실행인 경우, 해당하는 워크플로우 파일을 찾아서 사용.
         else:
-            downloads_path = os.path.join(os.getcwd(), "downloads")
-            download_path_id = os.path.join(downloads_path, str(user_id))
+            # downloads_path = os.path.join(os.getcwd(), "downloads")
+            # download_path_id = os.path.join(downloads_path, str(user_id))
 
-            if not request_body.workflow_name.endswith('.json'):
-                filename = f"{request_body.workflow_name}.json"
-            else:
-                filename = request_body.workflow_name
-            file_path = os.path.join(download_path_id, filename)
-            with open(file_path, 'r', encoding='utf-8') as f:
-                workflow_data = json.load(f)
+            # if not request_body.workflow_name.endswith('.json'):
+            #     filename = f"{request_body.workflow_name}.json"
+            # else:
+            #     filename = request_body.workflow_name
+            # file_path = os.path.join(download_path_id, filename)
+            # with open(file_path, 'r', encoding='utf-8') as f:
+            #     workflow_data = json.load(f)
+            #### DB방식으로 변경중
+            app_db = get_db_manager(request)
+
+            workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": user_id, "workflow_name": request_body.workflow_name}, limit=1)
+            workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+            if isinstance(workflow_data, str):
+                workflow_data = json.loads(workflow_data)
+
             workflow_data = await _workflow_parameter_helper(request_body, workflow_data)
 
         ## ========== 워크플로우 데이터 검증 ==========
@@ -252,12 +268,20 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                 workflow_data = json.load(f)
             workflow_data = await _default_workflow_parameter_helper(request, request_body, workflow_data)
         else:
-            downloads_path = os.path.join(os.getcwd(), "downloads")
-            download_path_id = os.path.join(downloads_path, str(user_id))
-            filename = f"{request_body.workflow_name}.json" if not request_body.workflow_name.endswith('.json') else request_body.workflow_name
-            file_path = os.path.join(download_path_id, filename)
-            with open(file_path, 'r', encoding='utf-8') as f:
-                workflow_data = json.load(f)
+            # downloads_path = os.path.join(os.getcwd(), "downloads")
+            # download_path_id = os.path.join(downloads_path, str(user_id))
+            # filename = f"{request_body.workflow_name}.json" if not request_body.workflow_name.endswith('.json') else request_body.workflow_name
+            # file_path = os.path.join(download_path_id, filename)
+            # with open(file_path, 'r', encoding='utf-8') as f:
+            #     workflow_data = json.load(f)
+            #### DB방식으로 변경중
+            app_db = get_db_manager(request)
+
+            workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": user_id, "workflow_name": request_body.workflow_name}, limit=1)
+            workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+            if isinstance(workflow_data, str):
+                workflow_data = json.loads(workflow_data)
+
             workflow_data = await _workflow_parameter_helper(request_body, workflow_data)
 
         ## TODO 워크플로우 아이디 정합성 관련 로직 생각해볼 것

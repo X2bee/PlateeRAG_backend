@@ -378,15 +378,15 @@ async def delete_workflow(request: Request, user_id, workflow_name: str):
             "workflow_name": workflow_name,
         })
 
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        download_path_id = os.path.join(downloads_path, user_id)
-        filename = f"{workflow_name}.json"
-        file_path = os.path.join(download_path_id, filename)
+        # downloads_path = os.path.join(os.getcwd(), "downloads")
+        # download_path_id = os.path.join(downloads_path, user_id)
+        # filename = f"{workflow_name}.json"
+        # file_path = os.path.join(download_path_id, filename)
 
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+        # if not os.path.exists(file_path):
+        #     raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
-        os.remove(file_path)
+        # os.remove(file_path)
 
         logger.info(f"Workflow deleted successfully: {filename}")
         return JSONResponse(content={

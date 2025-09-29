@@ -37,24 +37,36 @@ async def list_workflows(request: Request):
     backend_log = create_logger(app_db, user_id, request)
 
     try:
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        download_path_id = os.path.join(downloads_path, user_id)
+        # downloads_path = os.path.join(os.getcwd(), "downloads")
+        # download_path_id = os.path.join(downloads_path, user_id)
 
-        backend_log.info("Starting workflow list retrieval",
-                        metadata={"downloads_path": download_path_id})
+        # # downloads 폴더가 존재하지 않으면 생성
+        # if not os.path.exists(download_path_id):
+        #     os.makedirs(download_path_id)
+        #     backend_log.info("Created downloads directory for user",
+        #                    metadata={"path": download_path_id})
+        #     return JSONResponse(content={"workflows": []})
 
-        # downloads 폴더가 존재하지 않으면 생성
-        if not os.path.exists(download_path_id):
-            os.makedirs(download_path_id)
-            backend_log.info("Created downloads directory for user",
-                           metadata={"path": download_path_id})
-            return JSONResponse(content={"workflows": []})
+        # # .json 확장자를 가진 파일들만 필터링
+        # workflow_files = []
+        # for file in os.listdir(download_path_id):
+        #     if file.endswith('.json'):
+        #         workflow_files.append(file)
 
-        # .json 확장자를 가진 파일들만 필터링
+        #### DB방식으로 변경중
+        workflow_data = app_db.find_by_condition(
+                    WorkflowMeta,
+                    {
+                        "user_id": user_id,
+                    },
+                    limit=1000,
+                    select_columns=["workflow_name", "updated_at"],
+                    orderby="updated_at"
+                )
+
         workflow_files = []
-        for file in os.listdir(download_path_id):
-            if file.endswith('.json'):
-                workflow_files.append(file)
+        for wf in workflow_data:
+            workflow_files.append(f"{wf.workflow_name}")
 
         backend_log.success("Workflow list retrieved successfully",
                           metadata={"workflow_count": len(workflow_files),
@@ -64,8 +76,7 @@ async def list_workflows(request: Request):
         return JSONResponse(content={"workflows": workflow_files})
 
     except Exception as e:
-        backend_log.error("Failed to list workflows", exception=e,
-                         metadata={"downloads_path": download_path_id if 'download_path_id' in locals() else None})
+        backend_log.error("Failed to list workflows", exception=e)
         logger.error(f"Error listing workflows: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflows: {str(e)}")
 
@@ -120,17 +131,17 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
                                metadata={"workflow_name": workflow_request.workflow_name})
                 raise HTTPException(status_code=400, detail="해당 이름의 워크플로우에 대한 권한이 박탈되었습니다. 해당 이름 사용이 불가능합니다.")
 
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        download_path_id = os.path.join(downloads_path, user_id)
+        # downloads_path = os.path.join(os.getcwd(), "downloads")
+        # download_path_id = os.path.join(downloads_path, user_id)
 
-        if not os.path.exists(download_path_id):
-            os.makedirs(download_path_id)
+        # if not os.path.exists(download_path_id):
+        #     os.makedirs(download_path_id)
 
-        if not workflow_request.workflow_name.endswith('.json'):
-            filename = f"{workflow_request.workflow_name}.json"
-        else:
-            filename = workflow_request.workflow_name
-        file_path = os.path.join(download_path_id, filename)
+        # if not workflow_request.workflow_name.endswith('.json'):
+        #     filename = f"{workflow_request.workflow_name}.json"
+        # else:
+        #     filename = workflow_request.workflow_name
+        # file_path = os.path.join(download_path_id, filename)
 
         # nodes 수 계산
         nodes = workflow_data.get('nodes', [])
@@ -199,12 +210,12 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             else:
                 app_db.insert(deploy_meta)
 
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(workflow_data, f, indent=2, ensure_ascii=False)
+            # with open(file_path, 'w', encoding='utf-8') as f:
+            #     json.dump(workflow_data, f, indent=2, ensure_ascii=False)
 
             backend_log.success("Workflow saved successfully",
                               metadata={"workflow_name": workflow_request.workflow_name,
-                                      "filename": filename,
+                                      "filename": workflow_request.workflow_name + ".json",
                                       "node_count": node_count,
                                       "edge_count": edge_count,
                                       "has_startnode": has_startnode,
@@ -223,11 +234,11 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
                 detail=f"Failed to save workflow metadata: {insert_result.get('error', 'Unknown error')}"
             )
 
-        logger.info(f"Workflow saved successfully: {filename}")
+        logger.info(f"Workflow saved successfully: {workflow_request.workflow_name}.json")
         return JSONResponse(content={
             "success": True,
             "message": f"Workflow '{workflow_request.workflow_name}' saved successfully",
-            "filename": filename
+            # "filename": filename
         })
 
     except HTTPException:
@@ -257,20 +268,27 @@ async def load_workflow(request: Request, workflow_name: str, user_id):
                                 "requested_user_id": user_id,
                                 "login_user_id": login_user_id})
 
-        downloads_path = os.path.join(os.getcwd(), "downloads")
+        # downloads_path = os.path.join(os.getcwd(), "downloads")
         using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
-        download_path_id = os.path.join(downloads_path, using_id)
+        # download_path_id = os.path.join(downloads_path, using_id)
 
-        filename = f"{workflow_name}.json"
-        file_path = os.path.join(download_path_id, filename)
+        # filename = f"{workflow_name}.json"
+        # file_path = os.path.join(download_path_id, filename)
 
-        if not os.path.exists(file_path):
-            backend_log.warn("Workflow file not found",
-                           metadata={"workflow_name": workflow_name, "file_path": file_path})
-            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+        # if not os.path.exists(file_path):
+        #     backend_log.warn("Workflow file not found",
+        #                    metadata={"workflow_name": workflow_name, "file_path": file_path})
+        #     raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            workflow_data = json.load(f)
+        # with open(file_path, 'r', encoding='utf-8') as f:
+        #     workflow_data = json.load(f)
+
+
+        #### DB방식으로 변경중
+        workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": using_id, "workflow_name": workflow_name}, limit=1)
+        workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+        if isinstance(workflow_data, str):
+            workflow_data = json.loads(workflow_data)
 
         # 워크플로우 메타데이터 계산
         nodes = workflow_data.get('nodes', [])
@@ -280,18 +298,19 @@ async def load_workflow(request: Request, workflow_name: str, user_id):
         backend_log.success("Workflow loaded successfully",
                           metadata={"workflow_name": workflow_name,
                                   "workflow_id": workflow_id,
-                                  "filename": filename,
+                                  "filename": workflow_name + ".json",
                                   "node_count": len(nodes),
                                   "edge_count": len(edges),
                                   "using_user_id": using_id,
-                                  "file_size": os.path.getsize(file_path)})
+                                #   "file_size": os.path.getsize(file_path)
+                                })
 
-        logger.info(f"Workflow loaded successfully: {filename}")
+        logger.info(f"Workflow loaded successfully: {workflow_name}.json")
         return JSONResponse(content=workflow_data)
 
     except FileNotFoundError:
         backend_log.error("Workflow file not found",
-                         metadata={"workflow_name": workflow_name, "file_path": file_path if 'file_path' in locals() else None})
+                         metadata={"workflow_name": workflow_name})
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
     except Exception as e:
         backend_log.error("Workflow load operation failed", exception=e,
@@ -306,36 +325,42 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
     """
     try:
         login_user_id = extract_user_id_from_request(request)
-        downloads_path = os.path.join(os.getcwd(), "downloads")
+        # downloads_path = os.path.join(os.getcwd(), "downloads")
         app_db = get_db_manager(request)
         using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
 
-        origin_path_id = os.path.join(downloads_path, using_id)
-        target_path_id = os.path.join(downloads_path, login_user_id)
+        # origin_path_id = os.path.join(downloads_path, using_id)
+        # target_path_id = os.path.join(downloads_path, login_user_id)
 
-        filename = f"{workflow_name}.json"
-        origin_path = os.path.join(origin_path_id, filename)
+        # filename = f"{workflow_name}.json"
+        # origin_path = os.path.join(origin_path_id, filename)
 
-        if not os.path.exists(origin_path):
-            logger.info(f"Reading workflow data from: {origin_path}")
-            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+        # if not os.path.exists(origin_path):
+        #     logger.info(f"Reading workflow data from: {origin_path}")
+        #     raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
-        copy_workflow_name = f"{workflow_name}_copy"
-        copy_file_name = f"{copy_workflow_name}.json"
-        target_path = os.path.join(copy_workflow_name, filename)
+        # copy_workflow_name = f"{workflow_name}_copy"
+        # copy_file_name = f"{copy_workflow_name}.json"
+        # target_path = os.path.join(copy_workflow_name, filename)
 
-        if os.path.exists(target_path):
-            logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
-            counter = 1
-            while os.path.exists(target_path):
-                copy_workflow_name = f"{workflow_name}_copy_{counter}"
-                copy_file_name = f"{copy_workflow_name}.json"
-                target_path = os.path.join(target_path_id, copy_file_name)
-                counter += 1
+        # if os.path.exists(target_path):
+        #     logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
+        #     counter = 1
+        #     while os.path.exists(target_path):
+        #         copy_workflow_name = f"{workflow_name}_copy_{counter}"
+        #         copy_file_name = f"{copy_workflow_name}.json"
+        #         target_path = os.path.join(target_path_id, copy_file_name)
+        #         counter += 1
 
-        with open(origin_path, 'r', encoding='utf-8') as f:
-            logger.info(f"Reading workflow data from: {origin_path}")
-            workflow_data = json.load(f)
+        # with open(origin_path, 'r', encoding='utf-8') as f:
+        #     logger.info(f"Reading workflow data from: {origin_path}")
+        #     workflow_data = json.load(f)
+
+        workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": using_id, "workflow_name": workflow_name}, limit=1)
+        workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
+        if isinstance(workflow_data, str):
+            # 문자열인 경우 JSON으로 파싱 시도
+            workflow_data = json.loads(workflow_data)
 
         nodes = workflow_data.get('nodes', [])
         node_count = len(nodes) if isinstance(nodes, list) else 0
@@ -344,6 +369,16 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
 
         edges = workflow_data.get('edges', [])
         edge_count = len(edges) if isinstance(edges, list) else 0
+
+        copy_workflow_name = f"{workflow_name}_copy"
+        existing_copy_data = app_db.find_by_condition(WorkflowMeta, {"user_id": login_user_id, "workflow_name": copy_workflow_name}, limit=1)
+        if existing_copy_data:
+            logger.warning(f"Workflow already exists for user '{login_user_id}': {copy_workflow_name}. Change target file name.")
+            counter = 1
+            while existing_copy_data:
+                copy_workflow_name = f"{workflow_name}_copy_{counter}"
+                existing_copy_data = app_db.find_by_condition(WorkflowMeta, {"user_id": login_user_id, "workflow_name": copy_workflow_name}, limit=1)
+                counter += 1
 
         workflow_meta = WorkflowMeta(
             user_id=login_user_id,
@@ -358,11 +393,11 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
         )
 
         app_db.insert(workflow_meta)
-        with open(target_path, 'w', encoding='utf-8') as wf:
-            json.dump(workflow_data, wf, ensure_ascii=False, indent=2)
+        # with open(target_path, 'w', encoding='utf-8') as wf:
+        #     json.dump(workflow_data, wf, ensure_ascii=False, indent=2)
 
-        logger.info(f"Workflow duplicated successfully: {filename}")
-        return {"success": True, "message": f"Workflow '{workflow_name}' duplicated successfully", "filename": filename}
+        logger.info(f"Workflow duplicated successfully: {workflow_name}")
+        return {"success": True, "message": f"Workflow '{workflow_name}' duplicated successfully", "filename": copy_workflow_name}
 
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
@@ -503,28 +538,28 @@ async def delete_workflow(request: Request, workflow_name: str):
             "workflow_name": workflow_name,
         })
 
-        # 파일 시스템에서 파일 삭제
-        downloads_path = os.path.join(os.getcwd(), "downloads")
-        download_path_id = os.path.join(downloads_path, user_id)
-        filename = f"{workflow_name}.json"
-        file_path = os.path.join(download_path_id, filename)
+        # # 파일 시스템에서 파일 삭제
+        # downloads_path = os.path.join(os.getcwd(), "downloads")
+        # download_path_id = os.path.join(downloads_path, user_id)
+        # filename = f"{workflow_name}.json"
+        # file_path = os.path.join(download_path_id, filename)
 
-        if not os.path.exists(file_path):
-            backend_log.warn("Workflow file not found on filesystem",
-                           metadata={"workflow_name": workflow_name, "file_path": file_path})
-            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+        # if not os.path.exists(file_path):
+        #     backend_log.warn("Workflow file not found on filesystem",
+        #                    metadata={"workflow_name": workflow_name, "file_path": file_path})
+        #     raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
-        file_size = os.path.getsize(file_path)
-        os.remove(file_path)
+        # file_size = os.path.getsize(file_path)
+        # os.remove(file_path)
 
         backend_log.success("Workflow deleted successfully",
                           metadata={"workflow_name": workflow_name,
                                   "workflow_id": existing_data[0].workflow_id,
-                                  "filename": filename,
-                                  "file_size": file_size,
+                                #   "filename": filename,
+                                #   "file_size": file_size,
                                   "was_deployed": deploy_meta[0].is_deployed if deploy_meta else False})
 
-        logger.info(f"Workflow deleted successfully: {filename}")
+        logger.info(f"Workflow deleted successfully: {workflow_name}")
         return JSONResponse(content={
             "success": True,
             "message": f"Workflow '{workflow_name}' deleted successfully"
