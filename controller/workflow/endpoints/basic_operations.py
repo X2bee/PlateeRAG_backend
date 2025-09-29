@@ -17,7 +17,7 @@ from service.database.models.executor import ExecutionMeta, ExecutionIO
 from controller.helper.utils.auth_helpers import workflow_user_id_extractor
 from controller.helper.utils.data_parsers import parse_input_data
 from service.database.models.user import User
-from service.database.models.workflow import WorkflowMeta
+from service.database.models.workflow import WorkflowMeta, WorkflowVersion
 from service.database.models.deploy import DeployMeta
 from service.database.logger_helper import create_logger
 
@@ -26,9 +26,6 @@ router = APIRouter()
 
 @router.get("/list")
 async def list_workflows(request: Request):
-    """
-    downloads 폴더에 있는 모든 workflow 파일들의 이름을 반환합니다.
-    """
     user_id = extract_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
@@ -79,6 +76,218 @@ async def list_workflows(request: Request):
         backend_log.error("Failed to list workflows", exception=e)
         logger.error(f"Error listing workflows: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflows: {str(e)}")
+
+@router.get("/version/list")
+async def list_workflow_versions(request: Request, workflow_name: str, user_id):
+    login_user_id = extract_user_id_from_request(request)
+    if not login_user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, login_user_id, request)
+
+    try:
+        backend_log.info("Starting workflow version list operation")
+        using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
+        workflow_data = app_db.find_by_condition(WorkflowMeta, {"user_id": using_id, "workflow_name": workflow_name}, limit=1)
+
+        if not workflow_data or len(workflow_data) == 0:
+            backend_log.warn("Workflow not found for version listing",
+                           metadata={"workflow_name": workflow_name, "user_id": using_id})
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+        workflow_meta_id = workflow_data[0].id
+
+        workflow_versions = app_db.find_by_condition(
+            WorkflowVersion,
+            {
+                "user_id": using_id,
+                "workflow_meta_id": workflow_meta_id
+            },
+            orderby="version",
+            ignore_columns=["workflow_data"],
+            return_list=True
+        )
+
+        return workflow_versions
+    except Exception as e:
+        backend_log.error("Failed to list workflows", exception=e)
+        logger.error(f"Error listing workflows: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list workflows: {str(e)}")
+
+@router.post("/version/change")
+async def update_workflow_version(request: Request, workflow_name: str, version: float):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    config_composer = get_config_composer(request)
+
+    try:
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name
+            },
+            limit=1
+        )
+
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        existing_data = existing_data[0]
+
+        workflow_version = app_db.find_by_condition(WorkflowVersion, {"user_id": user_id, "workflow_meta_id": existing_data.id})
+        version_list = [wv.version for wv in workflow_version]
+
+        if version not in version_list:
+            raise HTTPException(status_code=400, detail=f"Version {version} not found for workflow '{workflow_name}'")
+
+        deploy_data = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+        if not deploy_data:
+            raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
+        if not deploy_data[0].is_accepted:
+            raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
+
+        version_data = app_db.find_by_condition(WorkflowVersion, {"user_id": user_id, "workflow_meta_id": existing_data.id, "version": version}, limit=1)[0]
+        if not version_data:
+            raise HTTPException(status_code=404, detail="Version not found")
+
+        existing_data.workflow_data = version_data.workflow_data
+        existing_data.current_version = version_data.version
+
+        db_type = app_db.config_db_manager.db_type
+        if db_type == "postgresql":
+            update_query = "UPDATE workflow_version SET current_use = %s WHERE user_id = %s AND workflow_meta_id = %s"
+        else:
+            update_query = "UPDATE workflow_version SET current_use = ? WHERE user_id = ? AND workflow_meta_id = ?"
+        app_db.config_db_manager.execute_update_delete(update_query, (False, user_id, existing_data.id))
+        version_data.current_use = True
+        app_db.update(version_data)
+        app_db.update(existing_data)
+
+        return {
+            "message": "Workflow updated successfully",
+            "workflow_name": existing_data.workflow_name,
+            "current_version": existing_data.current_version
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to update workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
+
+@router.post("/version/label-name")
+async def version_label_name(request: Request, workflow_name: str, version: float, new_version_label: str):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+
+    try:
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name
+            },
+            limit=1
+        )
+
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        existing_data = existing_data[0]
+
+        workflow_version = app_db.find_by_condition(WorkflowVersion, {"user_id": user_id, "workflow_meta_id": existing_data.id})
+        version_list = [wv.version for wv in workflow_version]
+
+        if version not in version_list:
+            raise HTTPException(status_code=400, detail=f"Version {version} not found for workflow '{workflow_name}'")
+
+        deploy_data = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+        if not deploy_data:
+            raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
+        if not deploy_data[0].is_accepted:
+            raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
+
+        version_data = app_db.find_by_condition(WorkflowVersion, {"user_id": user_id, "workflow_meta_id": existing_data.id, "version": version}, limit=1)[0]
+        if not version_data:
+            raise HTTPException(status_code=404, detail="Version not found")
+
+        version_data.version_label = new_version_label if new_version_label and new_version_label.strip() != "" else f"v{version_data.version}"
+        app_db.update(version_data)
+
+        return {
+            "message": "Workflow updated successfully",
+            "workflow_name": existing_data.workflow_name,
+            "version_label": version_data.version_label
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to update workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
+
+
+@router.delete("/delete/version")
+async def delete_version(request: Request, workflow_name: str, version: float):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+
+    try:
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name
+            },
+            limit=1
+        )
+
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        existing_data = existing_data[0]
+
+        workflow_version = app_db.find_by_condition(WorkflowVersion, {"user_id": user_id, "workflow_meta_id": existing_data.id})
+        version_list = [wv.version for wv in workflow_version]
+
+        if version not in version_list:
+            raise HTTPException(status_code=400, detail=f"Version {version} not found for workflow '{workflow_name}'")
+
+        deploy_data = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+        if not deploy_data:
+            raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
+        if not deploy_data[0].is_accepted:
+            raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
+
+        existing_data.latest_version = max((wv.version for wv in workflow_version if wv.version != version), default=1.0)
+        app_db.update(existing_data)
+        app_db.delete_by_condition(WorkflowVersion, {"user_id": user_id, "workflow_meta_id": existing_data.id, "version": version})
+
+        return {
+            "message": "Workflow updated successfully",
+            "workflow_name": existing_data.workflow_name,
+            "latest_version": existing_data.latest_version
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to update workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
 
 @router.post("/save")
 async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest):
@@ -170,13 +379,21 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
             share_group=existing_data[0].share_group if existing_data and len(existing_data) > 0 else None,
             share_permissions=existing_data[0].share_permissions if existing_data and len(existing_data) > 0 else 'read',
             workflow_data=workflow_data,
+            current_version=existing_data[0].current_version if existing_data and len(existing_data) > 0 else 1.0,
+            latest_version=existing_data[0].latest_version if existing_data and len(existing_data) > 0 else 1.0,
         )
 
         if existing_data and len(existing_data) > 0:
             existing_data_id = existing_data[0].id
             workflow_meta.id = existing_data_id
+
+            # 버전 업데이트 (소수점 3자리까지 제한)
+            version_new = round(existing_data[0].latest_version + 0.1, 3)
+            workflow_meta.current_version = version_new
+            workflow_meta.latest_version = version_new
             insert_result = app_db.update(workflow_meta)
         else:
+            version_new = round(1.0, 3)
             insert_result = app_db.insert(workflow_meta)
 
         if insert_result and insert_result.get("result") == "success":
@@ -209,6 +426,28 @@ async def save_workflow(request: Request, workflow_request: SaveWorkflowRequest)
                 app_db.update(deploy_meta)
             else:
                 app_db.insert(deploy_meta)
+
+            # 기존 버전들의 current_use를 False로 변경
+            db_type = app_db.config_db_manager.db_type
+            if db_type == "postgresql":
+                update_query = "UPDATE workflow_version SET current_use = %s WHERE user_id = %s AND workflow_meta_id = %s"
+            else:
+                update_query = "UPDATE workflow_version SET current_use = ? WHERE user_id = ? AND workflow_meta_id = ?"
+
+            app_db.config_db_manager.execute_update_delete(update_query, (False, user_id, workflow_meta.id))
+
+            workflow_version_data = WorkflowVersion(
+                user_id=user_id,
+                workflow_meta_id=workflow_meta.id,
+                workflow_id=workflow_meta.workflow_id,
+                workflow_name=workflow_meta.workflow_name,
+                version=version_new,
+                current_use=True,
+                workflow_data=workflow_data,
+                version_label=f"v{version_new}"
+            )
+
+            app_db.insert(workflow_version_data)
 
             # with open(file_path, 'w', encoding='utf-8') as f:
             #     json.dump(workflow_data, f, indent=2, ensure_ascii=False)
@@ -359,7 +598,6 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
         workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": using_id, "workflow_name": workflow_name}, limit=1)
         workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
         if isinstance(workflow_data, str):
-            # 문자열인 경우 JSON으로 파싱 시도
             workflow_data = json.loads(workflow_data)
 
         nodes = workflow_data.get('nodes', [])
@@ -379,6 +617,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
                 copy_workflow_name = f"{workflow_name}_copy_{counter}"
                 existing_copy_data = app_db.find_by_condition(WorkflowMeta, {"user_id": login_user_id, "workflow_name": copy_workflow_name}, limit=1)
                 counter += 1
+        version_new = round(1.0, 3)
 
         workflow_meta = WorkflowMeta(
             user_id=login_user_id,
@@ -390,6 +629,8 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
             has_endnode=has_endnode,
             is_completed=(has_startnode and has_endnode),
             workflow_data=workflow_data,
+            current_version=version_new,
+            latest_version=version_new,
         )
 
         insert_result = app_db.insert(workflow_meta)
@@ -407,25 +648,19 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
                 inquire_deploy=False,
                 deploy_key=""
             )
+            app_db.insert(deploy_meta)
 
-            # 기존 Deploy metadata 확인 및 생성/업데이트
-            existing_deploy_data = app_db.find_by_condition(
-                DeployMeta,
-                {
-                    "user_id": user_id,
-                    "workflow_name": copy_workflow_name,
-                },
-                limit=1
+            workflow_version_data = WorkflowVersion(
+                user_id=user_id,
+                workflow_meta_id=workflow_meta.id,
+                workflow_id=workflow_meta.workflow_id,
+                workflow_name=workflow_meta.workflow_name,
+                version=version_new,
+                current_use=True,
+                workflow_data=workflow_data,
+                version_label=f"v{version_new}"
             )
-            if existing_deploy_data and len(existing_deploy_data) > 0:
-                deploy_meta.id = existing_deploy_data[0].id
-                deploy_meta.is_deployed = existing_deploy_data[0].is_deployed
-                deploy_meta.is_accepted = existing_deploy_data[0].is_accepted
-                deploy_meta.inquire_deploy = existing_deploy_data[0].inquire_deploy
-                deploy_meta.deploy_key = existing_deploy_data[0].deploy_key
-                app_db.update(deploy_meta)
-            else:
-                app_db.insert(deploy_meta)
+            app_db.insert(workflow_version_data)
 
         logger.info(f"Workflow duplicated successfully: {workflow_name}")
         return {"success": True, "message": f"Workflow '{workflow_name}' duplicated successfully", "filename": copy_workflow_name}
@@ -567,6 +802,10 @@ async def delete_workflow(request: Request, workflow_name: str):
             "user_id": user_id,
             "workflow_id": existing_data[0].workflow_id,
             "workflow_name": workflow_name,
+        })
+        app_db.delete_by_condition(WorkflowVersion, {
+            "user_id": user_id,
+            "workflow_meta_id": existing_data[0].id if existing_data else None,
         })
 
         # # 파일 시스템에서 파일 삭제

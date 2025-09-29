@@ -218,7 +218,7 @@ class AppDatabaseManager:
             if select_columns:
                 columns_str = ", ".join(select_columns)
             elif ignore_columns:
-                all_columns = ['id'] + list(model_class().get_schema().keys())
+                all_columns = ['id', 'created_at', 'updated_at'] + list(model_class().get_schema().keys())
                 filtered_columns = [col for col in all_columns if col not in ignore_columns]
                 columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
             else:
@@ -250,7 +250,7 @@ class AppDatabaseManager:
             if select_columns:
                 columns_str = ", ".join(select_columns)
             elif ignore_columns:
-                all_columns = ['id'] + list(model_class().get_schema().keys())
+                all_columns = ['id', 'created_at', 'updated_at'] + list(model_class().get_schema().keys())
                 filtered_columns = [col for col in all_columns if col not in ignore_columns]
                 columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
             else:
@@ -335,7 +335,7 @@ class AppDatabaseManager:
                     columns_str = ", ".join([f"{table_name}.{col}" for col in select_columns])
                     columns_str += ", u.username, u.full_name"
                 elif ignore_columns:
-                    all_columns = ['id'] + list(model_class().get_schema().keys())
+                    all_columns = ['id', 'created_at', 'updated_at'] + list(model_class().get_schema().keys())
                     filtered_columns = [col for col in all_columns if col not in ignore_columns]
                     columns_str = ", ".join([f"{table_name}.{col}" for col in filtered_columns]) if filtered_columns else f"{table_name}.*"
                     columns_str += ", u.username, u.full_name"
@@ -349,7 +349,7 @@ class AppDatabaseManager:
                 if select_columns:
                     columns_str = ", ".join(select_columns)
                 elif ignore_columns:
-                    all_columns = ['id'] + list(model_class().get_schema().keys())
+                    all_columns = ['id', 'created_at', 'updated_at'] + list(model_class().get_schema().keys())
                     filtered_columns = [col for col in all_columns if col not in ignore_columns]
                     columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
                 else:
