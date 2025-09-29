@@ -5,7 +5,7 @@ import hashlib
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 LOGGER = logging.getLogger("mlflow-artifact-service")
 
@@ -156,11 +156,40 @@ class MLflowArtifactService:
         parent = parent or None
         try:
             for entry in self.client.list_artifacts(run_id, parent):
-                if entry.path.strip("/") == artifact_path and not entry.is_dir:
+                if entry.path.strip("/") == artifact_path:
                     return True
         except MlflowException:
             return False
         return False
+
+    # ------------------------------------------------------------------
+    # Model registry helpers
+    # ------------------------------------------------------------------
+    def list_registered_models(self, max_results: int = 200) -> List[Any]:
+        """Return registered models from MLflow."""
+        # search_registered_models already supports pagination; simple loop covers all pages.
+        page_token: Optional[str] = None
+        collected: List[Any] = []
+        while True:
+            response = self.client.search_registered_models(page_token=page_token, max_results=max_results)
+            collected.extend(response)
+            page_token = getattr(response, "token", None) or getattr(response, "next_page_token", None)
+            if not page_token:
+                break
+        return collected
+
+    def list_model_versions(self, model_name: str, max_results: int = 200) -> List[Any]:
+        """Return all versions for a registered model."""
+        filter_string = f"name='{model_name}'"
+        page_token: Optional[str] = None
+        collected: List[Any] = []
+        while True:
+            response = self.client.search_model_versions(filter_string, page_token=page_token, max_results=max_results)
+            collected.extend(response)
+            page_token = getattr(response, "token", None) or getattr(response, "next_page_token", None)
+            if not page_token:
+                break
+        return collected
 
     # ------------------------------------------------------------------
     # Local cache helpers
@@ -217,4 +246,3 @@ class MLflowArtifactService:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
-

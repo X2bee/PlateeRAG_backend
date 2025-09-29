@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, List
 
@@ -116,6 +116,111 @@ def _get_mlflow_service_or_none(request: Request):
         return get_mlflow_service(request)
     except HTTPException:
         return None
+
+
+def _parse_possible_json(value: Any) -> Any:
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return value
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _format_timestamp_ms(timestamp_ms: Any) -> Optional[str]:
+    if isinstance(timestamp_ms, (int, float)):
+        try:
+            return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):  # pragma: no cover - defensive guard
+            return None
+    return None
+
+
+def _parse_registered_model_source(
+    source: Optional[str],
+    *,
+    run_id: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Extract run identifier and artifact path from an MLflow model version source."""
+
+    if not source:
+        return run_id, None
+
+    parsed_run_id = run_id
+    artifact_path: Optional[str] = None
+
+    normalized = source.strip()
+    if normalized.startswith("runs:/"):
+        remainder = normalized[len("runs:/"):]
+    elif normalized.startswith("mlflow-artifacts:/"):
+        remainder = normalized[len("mlflow-artifacts:/"):].lstrip("/")
+    else:
+        remainder = normalized
+
+    if "/artifacts/" in remainder:
+        run_segment, artifact_segment = remainder.split("/artifacts/", 1)
+        parsed_run_id = parsed_run_id or run_segment.strip("/") or None
+        artifact_path = artifact_segment.strip("/")
+    elif "/" in remainder:
+        possible_run_id, artifact_segment = remainder.split("/", 1)
+        parsed_run_id = parsed_run_id or possible_run_id.strip("/") or None
+        artifact_path = artifact_segment.strip("/")
+    else:
+        parsed_run_id = parsed_run_id or remainder.strip("/") or None
+        artifact_path = ""
+
+    return parsed_run_id, artifact_path
+
+
+def _build_mlflow_metadata_payload(model: Any) -> Dict[str, Any]:
+    metadata = getattr(model, "metadata", None)
+    if isinstance(metadata, str) and metadata:
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+    if not isinstance(metadata, dict):
+        return {}
+
+    mlflow_block = metadata.get("mlflow")
+    if not isinstance(mlflow_block, dict):
+        return {}
+
+    payload: Dict[str, Any] = {
+        "tracking_uri": mlflow_block.get("tracking_uri"),
+        "model_uri": mlflow_block.get("model_uri"),
+        "run_id": mlflow_block.get("run_id"),
+        "model_version": mlflow_block.get("model_version"),
+        "registered_model_name": mlflow_block.get("registered_model_name"),
+        "load_flavor": mlflow_block.get("load_flavor"),
+        "artifact_path": mlflow_block.get("artifact_path"),
+    }
+
+    additional = mlflow_block.get("additional_metadata")
+    if isinstance(additional, dict):
+        processed_additional: Dict[str, Any] = {}
+        for key, value in additional.items():
+            parsed_value = _parse_possible_json(value)
+            if key == "tags" and isinstance(parsed_value, dict):
+                parsed_value = {
+                    tag_key: _parse_possible_json(tag_value)
+                    for tag_key, tag_value in parsed_value.items()
+                }
+            iso_key = None
+            if key.endswith("_timestamp"):
+                iso_value = _format_timestamp_ms(parsed_value if not isinstance(parsed_value, dict) else None)
+                if iso_value:
+                    iso_key = f"{key}_iso"
+                    processed_additional[iso_key] = iso_value
+            processed_additional[key] = parsed_value
+        payload["additional_metadata"] = processed_additional
+    elif additional is not None:
+        payload["additional_metadata"] = _parse_possible_json(additional)
+
+    return payload
 
 
 def _serialize_backend_log(log: BackendLogs) -> Dict[str, Any]:
@@ -403,10 +508,12 @@ async def upload_model(
         "input_schema": created_model.input_schema,
         "output_schema": created_model.output_schema,
         "metadata": created_model.metadata,
+        "mlflow_metadata": _build_mlflow_metadata_payload(created_model),
     }
 
 
 @router.get("/")
+@router.get("")
 async def list_models(request: Request, limit: int = 100, offset: int = 0):
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
@@ -434,6 +541,7 @@ async def list_models(request: Request, limit: int = 100, offset: int = 0):
             "uploaded_by": model.uploaded_by,
             "created_at": model.created_at.isoformat() if model.created_at else None,
             "updated_at": model.updated_at.isoformat() if model.updated_at else None,
+            "mlflow_metadata": _build_mlflow_metadata_payload(model),
         }
         for model in models
     ]
@@ -607,6 +715,7 @@ async def get_model_detail(request: Request, model_id: int):
         "uploaded_by": model.uploaded_by,
         "created_at": model.created_at.isoformat() if model.created_at else None,
         "updated_at": model.updated_at.isoformat() if model.updated_at else None,
+        "mlflow_metadata": _build_mlflow_metadata_payload(model),
     }
 
 
@@ -745,6 +854,7 @@ async def run_inference(request: Request, payload: InferenceRequest):
             "name": model_record.model_name,
             "version": model_record.model_version,
             "framework": model_record.framework,
+            "mlflow_metadata": _build_mlflow_metadata_payload(model_record),
         },
         "result": inference_result,
     }
@@ -764,7 +874,9 @@ async def sync_model_artifacts(request: Request):
     deletion_service = ModelDeletionService(app_db)
 
     models = registry_service.list_models(limit=10_000)
-    removed_ids = []
+    removed_ids: List[int] = []
+    imported_ids: List[int] = []
+    updated_ids: List[int] = []
 
     mlflow_service = _get_mlflow_service_or_none(request)
     if not mlflow_service:
@@ -775,42 +887,225 @@ async def sync_model_artifacts(request: Request):
         backend_log.error("MLflow service unavailable for sync")
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
 
-    for model in models:
-        run_id, artifact_path = _resolve_mlflow_binding(model.metadata, model.file_path)
-        if not (run_id and artifact_path):
+    existing_lookup: Dict[tuple[str, Optional[str]], Any] = {
+        (model.model_name, model.model_version): model for model in models
+    }
+
+    try:
+        registered_models = mlflow_service.list_registered_models()
+    except Exception as exc:  # pragma: no cover - depends on MLflow backend
+        logger.exception(
+            "[sync_model_artifacts] Failed to query MLflow registry | user_id=%s",
+            user_id,
+        )
+        backend_log.error("Failed to query MLflow registry", exception=exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_REGISTRY_UNAVAILABLE") from exc
+
+    remote_lookup: Dict[tuple[str, Optional[str]], Dict[str, Any]] = {}
+
+    for registry_entry in registered_models:
+        model_name = getattr(registry_entry, "name", None)
+        if not model_name:
+            continue
+        try:
+            versions = mlflow_service.list_model_versions(model_name)
+        except Exception as exc:  # pragma: no cover - depends on MLflow backend
             logger.warning(
-                "[sync_model_artifacts] Model missing MLflow metadata | model_id=%s",
+                "[sync_model_artifacts] Failed to list versions | model_name=%s error=%s",
+                model_name,
+                exc,
+            )
+            continue
+
+        for version in versions:
+            version_str = str(getattr(version, "version", "")) or None
+            key = (model_name, version_str)
+
+            run_id_candidate = getattr(version, "run_id", None)
+            source = getattr(version, "source", None)
+            parsed_run_id, artifact_path = _parse_registered_model_source(source, run_id=run_id_candidate)
+
+            if not parsed_run_id or artifact_path is None:
+                logger.warning(
+                    "[sync_model_artifacts] Skipping version without resolvable artifact | model=%s version=%s",
+                    model_name,
+                    version_str,
+                )
+                continue
+
+            artifact_uri = mlflow_service.build_artifact_uri(parsed_run_id, artifact_path)
+            model_uri = f"models:/{model_name}/{version_str}" if version_str else artifact_uri
+
+            remote_lookup[key] = {
+                "model_name": model_name,
+                "model_version": version_str,
+                "run_id": parsed_run_id,
+                "artifact_path": artifact_path,
+                "artifact_uri": artifact_uri,
+                "model_uri": model_uri,
+                "status": getattr(version, "status", None),
+                "stage": getattr(version, "current_stage", None),
+                "source": source,
+                "run_link": getattr(version, "run_link", None),
+                "description": getattr(version, "description", None) or getattr(registry_entry, "description", None),
+                "tags": dict(getattr(version, "tags", {}) or {}),
+                "creation_timestamp": getattr(version, "creation_timestamp", None),
+                "last_updated_timestamp": getattr(version, "last_updated_timestamp", None),
+            }
+
+    # Remove models that no longer exist in MLflow registry
+    for key, model in existing_lookup.items():
+        remote_info = remote_lookup.get(key)
+        if not remote_info:
+            logger.warning(
+                "[sync_model_artifacts] Removing stale registry entry | model_id=%s name=%s version=%s",
                 model.id,
+                model.model_name,
+                model.model_version,
             )
             if deletion_service.delete(model.id, model=model, remove_artifact=False):
                 removed_ids.append(model.id)
             continue
 
-        if not mlflow_service.artifact_exists(run_id, artifact_path):
+        if not mlflow_service.artifact_exists(remote_info["run_id"], remote_info["artifact_path"]):
             logger.warning(
                 "[sync_model_artifacts] Missing MLflow artifact detected | model_id=%s run_id=%s path=%s",
                 model.id,
-                run_id,
-                artifact_path,
+                remote_info["run_id"],
+                remote_info["artifact_path"],
             )
             if deletion_service.delete(model.id, model=model, remove_artifact=False):
                 removed_ids.append(model.id)
+            continue
+
+        staged_changes = False
+        if model.file_path != remote_info["model_uri"]:
+            model.file_path = remote_info["model_uri"]
+            staged_changes = True
+
+        metadata = model.metadata if isinstance(model.metadata, dict) else {}
+        mlflow_meta = metadata.get("mlflow") if isinstance(metadata, dict) else None
+        if not isinstance(mlflow_meta, dict):
+            mlflow_meta = {}
+
+        desired_mlflow_meta = {
+            "tracking_uri": mlflow_service.tracking_uri,
+            "model_uri": remote_info["model_uri"],
+            "run_id": remote_info["run_id"],
+            "model_version": remote_info["model_version"],
+            "registered_model_name": remote_info["model_name"],
+            "load_flavor": "pyfunc",
+            "artifact_path": remote_info["artifact_path"],
+            "additional_metadata": {
+                "artifact_uri": remote_info["artifact_uri"],
+                "status": remote_info["status"],
+                "stage": remote_info["stage"],
+                "source": remote_info["source"],
+                "run_link": remote_info["run_link"],
+                "tags": remote_info["tags"],
+                "creation_timestamp": remote_info["creation_timestamp"],
+                "last_updated_timestamp": remote_info["last_updated_timestamp"],
+            },
+        }
+
+        desired_mlflow_meta["additional_metadata"] = {
+            key_name: value
+            for key_name, value in desired_mlflow_meta["additional_metadata"].items()
+            if value not in (None, {}, [])
+        }
+
+        if mlflow_meta != desired_mlflow_meta:
+            metadata["mlflow"] = desired_mlflow_meta
+            model.metadata = metadata
+            staged_changes = True
+
+        if staged_changes and registry_service.update_model(model):
+            updated_ids.append(model.id)
+
+    # Import new MLflow registry entries
+    for key, remote_info in remote_lookup.items():
+        if key in existing_lookup:
+            continue
+
+        metadata_payload: Dict[str, Any] = {
+            "mlflow": {
+                "additional_metadata": {
+                    "artifact_uri": remote_info["artifact_uri"],
+                    "status": remote_info["status"],
+                    "stage": remote_info["stage"],
+                    "source": remote_info["source"],
+                    "run_link": remote_info["run_link"],
+                    "tags": remote_info["tags"],
+                    "creation_timestamp": remote_info["creation_timestamp"],
+                    "last_updated_timestamp": remote_info["last_updated_timestamp"],
+                }
+            }
+        }
+
+        additional_meta = metadata_payload["mlflow"]["additional_metadata"]
+        metadata_payload["mlflow"]["additional_metadata"] = {
+            key_name: value for key_name, value in additional_meta.items() if value not in (None, {}, [])
+        }
+
+        try:
+            created_model = registry_service.register_mlflow_model(
+                model_name=remote_info["model_name"],
+                model_uri=remote_info["model_uri"],
+                tracking_uri=mlflow_service.tracking_uri,
+                model_version=remote_info["model_version"],
+                description=remote_info["description"],
+                run_id=remote_info["run_id"],
+                registered_model_name=remote_info["model_name"],
+                load_flavor="pyfunc",
+                artifact_path=remote_info["artifact_path"],
+                metadata=metadata_payload,
+                status="active",
+            )
+        except Exception as exc:  # pragma: no cover - persistence failure
+            logger.exception(
+                "[sync_model_artifacts] Failed to import MLflow model | model=%s version=%s",
+                remote_info["model_name"],
+                remote_info["model_version"],
+            )
+            backend_log.error(
+                "Failed to import MLflow model",
+                metadata={
+                    "model_name": remote_info["model_name"],
+                    "model_version": remote_info["model_version"],
+                },
+                exception=exc,
+            )
+            continue
+
+        imported_ids.append(created_model.id)
+        existing_lookup[key] = created_model
 
     logger.info(
-        "[sync_model_artifacts] Sync complete | user_id=%s checked=%s removed=%s",
+        "[sync_model_artifacts] Sync complete | user_id=%s checked=%s removed=%s imported=%s updated=%s",
         user_id,
         len(models),
         len(removed_ids),
+        len(imported_ids),
+        len(updated_ids),
     )
     backend_log.success(
         "Model artifact sync completed",
-        metadata={"checked": len(models), "removed": len(removed_ids)}
+        metadata={
+            "checked": len(models),
+            "removed": len(removed_ids),
+            "imported": len(imported_ids),
+            "updated": len(updated_ids),
+        }
     )
 
     return {
         "checked": len(models),
         "removed": len(removed_ids),
         "removed_ids": removed_ids,
+        "imported": len(imported_ids),
+        "imported_ids": imported_ids,
+        "updated": len(updated_ids),
+        "updated_ids": updated_ids,
     }
 
 
