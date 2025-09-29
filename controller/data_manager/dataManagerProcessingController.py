@@ -7,6 +7,10 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from controller.helper.singletonHelper import get_db_manager, get_data_manager_registry, get_config_composer
 from controller.helper.controllerHelper import extract_user_id_from_request
+import collections
+import collections.abc
+if not hasattr(collections, 'Callable'):
+    collections.Callable = collections.abc.Callable
 
 router = APIRouter(prefix="/processing", tags=["data-manager"])
 logger = logging.getLogger("data-manager-controller")
@@ -86,6 +90,29 @@ class ExecuteCallbackRequest(BaseModel):
     """사용자 콜백 코드 실행 요청"""
     manager_id: str = Field(..., description="매니저 ID")
     callback_code: str = Field(..., description="실행할 PyArrow 코드", min_length=1)
+
+class UploadToMlflowRequest(BaseModel):
+    """MLflow에 데이터셋 업로드 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    experiment_name: str = Field(..., description="MLflow 실험 이름")
+    artifact_path: str = Field("dataset", description="아티팩트 저장 경로")
+    dataset_name: str = Field(..., description="데이터셋 이름")
+    description: Optional[str] = Field(None, description="데이터셋 설명")
+    tags: Optional[Dict[str, str]] = Field(None, description="추가 태그")
+    format: str = Field("parquet", description="저장 형식", pattern="^(parquet|csv)$")
+    mlflow_tracking_uri: Optional[str] = Field(None, description="MLflow 추적 서버 URI (선택사항)")
+
+class ListMlflowDatasetsRequest(BaseModel):
+    """MLflow 데이터셋 목록 조회 요청"""
+    experiment_name: Optional[str] = Field(None, description="특정 실험명으로 필터링 (선택사항)")
+    max_results: int = Field(100, description="최대 결과 개수", ge=1, le=1000)
+    mlflow_tracking_uri: Optional[str] = Field(None, description="MLflow 추적 서버 URI (선택사항)")
+
+class GetMLflowDatasetColumnsRequest(BaseModel):
+    """MLflow 데이터셋 컬럼 조회 요청"""
+    run_id: str = Field(..., description="MLflow Run ID")
+    artifact_path: Optional[str] = Field("dataset", description="아티팩트 경로")
+    mlflow_tracking_uri: Optional[str] = Field(None, description="MLflow 추적 서버 URI")
 
 # ========== Helper Functions ==========
 def get_manager_with_auth(registry, manager_id: str, user_id: str):
@@ -741,3 +768,419 @@ async def execute_dataset_callback(request: Request, callback_request: ExecuteCa
     except Exception as e:
         logger.error("예상치 못한 오류: %s", e)
         raise HTTPException(status_code=500, detail="사용자 콜백 실행 중 오류가 발생했습니다")
+
+@router.post("/upload-to-mlflow",
+    summary="MLflow에 데이터셋 업로드",
+    description="현재 데이터셋을 MLflow 실험의 아티팩트로 업로드합니다.",
+    response_model=Dict[str, Any])
+async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlflowRequest) -> Dict[str, Any]:
+    """데이터셋을 MLflow에 업로드"""
+    try:
+        import mlflow
+        import tempfile
+        import os
+        import json
+        
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, upload_request.manager_id, user_id)
+
+        # S3/MinIO 설정 하드코딩
+        os.environ['AWS_ACCESS_KEY_ID'] = 'minioadmin'
+        os.environ['AWS_SECRET_ACCESS_KEY'] = 'minioadmin123'
+        os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'https://minio.x2bee.com'  # 또는 http://
+        
+        # MLflow Tracking URI 설정
+        if upload_request.mlflow_tracking_uri:
+            tracking_uri = upload_request.mlflow_tracking_uri
+        else:
+            try:
+                config_composer = get_config_composer(request)
+                tracking_uri = config_composer.get_config_by_name("MLFLOW_TRACKING_URI").value
+            except Exception as e:
+                logger.warning("MLFLOW_TRACKING_URI 설정 가져오기 실패: %s", e)
+                tracking_uri = "https://polar-mlflow-git.x2bee.com"
+        
+        mlflow.set_tracking_uri(tracking_uri)
+        
+        logger.info("=== MLflow 설정 ===")
+        logger.info(f"Tracking URI: {tracking_uri}")
+        logger.info(f"S3 Endpoint: https://minio.x2bee.com")
+
+        # MLflow Client 생성
+        client = mlflow.tracking.MlflowClient()
+
+        # 실험 설정
+        mlflow.set_experiment(upload_request.experiment_name)
+        
+        with mlflow.start_run() as run:
+            logger.info(f"MLflow Run 시작: run_id={run.info.run_id}, experiment={upload_request.experiment_name}")
+            logger.info(f"Artifact URI: {run.info.artifact_uri}")
+            
+            # S3 사용 확인
+            if run.info.artifact_uri.startswith("s3://"):
+                logger.info("✅ S3(MinIO) 스토리지 사용 중")
+            else:
+                logger.warning(f"⚠️  예상치 못한 artifact URI: {run.info.artifact_uri}")
+            
+            # 데이터셋 파일 생성
+            if upload_request.format == "parquet":
+                file_path = manager.download_dataset_as_parquet()
+            else:
+                file_path = manager.download_dataset_as_csv()
+            
+            file_size = os.path.getsize(file_path)
+            logger.info(f"데이터셋 파일 생성: {os.path.basename(file_path)}, 크기: {file_size} bytes")
+            
+            # 아티팩트 업로드 (S3로 자동 전송)
+            logger.info("아티팩트 업로드 시작")
+            mlflow.log_artifact(file_path, artifact_path=upload_request.artifact_path)
+            logger.info("데이터셋 아티팩트 업로드 완료")
+            
+            # 메타데이터 로깅
+            statistics = manager.get_dataset_statistics()
+            
+            # 기본 메트릭 로깅
+            if isinstance(statistics.get('basic_info'), dict):
+                basic_info = statistics['basic_info']
+                mlflow.log_metric("dataset_rows", basic_info.get('num_rows', 0))
+                mlflow.log_metric("dataset_columns", basic_info.get('num_columns', 0))
+                mlflow.log_metric("dataset_size_mb", basic_info.get('memory_usage_mb', 0))
+            
+            # 파라미터 로깅
+            mlflow.log_param("dataset_name", upload_request.dataset_name)
+            mlflow.log_param("format", upload_request.format)
+            mlflow.log_param("user_id", user_id)
+            if upload_request.description:
+                mlflow.log_param("description", upload_request.description)
+            
+            # 태그 설정
+            default_tags = {
+                "dataset_name": upload_request.dataset_name,
+                "format": upload_request.format,
+                "user_id": user_id,
+                "manager_id": upload_request.manager_id
+            }
+            if upload_request.tags:
+                default_tags.update(upload_request.tags)
+            mlflow.set_tags(default_tags)
+            
+            # 통계 정보를 JSON으로 저장 및 업로드
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as stats_file:
+                json.dump(statistics, stats_file, indent=2, default=str)
+                stats_path = stats_file.name
+            
+            stats_size = os.path.getsize(stats_path)
+            logger.info(f"통계 파일 생성: 크기 {stats_size} bytes")
+            
+            mlflow.log_artifact(stats_path, artifact_path=upload_request.artifact_path)
+            logger.info("통계 아티팩트 업로드 완료")
+            
+            # 업로드 확인 (약간의 지연 후)
+            import time
+            time.sleep(1)  # S3 인덱싱 대기
+            
+            artifact_list = []
+            try:
+                uploaded_artifacts = client.list_artifacts(run.info.run_id, upload_request.artifact_path)
+                artifact_list = [a.path for a in uploaded_artifacts]
+                logger.info(f"업로드 확인: {len(artifact_list)}개 파일")
+                
+                for artifact in uploaded_artifacts:
+                    logger.info(f"  - {artifact.path}: {artifact.file_size} bytes")
+                    
+            except Exception as e:
+                logger.warning(f"아티팩트 확인 중 오류: {e}")
+            
+            run_info = {
+                "run_id": run.info.run_id,
+                "experiment_id": run.info.experiment_id,
+                "artifact_uri": run.info.artifact_uri,
+                "uploaded_artifacts": artifact_list
+            }
+            
+            # 임시 파일 정리
+            try:
+                os.unlink(file_path)
+                os.unlink(stats_path)
+                logger.info("임시 파일 정리 완료")
+            except Exception as cleanup_error:
+                logger.warning(f"임시 파일 정리 중 오류: {cleanup_error}")
+
+        logger.info(f"MLflow 업로드 완료: run_id={run.info.run_id}")
+
+        return {
+            "success": True,
+            "manager_id": upload_request.manager_id,
+            "message": f"데이터셋이 MLflow 실험 '{upload_request.experiment_name}'에 성공적으로 업로드되었습니다",
+            "mlflow_info": {
+                "experiment_name": upload_request.experiment_name,
+                "dataset_name": upload_request.dataset_name,
+                "format": upload_request.format,
+                "artifact_path": upload_request.artifact_path,
+                **run_info
+            }
+        }
+
+    except ImportError:
+        logger.error("MLflow 패키지가 설치되지 않음")
+        raise HTTPException(status_code=500, detail="MLflow 패키지가 설치되지 않았습니다")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("MLflow 업로드 실패: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"MLflow 업로드 실패: {str(e)}")
+
+@router.post("/mlflow/list-datasets",
+    summary="MLflow 업로드된 데이터셋 목록 조회",
+    description="MLflow에 업로드된 데이터셋들의 목록과 메타데이터를 조회합니다.",
+    response_model=Dict[str, Any])
+async def list_mlflow_datasets(request: Request, list_request: ListMlflowDatasetsRequest) -> Dict[str, Any]:
+    """MLflow 데이터셋 목록 조회"""
+    try:
+        import mlflow
+        import os
+        from datetime import datetime
+        
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        # S3/MinIO 설정
+        os.environ['AWS_ACCESS_KEY_ID'] = 'minioadmin'
+        os.environ['AWS_SECRET_ACCESS_KEY'] = 'minioadmin123'
+        os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'https://minio.x2bee.com'
+        
+        # MLflow Tracking URI 설정
+        if list_request.mlflow_tracking_uri:
+            tracking_uri = list_request.mlflow_tracking_uri
+        else:
+            try:
+                config_composer = get_config_composer(request)
+                tracking_uri = config_composer.get_config_by_name("MLFLOW_TRACKING_URI").value
+            except Exception as e:
+                logger.warning("MLFLOW_TRACKING_URI 설정 가져오기 실패: %s", e)
+                tracking_uri = "https://polar-mlflow-git.x2bee.com"
+        
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        
+        logger.info(f"MLflow 데이터셋 목록 조회 시작 (user_id: {user_id})")
+        
+        # 실험 목록 가져오기
+        if list_request.experiment_name:
+            # 특정 실험만 조회
+            try:
+                experiment = client.get_experiment_by_name(list_request.experiment_name)
+                experiments = [experiment] if experiment else []
+            except Exception as e:
+                logger.warning(f"실험 '{list_request.experiment_name}' 조회 실패: {e}")
+                experiments = []
+        else:
+            # 모든 실험 조회
+            experiments = client.search_experiments(max_results=1000)
+        
+        datasets = []
+        
+        for experiment in experiments:
+            # 각 실험의 run들 조회
+            runs = client.search_runs(
+                experiment_ids=[experiment.experiment_id],
+                max_results=list_request.max_results,
+                order_by=["start_time DESC"]
+            )
+            
+            for run in runs:
+                # dataset_name 태그가 있는 run만 필터링
+                tags = run.data.tags
+                if "dataset_name" not in tags:
+                    continue
+                
+                # 파라미터와 메트릭 수집
+                params = run.data.params
+                metrics = run.data.metrics
+                
+                # 아티팩트 확인
+                artifact_list = []
+                try:
+                    artifacts = client.list_artifacts(run.info.run_id)
+                    artifact_list = [
+                        {
+                            "path": a.path,
+                            "size_bytes": a.file_size,
+                            "is_dir": a.is_dir
+                        }
+                        for a in artifacts
+                    ]
+                except Exception as e:
+                    logger.warning(f"Run {run.info.run_id} 아티팩트 조회 실패: {e}")
+                
+                # 데이터셋 정보 구성
+                dataset_info = {
+                    "run_id": run.info.run_id,
+                    "experiment_name": experiment.name,
+                    "experiment_id": experiment.experiment_id,
+                    "dataset_name": tags.get("dataset_name"),
+                    "format": tags.get("format"),
+                    "manager_id": tags.get("manager_id"),
+                    "upload_user_id": tags.get("user_id"),
+                    "created_at": datetime.fromtimestamp(run.info.start_time / 1000).isoformat(),
+                    "artifact_uri": run.info.artifact_uri,
+                    "status": run.info.status,
+                    "metrics": {
+                        "rows": metrics.get("dataset_rows"),
+                        "columns": metrics.get("dataset_columns"),
+                        "size_mb": metrics.get("dataset_size_mb")
+                    },
+                    "description": params.get("description"),
+                    "artifacts": artifact_list,
+                    "run_url": f"{tracking_uri}/#/experiments/{experiment.experiment_id}/runs/{run.info.run_id}"
+                }
+                
+                # user_id로 필터링 (본인이 업로드한 데이터셋만 조회)
+                if tags.get("user_id") == str(user_id):
+                    datasets.append(dataset_info)
+        
+        logger.info(f"MLflow 데이터셋 목록 조회 완료: {len(datasets)}개 발견")
+        
+        return {
+            "success": True,
+            "message": f"{len(datasets)}개의 데이터셋을 찾았습니다",
+            "total_count": len(datasets),
+            "datasets": datasets,
+            "filter": {
+                "experiment_name": list_request.experiment_name,
+                "user_id": user_id
+            }
+        }
+
+    except ImportError:
+        logger.error("MLflow 패키지가 설치되지 않음")
+        raise HTTPException(status_code=500, detail="MLflow 패키지가 설치되지 않았습니다")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("MLflow 데이터셋 목록 조회 실패: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"데이터셋 목록 조회 실패: {str(e)}")
+
+@router.post("/mlflow/get-dataset-columns",
+    summary="MLflow 데이터셋의 컬럼 정보 조회",
+    description="특정 run의 데이터셋 파일을 다운로드하여 컬럼 정보를 반환합니다.",
+    response_model=Dict[str, Any])
+async def get_mlflow_dataset_columns(request: Request, columns_request: GetMLflowDatasetColumnsRequest) -> Dict[str, Any]:
+    """MLflow 데이터셋 컬럼 조회"""
+    try:
+        import mlflow
+        import os
+        import tempfile
+        import pyarrow.parquet as pq
+        import pyarrow.csv as csv
+        
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+
+        # S3/MinIO 설정
+        os.environ['AWS_ACCESS_KEY_ID'] = 'minioadmin'
+        os.environ['AWS_SECRET_ACCESS_KEY'] = 'minioadmin123'
+        os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'https://minio.x2bee.com'
+        
+        # MLflow Tracking URI 설정
+        if columns_request.mlflow_tracking_uri:
+            tracking_uri = columns_request.mlflow_tracking_uri
+        else:
+            try:
+                config_composer = get_config_composer(request)
+                tracking_uri = config_composer.get_config_by_name("MLFLOW_TRACKING_URI").value
+            except Exception as e:
+                logger.warning("MLFLOW_TRACKING_URI 설정 가져오기 실패: %s", e)
+                tracking_uri = "https://polar-mlflow-git.x2bee.com"
+        
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        
+        logger.info(f"MLflow 데이터셋 컬럼 조회: run_id={columns_request.run_id}")
+        
+        # 아티팩트 목록 조회
+        artifacts = client.list_artifacts(columns_request.run_id, columns_request.artifact_path)
+        
+        # 데이터셋 파일 찾기 (.csv 또는 .parquet)
+        dataset_file = None
+        for artifact in artifacts:
+            if artifact.path.endswith('.csv') or artifact.path.endswith('.parquet'):
+                dataset_file = artifact
+                break
+        
+        if not dataset_file:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Run {columns_request.run_id}에서 데이터셋 파일(.csv 또는 .parquet)을 찾을 수 없습니다"
+            )
+        
+        # 임시 디렉토리에 파일 다운로드
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_path = client.download_artifacts(
+                columns_request.run_id,
+                dataset_file.path,
+                dst_path=temp_dir
+            )
+            
+            # 파일 형식에 따라 컬럼 정보 추출
+            columns_info = []
+            file_format = 'parquet' if dataset_file.path.endswith('.parquet') else 'csv'
+            
+            try:
+                if file_format == 'parquet':
+                    table = pq.read_table(local_path)
+                    schema = table.schema
+                    
+                    for field in schema:
+                        columns_info.append({
+                            "name": field.name,
+                            "type": str(field.type),
+                            "nullable": field.nullable
+                        })
+                    
+                    num_rows = len(table)
+                    
+                else:  # CSV
+                    # CSV 파일의 경우 처음 몇 줄만 읽어서 컬럼 정보 추출
+                    table = csv.read_csv(local_path)
+                    schema = table.schema
+                    
+                    for field in schema:
+                        columns_info.append({
+                            "name": field.name,
+                            "type": str(field.type),
+                            "nullable": field.nullable
+                        })
+                    
+                    num_rows = len(table)
+                
+            except Exception as e:
+                logger.error(f"파일 읽기 실패: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"데이터셋 파일 읽기 실패: {str(e)}"
+                )
+        
+        logger.info(f"컬럼 정보 조회 완료: {len(columns_info)}개 컬럼")
+        
+        return {
+            "success": True,
+            "run_id": columns_request.run_id,
+            "file_path": dataset_file.path,
+            "file_format": file_format,
+            "num_rows": num_rows,
+            "num_columns": len(columns_info),
+            "columns": columns_info
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("MLflow 데이터셋 컬럼 조회 실패: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"컬럼 조회 실패: {str(e)}")
