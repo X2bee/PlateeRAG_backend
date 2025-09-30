@@ -2,6 +2,7 @@ from fastapi import HTTPException, Request
 from service.database import AppDatabaseManager
 from config.config_composer import ConfigComposer
 from service.vast.vast_service import VastService
+from service.vast.proxy_client import VastProxyClient
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -63,6 +64,15 @@ def get_vast_service(request: Request) -> VastService:
         return request.app.state.vast_service
     else:
         raise HTTPException(status_code=500, detail="VAST service not available")
+
+
+def get_vast_proxy_client(request: Request) -> VastProxyClient:
+    """Vast proxy client 의존성 주입"""
+    if hasattr(request.app.state, 'vast_proxy_client') and request.app.state.vast_proxy_client:
+        return request.app.state.vast_proxy_client
+    if hasattr(request.app.state, 'vast_service') and isinstance(request.app.state.vast_service, VastProxyClient):
+        return request.app.state.vast_service
+    raise HTTPException(status_code=500, detail="VAST proxy client not available")
 
 def get_stt_service(request: Request) -> 'HuggingFaceSTT':
     """STT 서비스 의존성 주입"""

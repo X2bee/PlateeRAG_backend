@@ -25,7 +25,7 @@ from controller.interactionController import router as interactionRouter
 from controller.huggingface.huggingfaceController import router as huggingfaceRouter
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
-from controller.vastController import router as vastRouter
+from controller.vast_proxy_controller import router as vastProxyRouter
 from controller.promptController import router as promptRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
@@ -38,7 +38,6 @@ from service.embedding.embedding_factory import EmbeddingFactory
 from service.stt.stt_factory import STTFactory
 from service.tts.tts_factory import TTSFactory
 from service.guarder.guarder_factory import GuarderFactory
-from service.vast.vast_service import VastService
 from service.vast.proxy_client import VastProxyClient
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
@@ -304,18 +303,14 @@ async def lifespan(app: FastAPI):
             print_step_banner(5.7, "GUARDER SERVICE SETUP", "Guarder service is disabled in configuration")
             app.state.guarder_service = None
 
-        # 6. vast_service Instance 생성
-        print_step_banner(6, "VAST SERVICE SETUP", "Initializing cloud compute management")
-        logger.info("⚙️  Step 6: VAST service initialization starting...")
-        vast_config = config_composer.get_config_by_category_name("vast")
-        proxy_mode = str(getattr(vast_config, "VAST_PROXY_MODE").value).lower()
-
-        if proxy_mode == "proxy":
-            app.state.vast_service = VastProxyClient(config_composer)
-            logger.info("✅ Step 6: VAST proxy client initialized (mode=proxy)")
-        else:
-            app.state.vast_service = VastService(app_db, config_composer)
-            logger.info("✅ Step 6: VAST service initialized successfully!")
+        # 6. Vast proxy client 생성
+        print_step_banner(6, "VAST PROXY SETUP", "Initializing remote VastAI proxy")
+        logger.info("⚙️  Step 6: VAST proxy client initialization starting...")
+        vast_proxy_client = VastProxyClient(config_composer)
+        app.state.vast_proxy_client = vast_proxy_client
+        # 기존 의존성을 사용하는 코드 호환을 위해 동일 객체를 vast_service로도 노출
+        app.state.vast_service = vast_proxy_client
+        logger.info("✅ Step 6: VAST proxy client initialized successfully")
 
         # 7. 워크플로우 실행 매니저 초기화
         print_step_banner(7, "WORKFLOW MANAGER SETUP", "Setting up workflow execution engine")
@@ -540,7 +535,7 @@ app.include_router(performanceRouter)
 app.include_router(trainRouter)
 app.include_router(interactionRouter)
 app.include_router(appRouter)
-app.include_router(vastRouter)
+app.include_router(vastProxyRouter)
 app.include_router(huggingfaceRouter)
 app.include_router(promptRouter)
 
