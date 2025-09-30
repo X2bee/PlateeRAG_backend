@@ -1,5 +1,6 @@
 """Endpoints for managing uploaded machine learning models."""
 from __future__ import annotations
+import ast
 import hashlib
 import json
 import logging
@@ -214,6 +215,209 @@ def _parse_registered_model_source(
 
     return parsed_run_id, artifact_path
 
+
+def _parse_literal_list(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            try:
+                parsed = ast.literal_eval(stripped)
+            except (ValueError, SyntaxError):
+                cleaned = stripped.strip("[](){}")
+                if "," in cleaned:
+                    return [segment.strip().strip('"\'') for segment in cleaned.split(",") if segment.strip()]
+                return [cleaned.strip('"\'')]
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed]
+    return None
+
+
+def _collect_schema_column_names(schema_payload: Any) -> List[str]:
+    names: List[str] = []
+
+    if isinstance(schema_payload, dict):
+        name_value = schema_payload.get("name")
+        if isinstance(name_value, str) and name_value.strip():
+            names.append(name_value.strip())
+
+        column_names = schema_payload.get("column_names")
+        if isinstance(column_names, list):
+            names.extend(str(item) for item in column_names if isinstance(item, (str, int, float)))
+
+        keys_to_traverse = {
+            "mlflow_colspec",
+            "colspec",
+            "columns",
+            "fields",
+            "items",
+            "inputs",
+            "outputs",
+            "elements",
+            "properties",
+        }
+
+        for key, value in schema_payload.items():
+            if key in keys_to_traverse or key.endswith("_schema") or key in {"schema", "signature"}:
+                names.extend(_collect_schema_column_names(value))
+
+    elif isinstance(schema_payload, list):
+        for item in schema_payload:
+            names.extend(_collect_schema_column_names(item))
+
+    return names
+
+
+def _deduplicate_names(candidates: List[str]) -> Optional[List[str]]:
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = str(candidate).strip()
+        if not normalized:
+            continue
+        if normalized not in seen:
+            seen.add(normalized)
+            ordered.append(normalized)
+    return ordered or None
+
+
+def _resolve_schema_download_params(
+    schema_uri: Optional[Any],
+    *,
+    fallback_run_id: Optional[str],
+    mlflow_service: Any,
+) -> tuple[Optional[str], Optional[str]]:
+    if schema_uri is None:
+        return None, None
+
+    uri = str(schema_uri).strip()
+    if not uri:
+        return None, None
+
+    run_id = fallback_run_id
+    artifact_path: Optional[str] = None
+
+    if uri.startswith("mlflow://") and mlflow_service:
+        try:
+            run_id_candidate, artifact_candidate = mlflow_service.parse_artifact_uri(uri)
+        except ValueError:
+            run_id_candidate, artifact_candidate = None, None
+        if run_id_candidate:
+            run_id = run_id_candidate
+        if artifact_candidate:
+            artifact_path = artifact_candidate
+
+    if artifact_path is None and "artifacts/" in uri:
+        artifact_path = uri.split("artifacts/", 1)[1].lstrip("/")
+
+    if artifact_path is None and uri.startswith("runs:/"):
+        remainder = uri[len("runs:/"):]
+        if "/" in remainder:
+            run_segment, artifact_segment = remainder.split("/", 1)
+            run_id = run_segment or run_id
+            artifact_path = artifact_segment
+        else:
+            run_id = remainder or run_id
+            artifact_path = ""
+
+    if artifact_path is None and not uri.startswith(("mlflow://", "runs:/", "s3://", "http://", "https://")):
+        artifact_path = uri.lstrip("/")
+
+    return run_id, artifact_path
+
+
+def _download_schema_field_names(
+    mlflow_service: Any,
+    *,
+    schema_uri: Optional[Any],
+    run_id: Optional[str],
+) -> Optional[List[str]]:
+    if not mlflow_service:
+        return None
+
+    resolved_run_id, artifact_path = _resolve_schema_download_params(
+        schema_uri,
+        fallback_run_id=run_id,
+        mlflow_service=mlflow_service,
+    )
+
+    if not resolved_run_id or artifact_path is None:
+        return None
+
+    artifact_path = artifact_path.strip("/")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="schema_") as tmp_dir:
+            downloaded = Path(
+                mlflow_service.client.download_artifacts(
+                    resolved_run_id,
+                    artifact_path,
+                    dst_path=tmp_dir,
+                )
+            )
+
+            target = downloaded
+            if downloaded.is_dir():
+                json_files = sorted(downloaded.glob("*.json"))
+                if json_files:
+                    target = json_files[0]
+            if not target.exists() or target.is_dir():
+                return None
+
+            with target.open("r", encoding="utf-8") as handle:
+                schema_payload = json.load(handle)
+    except Exception as exc:  # pragma: no cover - network/io failures
+        logger.warning(
+            "[schema-fetch] Failed to download schema | run_id=%s path=%s error=%s",
+            resolved_run_id,
+            artifact_path,
+            exc,
+        )
+        return None
+
+    extracted = _collect_schema_column_names(schema_payload)
+    return _deduplicate_names(extracted)
+
+
+def _resolve_schema_field_names(
+    mlflow_service: Any,
+    *,
+    run_id: Optional[str],
+    tags: Optional[Dict[str, Any]],
+) -> tuple[Optional[List[str]], Optional[List[str]]]:
+    tag_dict = tags if isinstance(tags, dict) else {}
+
+    input_schema_fields = _parse_literal_list(tag_dict.get("input_feature_names"))
+    if not input_schema_fields:
+        input_schema_fields = _parse_literal_list(tag_dict.get("feature_names"))
+    if not input_schema_fields:
+        input_schema_fields = _download_schema_field_names(
+            mlflow_service,
+            schema_uri=tag_dict.get("input_schema_uri"),
+            run_id=run_id,
+        )
+
+    output_schema_fields = _parse_literal_list(tag_dict.get("task_original_classes"))
+    if not output_schema_fields:
+        output_schema_fields = _parse_literal_list(tag_dict.get("output_classes"))
+    if not output_schema_fields:
+        output_schema_fields = _download_schema_field_names(
+            mlflow_service,
+            schema_uri=tag_dict.get("output_schema_uri"),
+            run_id=run_id,
+        )
+
+    return (
+        _deduplicate_names(input_schema_fields or []),
+        _deduplicate_names(output_schema_fields or []),
+    )
 
 def _build_mlflow_metadata_payload(model: Any) -> Dict[str, Any]:
     metadata = getattr(model, "metadata", None)
@@ -1132,6 +1336,13 @@ async def sync_model_artifacts(request: Request):
             artifact_uri = mlflow_service.build_artifact_uri(parsed_run_id, artifact_path)
             model_uri = f"models:/{model_name}/{version_str}" if version_str else artifact_uri
 
+            tags_dict = dict(getattr(version, "tags", {}) or {})
+            input_schema_fields, output_schema_fields = _resolve_schema_field_names(
+                mlflow_service,
+                run_id=parsed_run_id,
+                tags=tags_dict,
+            )
+
             remote_lookup[key] = {
                 "model_name": model_name,
                 "model_version": version_str,
@@ -1144,11 +1355,13 @@ async def sync_model_artifacts(request: Request):
                 "source": source,
                 "run_link": getattr(version, "run_link", None),
                 "description": getattr(version, "description", None) or getattr(registry_entry, "description", None),
-                "tags": dict(getattr(version, "tags", {}) or {}),
+                "tags": tags_dict,
                 "creation_timestamp": getattr(version, "creation_timestamp", None),
                 "last_updated_timestamp": getattr(version, "last_updated_timestamp", None),
                 "download_uri": download_uri,
                 "storage_location": storage_location,
+                "input_schema_fields": input_schema_fields,
+                "output_schema_fields": output_schema_fields,
             }
 
     # Remove models that no longer exist in MLflow registry
@@ -1179,6 +1392,16 @@ async def sync_model_artifacts(request: Request):
         staged_changes = False
         if model.file_path != remote_info["model_uri"]:
             model.file_path = remote_info["model_uri"]
+            staged_changes = True
+
+        remote_input_schema = remote_info.get("input_schema_fields")
+        if remote_input_schema is not None and model.input_schema != remote_input_schema:
+            model.input_schema = remote_input_schema
+            staged_changes = True
+
+        remote_output_schema = remote_info.get("output_schema_fields")
+        if remote_output_schema is not None and model.output_schema != remote_output_schema:
+            model.output_schema = remote_output_schema
             staged_changes = True
 
         metadata = model.metadata if isinstance(model.metadata, dict) else {}
@@ -1260,6 +1483,8 @@ async def sync_model_artifacts(request: Request):
                 registered_model_name=remote_info["model_name"],
                 load_flavor="pyfunc",
                 artifact_path=remote_info["artifact_path"],
+                input_schema=remote_info.get("input_schema_fields"),
+                output_schema=remote_info.get("output_schema_fields"),
                 metadata=metadata_payload,
                 status="active",
             )
