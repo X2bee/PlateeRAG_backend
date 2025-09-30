@@ -594,9 +594,8 @@ async def get_group_available_sections(request: Request, user_id=None):
         if not groups or groups == None or groups == [] or len(groups) == 0:
             return {"available_sections": []}
 
-        groups = [group for group in groups if not group.endswith("__admin__")]
-
         else:
+            groups = [group for group in groups if not group.endswith("__admin__")]
             total_available_sections = []
             for group_name in groups:
                 group = app_db.find_by_condition(GroupMeta, {'group_name': group_name})
