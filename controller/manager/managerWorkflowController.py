@@ -231,7 +231,7 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
 
         app_db = get_db_manager(request)
         manager_id = user_session['user_id']
-        
+
         # 매니저의 그룹 정보 가져오기
         manager_account = app_db.find_by_condition(User, {"id": manager_id})
         manager_groups = manager_account[0].groups if manager_account else []
@@ -240,11 +240,11 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
 
         # 워크플로우 ID 수집: 자신이 만든 것 + admin 그룹에서 공유된 것
         workflow_ids = []
-        
+
         # 1. 자신이 만든 워크플로우
         my_workflow_metas = app_db.find_by_condition(
-            WorkflowMeta, 
-            {"user_id": manager_id if not user_id else user_id}, 
+            WorkflowMeta,
+            {"user_id": manager_id if not user_id else user_id},
             select_columns=["workflow_id"]
         )
         workflow_ids.extend([meta.workflow_id for meta in my_workflow_metas])
@@ -252,8 +252,8 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
         # 2. admin 그룹에서 공유된 워크플로우 (user_id 필터가 없을 때만)
         if admin_groups and not user_id:
             shared_workflow_metas = app_db.find_by_condition(
-                WorkflowMeta, 
-                {"share_group__in__": admin_groups}, 
+                WorkflowMeta,
+                {"share_group__in__": admin_groups},
                 select_columns=["workflow_id"]
             )
             workflow_ids.extend([meta.workflow_id for meta in shared_workflow_metas])
@@ -274,7 +274,7 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
 
         # workflow_id 리스트를 사용하여 조인 쿼리 실행
         db_type = app_db.config_db_manager.db_type
-        
+
         if db_type == "postgresql":
             placeholders = ', '.join(['%s'] * len(workflow_ids))
             query = f"""
