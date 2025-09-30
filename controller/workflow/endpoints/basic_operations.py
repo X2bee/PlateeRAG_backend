@@ -115,6 +115,74 @@ async def list_workflow_versions(request: Request, workflow_name: str, user_id):
         logger.error(f"Error listing workflows: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list workflows: {str(e)}")
 
+@router.post("/rename/workflow")
+async def rename_workflow(request: Request, old_name: str, new_name: str):
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    # 동일한 이름의 workflow가 이미 존재하는지 확인
+    exist_workflow_data = app_db.find_by_condition(
+        WorkflowMeta,
+        {
+            "user_id": user_id,
+            "workflow_name": new_name
+        },
+        limit=1,
+    )
+    if exist_workflow_data and len(exist_workflow_data) > 0:
+        raise HTTPException(status_code=400, detail="A workflow with the new name already exists")
+
+    try:
+        workflow_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": old_name
+            },
+            limit=1,
+        )
+
+        if not workflow_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        workflow_data = workflow_data[0]
+        workflow_data.workflow_name = new_name
+
+        update_response = app_db.update(workflow_data)
+        if not update_response or update_response.get("result") != "success":
+            raise HTTPException(status_code=500, detail="Failed to update workflow name")
+
+        ## workflow version 도 같이 변경 필요. 이 경우 업데이트를 여러개 해야하니 직접 쿼리 작성.
+        query_workflow_version = "UPDATE workflow_version SET workflow_name = %s WHERE user_id = %s AND workflow_meta_id = %s"
+        query_execution_meta = "UPDATE execution_meta SET workflow_name = %s WHERE user_id = %s AND workflow_name = %s"
+        query_execution_io = "UPDATE execution_io SET workflow_name = %s WHERE user_id = %s AND workflow_name = %s"
+        app_db.config_db_manager.execute_update_delete(query_workflow_version, (new_name, user_id, workflow_data.id))
+        app_db.config_db_manager.execute_update_delete(query_execution_meta, (new_name, user_id, old_name))
+        app_db.config_db_manager.execute_update_delete(query_execution_io, (new_name, user_id, old_name))
+
+        deploy_data = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": old_name
+            },
+            limit=1,
+        )
+        if deploy_data and len(deploy_data) > 0:
+            deploy_data = deploy_data[0]
+            deploy_data.workflow_name = new_name
+            app_db.update(deploy_data)
+
+        return {"message": "Workflow renamed successfully", "new_name": new_name}
+
+    except Exception as e:
+        backend_log.error("Failed to rename workflows", exception=e)
+        logger.error(f"Error listing workflows: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list workflows: {str(e)}")
+
 @router.post("/version/change")
 async def update_workflow_version(request: Request, workflow_name: str, version: float):
     user_id = extract_user_id_from_request(request)

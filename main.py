@@ -27,6 +27,7 @@ from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vastController import router as vastRouter
 from controller.promptController import router as promptRouter
+from controller.mcpController import router as mcpRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
@@ -506,6 +507,7 @@ app.include_router(appRouter)
 app.include_router(vastRouter)
 app.include_router(huggingfaceRouter)
 app.include_router(promptRouter)
+app.include_router(mcpRouter)
 
 if __name__ == "__main__":
     try:

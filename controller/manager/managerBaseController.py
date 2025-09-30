@@ -21,3 +21,31 @@ async def get_user_id_from_admin(request: Request) -> Optional[int]:
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
+
+@router.get("/validate/manager")
+async def validate_manager(request: Request):
+    session = require_admin_access(request)
+    user_id = session['user_id']
+    try:
+        app_db = get_db_manager(request)
+        managers = app_db.find_by_condition(
+            User,
+            {
+                "id": user_id,
+                "user_type": "admin"
+            },
+            limit=1
+        )
+
+        if managers:
+            return {"manager": True, "user_id": user_id}
+
+        else:
+            return {"manager": False}
+
+    except Exception as e:
+        logger.error(f"Token refresh error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
