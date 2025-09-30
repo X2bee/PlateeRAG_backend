@@ -22,5 +22,6 @@ echo "[remote-vast] Installing proxy dependencies" >&2
 uv pip install --python "${VAST_ENV}/bin/python" -r remote_vast_server/requirements.txt
 
 export PYTHONPATH="${PYTHONPATH:-/app}"
+export PATH="${VAST_ENV}/bin:${PATH}"
 
 exec "${VAST_ENV}/bin/uvicorn" remote_vast_server.main:app --host "${REMOTE_VAST_HOST}" --port "${REMOTE_VAST_PORT}"

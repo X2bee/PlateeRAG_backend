@@ -26,6 +26,19 @@ logger = logging.getLogger("vast-controller")
 # SSE 연결 관리를 위한 전역 변수
 sse_connections: Dict[str, List[asyncio.Queue]] = {}
 
+
+def _get_proxy_forward_headers(request: Request) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    auth_header = request.headers.get("Authorization")
+    if auth_header:
+        headers["Authorization"] = auth_header
+
+    user_header = request.headers.get("X-User-ID")
+    if user_header:
+        headers["X-User-ID"] = user_header
+
+    return headers
+
 # ========== Enums ==========
 class SortBy(str, Enum):
     price = "price"
@@ -307,7 +320,10 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            result = await service.search_offers(search_request.model_dump())
+            result = await service.search_offers(
+                search_request.model_dump(),
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.success(
                 "Offers searched successfully via proxy",
                 metadata={
@@ -395,7 +411,10 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            result = await service.create_instance(create_request.model_dump())
+            result = await service.create_instance(
+                create_request.model_dump(),
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.success(
                 "Proxy instance creation requested",
                 metadata={
@@ -549,7 +568,10 @@ async def list_instances(
                 "include_destroyed": include_destroyed,
                 "sort_by": sort_by,
             }
-            result = await service.list_instances(params)
+            result = await service.list_instances(
+                params,
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.info(
                 "Proxy instance list retrieved",
                 metadata={
@@ -633,7 +655,10 @@ async def stream_instance_status(request: Request, instance_id: str):
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            return await service.stream_instance_status(instance_id)
+            return await service.stream_instance_status(
+                instance_id,
+                headers=_get_proxy_forward_headers(request)
+            )
 
         db_instance = service.get_instance_from_db(instance_id)
 
@@ -710,7 +735,10 @@ async def get_instance_status(request: Request, instance_id: str):
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            result = await service.get_instance_status(instance_id)
+            result = await service.get_instance_status(
+                instance_id,
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.info(
                 "Proxy instance status retrieved",
                 metadata={"instance_id": instance_id, "status": result.get("status")}
@@ -754,7 +782,10 @@ async def destroy_instance(request: Request, instance_id: str):
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            result = await service.destroy_instance(instance_id)
+            result = await service.destroy_instance(
+                instance_id,
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.success(
                 "Proxy instance destroy requested",
                 metadata={"instance_id": instance_id}
@@ -798,7 +829,10 @@ async def update_instance_ports(request: Request, instance_id: str):
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            result = await service.update_ports(instance_id)
+            result = await service.update_ports(
+                instance_id,
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.success(
                 "Proxy port mapping update requested",
                 metadata={"instance_id": instance_id}
@@ -867,7 +901,11 @@ async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMServeC
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            result = await service.vllm_serve(instance_id, vllm_config.model_dump())
+            result = await service.vllm_serve(
+                instance_id,
+                vllm_config.model_dump(),
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.success(
                 "Proxy VLLM serve requested",
                 metadata={"instance_id": instance_id, "model_name": vllm_config.model_id}
@@ -929,7 +967,10 @@ async def vllm_down(request: Request, instance_id: str):
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            result = await service.vllm_down(instance_id)
+            result = await service.vllm_down(
+                instance_id,
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.success(
                 "Proxy VLLM down requested",
                 metadata={"instance_id": instance_id}
@@ -989,7 +1030,10 @@ async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            result = await service.set_vllm_config(vllm_config.model_dump())
+            result = await service.set_vllm_config(
+                vllm_config.model_dump(),
+                headers=_get_proxy_forward_headers(request)
+            )
             backend_log.success(
                 "Proxy VLLM config updated",
                 metadata={
@@ -1067,7 +1111,10 @@ async def vllm_health_check(request: Request, health_request: VLLMHealthCheckReq
         service = get_vast_service(request)
 
         if isinstance(service, VastProxyClient):
-            return await service.check_vllm_health(health_request.model_dump())
+            return await service.check_vllm_health(
+                health_request.model_dump(),
+                headers=_get_proxy_forward_headers(request)
+            )
 
         vllm_ip = health_request.ip
         vllm_port = health_request.port

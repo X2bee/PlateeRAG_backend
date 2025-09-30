@@ -22,7 +22,7 @@ class VastProxyClient:
         vast_config = config_composer.get_config_by_category_name("vast")
         self._base_url = (vast_config.VAST_PROXY_BASE_URL.value or "").rstrip("/")
         self._timeout = vast_config.VAST_PROXY_TIMEOUT.value or 30
-        self._token = vast_config.VAST_PROXY_API_TOKEN.value or ""
+        self._proxy_token = vast_config.VAST_PROXY_API_TOKEN.value or ""
         self._api_key = getattr(vast_config, "VAST_API_KEY", None)
         if self._api_key is not None and hasattr(self._api_key, "value"):
             self._api_key = self._api_key.value
@@ -34,13 +34,15 @@ class VastProxyClient:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _build_headers(self) -> Dict[str, str]:
+    def _build_headers(self, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         headers: Dict[str, str] = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        if extra_headers:
+            for key, value in extra_headers.items():
+                if value:
+                    headers[key] = value
         return headers
 
     async def _request(
@@ -50,6 +52,7 @@ class VastProxyClient:
         params: Optional[Dict[str, Any]] = None,
         json_body: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Any:
         if not self._base_url:
             raise HTTPException(status_code=500, detail="Vast proxy base URL is not configured")
@@ -58,7 +61,7 @@ class VastProxyClient:
         request_timeout = timeout if timeout is not None else self._timeout
 
         try:
-            async with httpx.AsyncClient(timeout=request_timeout, headers=self._build_headers()) as client:
+            async with httpx.AsyncClient(timeout=request_timeout, headers=self._build_headers(extra_headers)) as client:
                 response = await client.request(method=method, url=url, params=params, json=json_body)
         except httpx.RequestError as exc:
             logger.error("Vast proxy request error: %s", exc)
@@ -92,73 +95,73 @@ class VastProxyClient:
     # ------------------------------------------------------------------
     # Public Vast operations
     # ------------------------------------------------------------------
-    async def search_offers(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def search_offers(self, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("POST", "/api/vast/search-offers", json_body=payload)
+        return await self._request("POST", "/api/vast/search-offers", json_body=payload, extra_headers=headers)
 
-    async def create_instance(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def create_instance(self, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("POST", "/api/vast/instances", json_body=payload)
+        return await self._request("POST", "/api/vast/instances", json_body=payload, extra_headers=headers)
 
     async def health_check(self) -> Dict[str, Any]:
         return await self._request("GET", "/api/vast/health")
 
-    async def list_instances(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def list_instances(self, params: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("GET", "/api/vast/instances", params=params)
+        return await self._request("GET", "/api/vast/instances", params=params, extra_headers=headers)
 
-    async def get_instance_status(self, instance_id: str) -> Dict[str, Any]:
+    async def get_instance_status(self, instance_id: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("GET", f"/api/vast/instances/{instance_id}/status")
+        return await self._request("GET", f"/api/vast/instances/{instance_id}/status", extra_headers=headers)
 
-    async def destroy_instance(self, instance_id: str) -> Dict[str, Any]:
+    async def destroy_instance(self, instance_id: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("DELETE", f"/api/vast/instances/{instance_id}")
+        return await self._request("DELETE", f"/api/vast/instances/{instance_id}", extra_headers=headers)
 
-    async def update_ports(self, instance_id: str) -> Dict[str, Any]:
+    async def update_ports(self, instance_id: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("POST", f"/api/vast/instances/{instance_id}/update-ports")
+        return await self._request("POST", f"/api/vast/instances/{instance_id}/update-ports", extra_headers=headers)
 
-    async def vllm_serve(self, instance_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def vllm_serve(self, instance_id: str, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("POST", f"/api/vast/instances/{instance_id}/vllm-serve", json_body=payload)
+        return await self._request("POST", f"/api/vast/instances/{instance_id}/vllm-serve", json_body=payload, extra_headers=headers)
 
-    async def vllm_down(self, instance_id: str) -> Dict[str, Any]:
+    async def vllm_down(self, instance_id: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("POST", f"/api/vast/instances/{instance_id}/vllm-down")
+        return await self._request("POST", f"/api/vast/instances/{instance_id}/vllm-down", extra_headers=headers)
 
-    async def set_vllm_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def set_vllm_config(self, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("PUT", "/api/vast/set-vllm", json_body=payload)
+        return await self._request("PUT", "/api/vast/set-vllm", json_body=payload, extra_headers=headers)
 
-    async def check_vllm_health(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_vllm_health(self, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("POST", "/api/vast/instances/vllm-health", json_body=payload)
+        return await self._request("POST", "/api/vast/instances/vllm-health", json_body=payload, extra_headers=headers)
 
-    async def list_templates(self) -> Dict[str, Any]:
+    async def list_templates(self, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("GET", "/api/vast/templates")
+        return await self._request("GET", "/api/vast/templates", extra_headers=headers)
 
-    async def create_trainer_instance(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def create_trainer_instance(self, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         await self._ensure_api_key()
-        return await self._request("POST", "/api/train/instances", json_body=payload)
+        return await self._request("POST", "/api/train/instances", json_body=payload, extra_headers=headers)
 
     # ------------------------------------------------------------------
     # SSE support
     # ------------------------------------------------------------------
-    async def stream_instance_status(self, instance_id: str) -> StreamingResponse:
+    async def stream_instance_status(self, instance_id: str, headers: Optional[Dict[str, str]] = None) -> StreamingResponse:
         if not self._base_url:
             raise HTTPException(status_code=500, detail="Vast proxy base URL is not configured")
 
         url = f"{self._base_url}/api/vast/instances/{instance_id}/status-stream"
-        headers = self._build_headers()
+        client_headers = self._build_headers(headers)
         # SSE should not enforce strict timeout; keep-alive from remote
         timeout = httpx.Timeout(None, connect=self._timeout)
 
         await self._ensure_api_key()
 
         async def event_generator() -> AsyncIterator[bytes]:
-            async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+            async with httpx.AsyncClient(timeout=timeout, headers=client_headers) as client:
                 async with client.stream("GET", url) as response:
                     if response.status_code >= 400:
                         detail = self._extract_detail(response)
@@ -188,5 +191,14 @@ class VastProxyClient:
             self._api_key_synced = True
             return
 
-        await self._request("POST", "/api/vast/proxy/api-key", json_body={"api_key": self._api_key})
+        extra_headers = None
+        if self._proxy_token:
+            extra_headers = {"Authorization": f"Bearer {self._proxy_token}"}
+
+        await self._request(
+            "POST",
+            "/api/vast/proxy/api-key",
+            json_body={"api_key": self._api_key},
+            extra_headers=extra_headers,
+        )
         self._api_key_synced = True
