@@ -1131,15 +1131,6 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
 
         delete_count = len(existing_data) if existing_data else 0
 
-        if delete_count == 0:
-            logger.info(f"No logs found to delete for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
-            return JSONResponse(content={
-                "workflow_name": workflow_name,
-                "interaction_id": interaction_id,
-                "deleted_count": 0,
-                "message": "No logs found to delete"
-            })
-
         app_db.delete_by_condition(
             ExecutionIO,
             {
@@ -1156,6 +1147,15 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
                 "interaction_id": interaction_id
             }
         )
+
+        if delete_count == 0:
+            logger.info(f"No logs found to delete for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
+            return JSONResponse(content={
+                "workflow_name": workflow_name,
+                "interaction_id": interaction_id,
+                "deleted_count": 0,
+                "message": "No logs found to delete"
+            })
 
         logger.info(f"Successfully deleted {delete_count} logs for workflow: {workflow_name} ({workflow_id}), interaction_id: {interaction_id}")
 
