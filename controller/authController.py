@@ -587,13 +587,14 @@ async def get_group_available_sections(request: Request, user_id=None):
         groups = user.groups
         user_type = user.user_type
 
-        groups = [group for group in groups if not group.endswith("__admin__")]
 
         if user_type == "superuser":
             return {"available_sections": available_sections}
 
         if not groups or groups == None or groups == [] or len(groups) == 0:
             return {"available_sections": []}
+
+        groups = [group for group in groups if not group.endswith("__admin__")]
 
         else:
             total_available_sections = []
