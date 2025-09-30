@@ -12,8 +12,10 @@ from typing import Dict, Any, Optional, List, Literal
 from enum import Enum
 import json
 import asyncio
+import os
 from urllib import request as urllib_request
 from service.vast.vast_service import VastService
+from service.vast.proxy_client import VastProxyClient
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager, get_vast_service
 from controller.helper.controllerHelper import extract_user_id_from_request
 from service.database.logger_helper import create_logger
@@ -127,6 +129,10 @@ class VLLMHealthCheckRequest(BaseModel):
     ip: str = Field(..., description="VLLM 서비스 IP", example="1.2.3.4")
     port: int = Field(..., description="VLLM 서비스 포트", example=12434)
 
+class ProxyApiKeyRequest(BaseModel):
+    """프록시 환경에서 Vast API 키 전달"""
+    api_key: str = Field(..., description="VastAI API 키")
+
 # ========== Response Models ==========
 class OfferInfo(BaseModel):
     """GPU 오퍼 정보"""
@@ -235,6 +241,8 @@ def _remove_sse_connection(instance_id: str, queue: asyncio.Queue):
 async def health_check(request: Request):
     try:
         service = get_vast_service(request)
+        if isinstance(service, VastProxyClient):
+            return await service.health_check()
         if service:
             return {
                 "status": "healthy",
@@ -244,6 +252,40 @@ async def health_check(request: Request):
     except Exception as e:
         logger.error(f"Health check 실패: {e}")
         raise HTTPException(status_code=503, detail="서비스 사용 불가")
+
+@router.post("/proxy/api-key",
+    summary="프록시용 Vast API 키 설정",
+    description="메인 서버가 보유한 VastAI API 키를 프록시 서버에 동기화합니다.")
+async def update_proxy_api_key(request: Request, payload: ProxyApiKeyRequest):
+    expected_token = os.getenv("VAST_PROXY_API_TOKEN", "").strip()
+    auth_header = request.headers.get("Authorization", "").strip()
+
+    if expected_token:
+        expected_header = f"Bearer {expected_token}"
+        if auth_header != expected_header:
+            logger.warning("Unauthorized proxy API key update attempt")
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        config_composer = get_config_composer(request)
+        update_result = config_composer.update_config("VAST_API_KEY", payload.api_key)
+
+        os.environ["VAST_API_KEY"] = payload.api_key
+
+        logger.info("Proxy API key updated successfully")
+        return {
+            "success": True,
+            "message": "Vast API key updated",
+            "old_value": update_result.get("old_value"),
+            "new_value": update_result.get("new_value"),
+        }
+
+    except KeyError:
+        logger.error("Failed to update proxy API key: config not found")
+        raise HTTPException(status_code=404, detail="VAST_API_KEY configuration not found")
+    except Exception as e:
+        logger.error(f"Failed to update proxy API key: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update proxy API key")
 
 @router.post("/search-offers",
     summary="GPU 오퍼 검색",
@@ -263,6 +305,19 @@ async def search_offers(request: Request, search_request: OfferSearchRequest) ->
 
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            result = await service.search_offers(search_request.model_dump())
+            backend_log.success(
+                "Offers searched successfully via proxy",
+                metadata={
+                    "search_query": result.get("search_query"),
+                    "total_offers": result.get("total"),
+                    "filtered_offers": result.get("filtered_count"),
+                    "sort_by": search_request.sort_by,
+                }
+            )
+            return OfferSearchResponse(**result)
 
         if not service.vast_manager.setup_api_key():
             backend_log.error("VastAI API 키 설정 오류")
@@ -338,6 +393,19 @@ async def create_instance(request: Request, create_request: CreateInstanceReques
 
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            result = await service.create_instance(create_request.model_dump())
+            backend_log.success(
+                "Proxy instance creation requested",
+                metadata={
+                    "template_name": create_request.template_name,
+                    "offer_id": create_request.offer_id,
+                    "instance_id": result.get("instance_id"),
+                }
+            )
+            return result
+
         config_composer = get_config_composer(request)
         vast_config = config_composer.get_config_by_category_name("vast")
 
@@ -475,6 +543,24 @@ async def list_instances(
     try:
         service = get_vast_service(request)
 
+        if isinstance(service, VastProxyClient):
+            params = {
+                "status_filter": status_filter,
+                "include_destroyed": include_destroyed,
+                "sort_by": sort_by,
+            }
+            result = await service.list_instances(params)
+            backend_log.info(
+                "Proxy instance list retrieved",
+                metadata={
+                    "total": result.get("total"),
+                    "status_filter": status_filter,
+                    "include_destroyed": include_destroyed,
+                    "sort_by": sort_by,
+                }
+            )
+            return InstanceListResponse(**result)
+
         # VastAI에서 내가 현재 빌린 인스턴스 목록 조회
         my_active_instance_ids = set()
         try:
@@ -545,6 +631,10 @@ async def stream_instance_status(request: Request, instance_id: str):
     """SSE를 통한 인스턴스 상태 실시간 스트리밍"""
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            return await service.stream_instance_status(instance_id)
+
         db_instance = service.get_instance_from_db(instance_id)
 
         if not db_instance:
@@ -618,6 +708,15 @@ async def get_instance_status(request: Request, instance_id: str):
 
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            result = await service.get_instance_status(instance_id)
+            backend_log.info(
+                "Proxy instance status retrieved",
+                metadata={"instance_id": instance_id, "status": result.get("status")}
+            )
+            return result
+
         db_instance = service.get_instance_from_db(instance_id)
 
         if not db_instance:
@@ -653,6 +752,15 @@ async def destroy_instance(request: Request, instance_id: str):
 
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            result = await service.destroy_instance(instance_id)
+            backend_log.success(
+                "Proxy instance destroy requested",
+                metadata={"instance_id": instance_id}
+            )
+            return result
+
         success = service.destroy_instance(instance_id)
 
         if not success:
@@ -688,6 +796,15 @@ async def update_instance_ports(request: Request, instance_id: str):
 
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            result = await service.update_ports(instance_id)
+            backend_log.success(
+                "Proxy port mapping update requested",
+                metadata={"instance_id": instance_id}
+            )
+            return result
+
         logger.info(f"인스턴스 {instance_id} 포트 매핑 업데이트 시작")
 
         # 개선된 포트 매핑 업데이트 실행
@@ -748,6 +865,15 @@ async def vllm_serve(request: Request, instance_id: str, vllm_config: VLLMServeC
 
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            result = await service.vllm_serve(instance_id, vllm_config.model_dump())
+            backend_log.success(
+                "Proxy VLLM serve requested",
+                metadata={"instance_id": instance_id, "model_name": vllm_config.model_id}
+            )
+            return result
+
         db_instance = service.get_instance_from_db(instance_id)
         port_mappings = db_instance.get_port_mappings_dict()
         controller_url = f"http://{port_mappings.get('12435', {}).get('external_ip')}:{port_mappings.get('12435', {}).get('external_port')}/api/vllm/serve"
@@ -801,6 +927,15 @@ async def vllm_down(request: Request, instance_id: str):
 
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            result = await service.vllm_down(instance_id)
+            backend_log.success(
+                "Proxy VLLM down requested",
+                metadata={"instance_id": instance_id}
+            )
+            return result
+
         db_instance = service.get_instance_from_db(instance_id)
         port_mappings = db_instance.get_port_mappings_dict()
         controller_url = f"http://{port_mappings.get('12435', {}).get('external_ip')}:{port_mappings.get('12435', {}).get('external_port')}/api/vllm/down"
@@ -851,6 +986,19 @@ async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
     backend_log = create_logger(app_db, user_id, request)
 
     try:
+        service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            result = await service.set_vllm_config(vllm_config.model_dump())
+            backend_log.success(
+                "Proxy VLLM config updated",
+                metadata={
+                    "api_base_url": vllm_config.api_base_url,
+                    "model_name": vllm_config.model_name,
+                }
+            )
+            return result
+
         # appController의 update_persistent_config 함수를 import
         from controller.appController import update_persistent_config, ConfigUpdateRequest
 
@@ -916,6 +1064,11 @@ async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
 async def vllm_health_check(request: Request, health_request: VLLMHealthCheckRequest):
     """VLLM 서비스 헬스 체크"""
     try:
+        service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            return await service.check_vllm_health(health_request.model_dump())
+
         vllm_ip = health_request.ip
         vllm_port = health_request.port
 

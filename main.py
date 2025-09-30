@@ -39,6 +39,7 @@ from service.stt.stt_factory import STTFactory
 from service.tts.tts_factory import TTSFactory
 from service.guarder.guarder_factory import GuarderFactory
 from service.vast.vast_service import VastService
+from service.vast.proxy_client import VastProxyClient
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
@@ -306,8 +307,15 @@ async def lifespan(app: FastAPI):
         # 6. vast_service Instance 생성
         print_step_banner(6, "VAST SERVICE SETUP", "Initializing cloud compute management")
         logger.info("⚙️  Step 6: VAST service initialization starting...")
-        app.state.vast_service = VastService(app_db, config_composer)
-        logger.info("✅ Step 6: VAST service initialized successfully!")
+        vast_config = config_composer.get_config_by_category_name("vast")
+        proxy_mode = str(getattr(vast_config, "VAST_PROXY_MODE").value).lower()
+
+        if proxy_mode == "proxy":
+            app.state.vast_service = VastProxyClient(config_composer)
+            logger.info("✅ Step 6: VAST proxy client initialized (mode=proxy)")
+        else:
+            app.state.vast_service = VastService(app_db, config_composer)
+            logger.info("✅ Step 6: VAST service initialized successfully!")
 
         # 7. 워크플로우 실행 매니저 초기화
         print_step_banner(7, "WORKFLOW MANAGER SETUP", "Setting up workflow execution engine")

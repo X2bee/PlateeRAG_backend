@@ -17,6 +17,7 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from service.database.models.train import TrainMeta
+from service.vast.proxy_client import VastProxyClient
 from controller.vastController import CreateInstanceRequest, get_vast_service, _broadcast_status_change
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from controller.helper.controllerHelper import extract_user_id_from_request
@@ -449,6 +450,9 @@ async def stop_training(request: Request, job_id: str):
 async def create_instance(request: Request, create_request: CreateInstanceRequest, background_tasks: BackgroundTasks):
     try:
         service = get_vast_service(request)
+
+        if isinstance(service, VastProxyClient):
+            return await service.create_trainer_instance(create_request.model_dump())
 
         instance_id = service.create_trainer_instance(
             offer_id=create_request.offer_id,

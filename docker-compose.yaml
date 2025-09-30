@@ -11,3 +11,16 @@ services:
       - ./backup/service/eval/eval_job_data:/app/eval_job_data
       - ./backup/downloads:/app/downloads
       - ./backup/constants:/app/constants
+  vast-proxy:
+    build:
+      context: .
+      dockerfile: remote_vast_server/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "${REMOTE_VAST_PORT:-9000}:${REMOTE_VAST_PORT:-9000}"
+    volumes:
+      - ./backup/service/eval/job_data:/app/job_data
+      - ./backup/service/eval/eval_job_data:/app/eval_job_data
+      - ./backup/downloads:/app/downloads
+      - ./backup/constants:/app/constants
