@@ -10,7 +10,7 @@ class GuarderConfig(BaseConfig):
         self.IS_AVAILABLE_GUARDER = self.create_persistent_config(
             env_name="IS_AVAILABLE_GUARDER",
             config_path="guarder.is_available_guarder",
-            default_value=True,
+            default_value=False,
             type_converter=convert_to_bool
         )
         self.GUARDER_RIGOROUS_FILTER = self.create_persistent_config(

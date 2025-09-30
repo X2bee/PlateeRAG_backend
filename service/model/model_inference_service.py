@@ -55,6 +55,7 @@ class ModelInferenceService:
 
     def load_model(self, file_path: str, *, model_record: Optional["MLModel"] = None) -> Any:
         source = self._resolve_source(file_path, model_record)
+        logger.info("[inference-service] Loading model | kind=%s cache_key=%s", source.kind, source.cache_key)
         if source.kind == "mlflow":
             return self._load_mlflow_model(source)
         return self._load_local_model(source)
@@ -115,6 +116,12 @@ class ModelInferenceService:
         if info is None:
             raise RuntimeError("MLflow model metadata missing for remote model load")
 
+        logger.info(
+            "[inference-service] Preparing MLflow load | model_uri=%s run_id=%s artifact_path=%s",
+            info.model_uri,
+            info.run_id,
+            info.artifact_path,
+        )
         revision_key = source.cache_revision or source.cache_key
 
         with self._lock:
@@ -131,7 +138,7 @@ class ModelInferenceService:
             }
 
         logger.info(
-            "Loaded MLflow model %s (tracking URI: %s)",
+            "[inference-service] Loaded MLflow model | uri=%s tracking_uri=%s",
             info.model_uri,
             info.tracking_uri,
         )
@@ -142,6 +149,11 @@ class ModelInferenceService:
         loader = self._select_mlflow_loader(mlflow_module, info.load_flavor)
         load_kwargs = self._resolve_mlflow_load_kwargs(loader, info)
 
+        logger.info(
+            "[inference-service] Invoking MLflow loader | flavor=%s kwargs=%s",
+            info.load_flavor,
+            load_kwargs,
+        )
         with self._mlflow_tracking_context(mlflow_module, info.tracking_uri):
             return loader(info.model_uri, **load_kwargs)
 

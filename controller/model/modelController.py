@@ -98,19 +98,41 @@ def _resolve_mlflow_binding(
     run_id = None
     artifact_path = None
 
+    storage_location = None
+
     if isinstance(model_metadata, dict):
         run_id = model_metadata.get("mlflow_run_id")
         artifact_path = model_metadata.get("mlflow_artifact_path")
+        artifact_uri = model_metadata.get("mlflow_artifact_uri")
+        storage_location = model_metadata.get("mlflow_storage_location")
 
         mlflow_block = model_metadata.get("mlflow")
         if isinstance(mlflow_block, dict):
             run_id = run_id or mlflow_block.get("run_id")
             artifact_path = artifact_path or mlflow_block.get("artifact_path")
+            artifact_uri = artifact_uri or mlflow_block.get("artifact_uri")
+            storage_location = storage_location or mlflow_block.get("storage_location")
 
             additional = mlflow_block.get("additional_metadata")
             if isinstance(additional, dict):
                 run_id = run_id or additional.get("run_id")
                 artifact_path = artifact_path or additional.get("artifact_path")
+                artifact_uri = artifact_uri or additional.get("artifact_uri")
+                storage_location = storage_location or additional.get("storage_location")
+
+        if artifact_uri and not artifact_path:
+            parsed_run, parsed_path = _parse_registered_model_source(str(artifact_uri), run_id=run_id)
+            if parsed_run:
+                run_id = run_id or parsed_run
+            if parsed_path:
+                artifact_path = parsed_path
+
+        if storage_location and not artifact_path:
+            parsed_run, parsed_path = _parse_registered_model_source(str(storage_location), run_id=run_id)
+            if parsed_run:
+                run_id = run_id or parsed_run
+            if parsed_path:
+                artifact_path = parsed_path
 
     if run_id and artifact_path:
         return str(run_id), str(artifact_path)
@@ -164,16 +186,23 @@ def _parse_registered_model_source(
     artifact_path: Optional[str] = None
 
     normalized = source.strip()
+    remainder = normalized
+
     if normalized.startswith("runs:/"):
         remainder = normalized[len("runs:/"):]
     elif normalized.startswith("mlflow-artifacts:/"):
-        remainder = normalized[len("mlflow-artifacts:/"):].lstrip("/")
-    else:
-        remainder = normalized
+        remainder = normalized[len("mlflow-artifacts:/"):]
+    elif "://" in normalized:
+        _, _, remainder = normalized.partition("://")
+
+    remainder = remainder.lstrip("/")
 
     if "/artifacts/" in remainder:
         run_segment, artifact_segment = remainder.split("/artifacts/", 1)
-        parsed_run_id = parsed_run_id or run_segment.strip("/") or None
+        run_segment = run_segment.rstrip("/")
+        last_component = run_segment.split("/")[-1] if run_segment else None
+        if last_component:
+            parsed_run_id = parsed_run_id or last_component
         artifact_path = artifact_segment.strip("/")
     elif "/" in remainder:
         possible_run_id, artifact_segment = remainder.split("/", 1)
@@ -764,22 +793,125 @@ async def run_inference(request: Request, payload: InferenceRequest):
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MODEL_NOT_FOUND")
 
+    logger.info(
+        "[run_inference] Model resolved | model_id=%s name=%s version=%s framework=%s",
+        model_record.id,
+        model_record.model_name,
+        model_record.model_version,
+        model_record.framework,
+    )
+
     mlflow_info = extract_mlflow_info(model_record, model_record.file_path)
+    if mlflow_info:
+        logger.info(
+            "[run_inference] Extracted MLflow info | model_id=%s model_uri=%s run_id=%s artifact_path=%s",
+            model_record.id,
+            mlflow_info.model_uri,
+            mlflow_info.run_id,
+            mlflow_info.artifact_path,
+        )
+    else:
+        logger.warning(
+            "[run_inference] MLflow info missing from metadata | model_id=%s",
+            model_record.id,
+        )
     local_model_path: Optional[str] = None
 
     if mlflow_info and isinstance(mlflow_info.model_uri, str) and mlflow_info.model_uri.startswith(("models:/", "models://")):
-        local_model_path = mlflow_info.model_uri
-        logger.info(
-            "[run_inference] Using MLflow registry URI for inference | user_id=%s model_id=%s uri=%s",
-            user_id,
-            model_record.id,
-            local_model_path,
+        mlflow_service = _get_mlflow_service_or_none(request)
+        if not mlflow_service:
+            logger.error(
+                "[run_inference] MLflow service unavailable for registry download | user_id=%s model_id=%s",
+                user_id,
+                model_record.id,
+            )
+            backend_log.error(
+                "MLflow service unavailable for registry inference",
+                metadata={"model_id": model_record.id},
+            )
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
+
+        raw_metadata = model_record.metadata
+        metadata_dict = raw_metadata if isinstance(raw_metadata, dict) else {}
+        registry_model_name = (
+            mlflow_info.registered_model_name
+            or metadata_dict.get("mlflow_registered_model_name")
+            or model_record.model_name
         )
+        registry_version = mlflow_info.model_version or model_record.model_version
+
+        if not (registry_model_name and registry_version):
+            logger.error(
+                "[run_inference] Registry metadata incomplete | user_id=%s model_id=%s",
+                user_id,
+                model_record.id,
+            )
+            backend_log.error(
+                "Missing registry metadata for inference",
+                metadata={"model_id": model_record.id},
+            )
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_MLFLOW_METADATA_MISSING")
+
+        storage_location = None
+        if mlflow_info and isinstance(mlflow_info.extra, dict):
+            storage_location = (
+                mlflow_info.extra.get("storage_location")
+                or mlflow_info.extra.get("download_uri")
+                or mlflow_info.extra.get("artifact_uri")
+            )
+        if not storage_location and mlflow_info and mlflow_info.run_id:
+            storage_location = mlflow_service.get_storage_location_for_run(mlflow_info.run_id)
+
+        try:
+            downloaded_path = mlflow_service.download_model_version_artifact(
+                registry_model_name,
+                registry_version,
+                artifact_path=None,
+                storage_location=storage_location,
+                run_id=mlflow_info.run_id if mlflow_info else None,
+            )
+            resolved_file = mlflow_service.resolve_model_artifact_path(downloaded_path)
+            if resolved_file.is_dir() and mlflow_info.artifact_path:
+                downloaded_path = mlflow_service.download_model_version_artifact(
+                    registry_model_name,
+                    registry_version,
+                    artifact_path=mlflow_info.artifact_path,
+                    storage_location=storage_location,
+                    run_id=mlflow_info.run_id if mlflow_info else None,
+                )
+                resolved_file = mlflow_service.resolve_model_artifact_path(downloaded_path)
+            local_model_path = str(resolved_file)
+            logger.info(
+                "[run_inference] Downloaded registry model | user_id=%s model_id=%s path=%s",
+                user_id,
+                model_record.id,
+                local_model_path,
+            )
+        except Exception as exc:
+            logger.exception(
+                "[run_inference] Failed to download registry model | user_id=%s model_id=%s",
+                user_id,
+                model_record.id,
+            )
+            backend_log.error(
+                "Failed to download registry model",
+                metadata={
+                    "model_id": model_record.id,
+                    "model_name": registry_model_name,
+                    "model_version": registry_version,
+                },
+                exception=exc,
+            )
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_ARTIFACT_UNAVAILABLE") from exc
     else:
         run_id = mlflow_info.run_id if mlflow_info and mlflow_info.run_id else None
         artifact_path = mlflow_info.artifact_path if mlflow_info and mlflow_info.artifact_path else None
 
         if not (run_id and artifact_path):
+            logger.info(
+                "[run_inference] Falling back to legacy MLflow binding | model_id=%s",
+                model_record.id,
+            )
             resolved_run_id, resolved_artifact_path = _resolve_mlflow_binding(model_record.metadata, model_record.file_path)
             run_id = run_id or resolved_run_id
             artifact_path = artifact_path or resolved_artifact_path
@@ -848,6 +980,11 @@ async def run_inference(request: Request, payload: InferenceRequest):
             inputs=payload.inputs,
             input_schema=model_record.get_input_schema(),
             return_probabilities=payload.return_probabilities,
+        )
+        logger.info(
+            "[run_inference] Prediction finished | model_id=%s records=%s",
+            model_record.id,
+            len(payload.inputs),
         )
     except FileNotFoundError as exc:
         logger.exception(
@@ -967,6 +1104,23 @@ async def sync_model_artifacts(request: Request):
             source = getattr(version, "source", None)
             parsed_run_id, artifact_path = _parse_registered_model_source(source, run_id=run_id_candidate)
 
+            storage_location = getattr(version, "storage_location", None)
+            if storage_location:
+                storage_run_id, storage_artifact_path = _parse_registered_model_source(
+                    storage_location,
+                    run_id=parsed_run_id,
+                )
+                parsed_run_id = parsed_run_id or storage_run_id
+                artifact_path = artifact_path or storage_artifact_path
+
+            download_uri = None
+            if version_str:
+                download_uri = mlflow_service.get_model_version_download_uri(model_name, version_str)
+                if download_uri:
+                    dl_run_id, dl_artifact_path = _parse_registered_model_source(download_uri, run_id=parsed_run_id)
+                    parsed_run_id = parsed_run_id or dl_run_id
+                    artifact_path = artifact_path or dl_artifact_path
+
             if not parsed_run_id or artifact_path is None:
                 logger.warning(
                     "[sync_model_artifacts] Skipping version without resolvable artifact | model=%s version=%s",
@@ -993,6 +1147,8 @@ async def sync_model_artifacts(request: Request):
                 "tags": dict(getattr(version, "tags", {}) or {}),
                 "creation_timestamp": getattr(version, "creation_timestamp", None),
                 "last_updated_timestamp": getattr(version, "last_updated_timestamp", None),
+                "download_uri": download_uri,
+                "storage_location": storage_location,
             }
 
     # Remove models that no longer exist in MLflow registry
@@ -1047,6 +1203,8 @@ async def sync_model_artifacts(request: Request):
                 "tags": remote_info["tags"],
                 "creation_timestamp": remote_info["creation_timestamp"],
                 "last_updated_timestamp": remote_info["last_updated_timestamp"],
+                "download_uri": remote_info.get("download_uri"),
+                "storage_location": remote_info.get("storage_location"),
             },
         }
 
@@ -1073,15 +1231,17 @@ async def sync_model_artifacts(request: Request):
             "mlflow": {
                 "additional_metadata": {
                     "artifact_uri": remote_info["artifact_uri"],
-                    "status": remote_info["status"],
-                    "stage": remote_info["stage"],
-                    "source": remote_info["source"],
-                    "run_link": remote_info["run_link"],
-                    "tags": remote_info["tags"],
-                    "creation_timestamp": remote_info["creation_timestamp"],
-                    "last_updated_timestamp": remote_info["last_updated_timestamp"],
-                }
+                "status": remote_info["status"],
+                "stage": remote_info["stage"],
+                "source": remote_info["source"],
+                "run_link": remote_info["run_link"],
+                "tags": remote_info["tags"],
+                "creation_timestamp": remote_info["creation_timestamp"],
+                "last_updated_timestamp": remote_info["last_updated_timestamp"],
+                "download_uri": remote_info.get("download_uri"),
+                "storage_location": remote_info.get("storage_location"),
             }
+        }
         }
 
         additional_meta = metadata_payload["mlflow"]["additional_metadata"]

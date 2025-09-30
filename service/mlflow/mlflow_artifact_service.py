@@ -192,6 +192,138 @@ class MLflowArtifactService:
                 break
         return collected
 
+    def get_model_version_download_uri(self, model_name: str, version: str) -> Optional[str]:
+        try:
+            return self.client.get_model_version_download_uri(model_name, str(version))
+        except Exception as exc:  # pragma: no cover - depends on backend permissions
+            LOGGER.warning(
+                "Failed to fetch model version download URI | model=%s version=%s error=%s",
+                model_name,
+                version,
+                exc,
+            )
+            return None
+
+    def get_storage_location_for_run(self, run_id: str) -> Optional[str]:
+        try:
+            versions = self.client.search_model_versions(f"run_id='{run_id}'", max_results=50)
+        except Exception as exc:  # pragma: no cover - backend failure
+            LOGGER.warning("Failed to lookup model versions for run %s: %s", run_id, exc)
+            return None
+
+        for version in versions:
+            storage_location = getattr(version, "storage_location", None)
+            if storage_location:
+                return storage_location
+            source = getattr(version, "source", None)
+            if source:
+                return source
+        return None
+
+    def download_model_version_artifact(
+        self,
+        model_name: str,
+        version: str,
+        *,
+        artifact_path: Optional[str] = None,
+        storage_location: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> Path:
+        """Download artifacts for a registered model version into the cache."""
+
+        cache_root = self.cache_dir / "registry" / model_name / str(version)
+        cache_root.mkdir(parents=True, exist_ok=True)
+        relative_path = (artifact_path or "").strip("/")
+
+        candidate_uris: List[str] = []
+        if storage_location:
+            candidate_uris.append(storage_location.rstrip("/"))
+        download_uri = self.get_model_version_download_uri(model_name, version)
+        if download_uri:
+            normalized = download_uri.rstrip("/")
+            if normalized not in candidate_uris:
+                candidate_uris.append(normalized)
+
+        for base_uri in candidate_uris:
+            combined_uri = base_uri
+            if relative_path:
+                combined_uri = f"{combined_uri}/{relative_path}"
+            target_dir = cache_root / hashlib.sha1(combined_uri.encode("utf-8")).hexdigest()
+            target_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                resolved_path = Path(
+                    mlflow.artifacts.download_artifacts(
+                        artifact_uri=combined_uri,
+                        dst_path=str(target_dir),
+                    )
+                )
+            except MlflowException as exc:
+                LOGGER.warning(
+                    "Failed to download registry artifact | model=%s version=%s uri=%s error=%s",
+                    model_name,
+                    version,
+                    combined_uri,
+                    exc,
+                )
+                continue
+
+            if resolved_path.exists():
+                return resolved_path
+
+        if run_id:
+            target_dir = cache_root / "run"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                resolved_path = Path(
+                    self.client.download_artifacts(
+                        run_id,
+                        relative_path or "",
+                        dst_path=str(target_dir),
+                    )
+                )
+                if resolved_path.exists():
+                    return resolved_path
+            except MlflowException as exc:
+                LOGGER.warning(
+                    "Failed to download run artifact | run_id=%s path=%s error=%s",
+                    run_id,
+                    relative_path,
+                    exc,
+                )
+
+        raise FileNotFoundError(
+            f"Failed to download model version artifacts for {model_name}:{version}"
+        )
+
+    @staticmethod
+    def resolve_model_artifact_path(base_path: Path) -> Path:
+        """Pick the most likely model file within a downloaded artifact directory."""
+
+        if base_path.is_file():
+            return base_path
+
+        direct_candidates = [
+            base_path / "model.pkl",
+            base_path / "model.joblib",
+            base_path / "model.bin",
+        ]
+        for candidate in direct_candidates:
+            if candidate.exists():
+                return candidate
+
+        for pattern in ("model.pkl", "model.joblib", "model.bin"):
+            try:
+                found = next(base_path.rglob(pattern))
+                return found
+            except StopIteration:
+                continue
+
+        mlmodel = base_path / "MLmodel"
+        if mlmodel.exists():
+            return mlmodel.parent
+
+        return base_path
+
     # ------------------------------------------------------------------
     # Local cache helpers
     # ------------------------------------------------------------------
