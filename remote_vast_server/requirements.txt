@@ -1,0 +1,14 @@
+fastapi==0.116.1
+uvicorn==0.35.0
+httpx==0.28.1
+httpx-sse==0.4.1
+pydantic==2.11.7
+pydantic-core==2.33.2
+pydantic-settings==2.10.1
+sqlalchemy==2.0.41
+psycopg2-binary==2.9.10
+python-dotenv==1.1.1
+requests==2.32.4
+tenacity==9.1.2
+typing-extensions==4.14.1
+vastai==0.3.1

@@ -18,7 +18,8 @@ COPY constants ./constants
 COPY service ./service
 COPY remote_vast_server ./remote_vast_server
 
-# Prepare the runtime script
 RUN chmod +x remote_vast_server/run_remote_vast.sh
+
+COPY remote_vast_server/requirements.txt ./remote_vast_server/requirements.txt
 
 CMD ["bash", "remote_vast_server/run_remote_vast.sh"]
