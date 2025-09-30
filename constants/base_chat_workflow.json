@@ -235,17 +235,6 @@
             "step": 1
           },
           {
-            "id": "n_messages",
-            "name": "Max Memory",
-            "type": "INT",
-            "value": 3,
-            "required": false,
-            "optional": true,
-            "min": 1,
-            "max": 10,
-            "step": 1
-          },
-          {
             "id": "base_url",
             "name": "Base URL",
             "type": "STRING",
