@@ -22,12 +22,22 @@ async def get_all_groups(request: Request):
 
     try:
         groups = []
-        for group_name in manager_groups:
-            group_meta = app_db.find_by_condition(GroupMeta, {"group_name": group_name})
+        # __admin__으로 끝나는 그룹만 필터링
+        admin_groups = [group for group in manager_groups if group.endswith("__admin__")]
+
+        for admin_group_name in admin_groups:
+            # __admin__ 접미사를 제거하여 실제 그룹명 얻기
+            actual_group_name = admin_group_name.replace("__admin__", "")
+
+            # 실제 그룹 정보 조회
+            group_meta = app_db.find_by_condition(GroupMeta, {"group_name": actual_group_name})
             if group_meta:
                 groups.extend(group_meta)
+            else:
+                logger.warning(f"Group not found for admin group: {admin_group_name} -> {actual_group_name}")
 
-        backend_log.success("Successfully fetched all groups")
+        backend_log.success("Successfully fetched all groups",
+                          metadata={"admin_groups": admin_groups, "returned_groups": len(groups)})
         return {"groups": groups}
     except Exception as e:
         backend_log.error("Error fetching manager groups", exception=e)
@@ -50,8 +60,10 @@ async def get_group_users(request: Request, group_name: str):
 
         manager_account = app_db.find_by_condition(User, {"id": manager_user_id})
         manager_groups = manager_account[0].groups
+        admin_groups = [group for group in manager_groups if group.endswith("__admin__")]
+        admin_groups = [group.replace("__admin__", "") for group in admin_groups]
 
-        if group_name not in manager_groups:
+        if group_name not in admin_groups:
             backend_log.warn(f"Access denied to group: {group_name}")
             raise HTTPException(
                 status_code=403,
@@ -90,8 +102,10 @@ async def delete_group(request: Request, group_name: str):
 
     manager_account = app_db.find_by_condition(User, {"id": manager_user_id})
     manager_groups = manager_account[0].groups
-
-    if group_name not in manager_groups:
+    admin_groups = [group for group in manager_groups if group.endswith("__admin__")]
+    admin_groups = [group.replace("__admin__", "") for group in admin_groups]
+    
+    if group_name not in admin_groups:
         backend_log.warn(f"Access denied to delete group: {group_name}")
         raise HTTPException(
             status_code=403,

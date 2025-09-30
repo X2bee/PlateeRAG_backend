@@ -587,6 +587,8 @@ async def get_group_available_sections(request: Request, user_id=None):
         groups = user.groups
         user_type = user.user_type
 
+        groups = [group for group in groups if not group.endswith("__admin__")]
+
         if user_type == "superuser":
             return {"available_sections": available_sections}
 
@@ -599,12 +601,13 @@ async def get_group_available_sections(request: Request, user_id=None):
                 group = app_db.find_by_condition(GroupMeta, {'group_name': group_name})
                 if group:
                     group = group[0]
-                    total_available_sections.extend(group.available_sections)
+                    # available_sections가 None이 아닌 경우에만 extend
+                    if group.available_sections is not None:
+                        total_available_sections.extend(group.available_sections)
+                    else:
+                        logger.info(f"Group {group_name} has no available_sections (None)")
                 else:
-                    raise HTTPException(
-                        status_code=404,
-                        detail="Group not found"
-                    )
+                    logger.warning(f"Group not found: {group_name}")
 
             if user_type == "admin":
                 total_available_sections.extend(["manager-page"])
