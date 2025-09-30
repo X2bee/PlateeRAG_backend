@@ -146,6 +146,8 @@ async def get_prompt_list(
             }
             prompt_list.append(prompt_data)
 
+        prompt_list.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+
         response_data = {
             "prompts": prompt_list,
             "total_count": len(prompt_list),
