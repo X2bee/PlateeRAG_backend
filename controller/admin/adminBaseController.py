@@ -79,17 +79,20 @@ async def validate_superuser(request: Request):
     user_id = session['user_id']
     try:
         app_db = get_db_manager(request)
-        super_users = app_db.find_by_condition(
+        user_info = app_db.find_by_condition(
             User,
             {
                 "id": user_id,
-                "user_type": "superuser"
             },
             limit=1
         )
+        user_info = user_info[0] if user_info and len(user_info) > 0 else None
 
-        if super_users:
+        if user_info.user_type == "superuser":
             return {"superuser": True, "user_id": user_id}
+
+        elif user_info.user_type == "admin" and user_info.available_admin_sections is not None and user_info.available_admin_sections != []:
+            return {"superuser": True, "user_id": user_id, "available_admin_sections": user_info.available_admin_sections}
 
         else:
             return {"superuser": False}

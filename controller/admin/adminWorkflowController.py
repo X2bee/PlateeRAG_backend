@@ -141,7 +141,7 @@ async def get_io_logs_by_id(request: Request, user_id = None, workflow_name: str
         ) from e
 
 @router.get("/all-io-logs")
-async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: int = 250, user_id = None, workflow_id: str = None):
+async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: int = 250, user_id = None, workflow_id: str = None, workflow_name: str = None):
     val_superuser = await validate_superuser(request)
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
@@ -150,7 +150,6 @@ async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: in
         )
 
     try:
-        # 페이지 번호 검증
         if page < 1:
             page = 1
         if page_size < 1 or page_size > 1000:
@@ -166,6 +165,8 @@ async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: in
             conditions['user_id'] = user_id
         if workflow_id:
             conditions['workflow_id'] = workflow_id
+        if workflow_name:
+            conditions['workflow_name'] = workflow_name
 
         io_logs_result = app_db.find_by_condition(
             ExecutionIO,
