@@ -204,6 +204,37 @@ class MLflowArtifactService:
             )
             return None
 
+    def transition_model_stage(
+        self,
+        model_name: str,
+        version: str,
+        *,
+        stage: str,
+        archive_existing_versions: bool = False,
+    ) -> None:
+        stage_normalized = stage.strip()
+        LOGGER.info(
+            "Transitioning MLflow model stage | model=%s version=%s stage=%s archive_existing=%s",
+            model_name,
+            version,
+            stage_normalized,
+            archive_existing_versions,
+        )
+        self.client.transition_model_version_stage(
+            name=model_name,
+            version=str(version),
+            stage=stage_normalized,
+            archive_existing_versions=archive_existing_versions,
+        )
+
+    def delete_model_version(self, model_name: str, version: str) -> None:
+        LOGGER.info(
+            "Deleting MLflow model version | model=%s version=%s",
+            model_name,
+            version,
+        )
+        self.client.delete_model_version(name=model_name, version=str(version))
+
     def get_storage_location_for_run(self, run_id: str) -> Optional[str]:
         try:
             versions = self.client.search_model_versions(f"run_id='{run_id}'", max_results=50)

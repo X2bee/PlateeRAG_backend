@@ -30,6 +30,13 @@ ALLOWED_EXTENSIONS = {".pkl", ".joblib"}
 DEFAULT_FRAMEWORK = "sklearn"
 _inference_service = ModelInferenceService()
 
+_MLFLOW_STAGE_MAP = {
+    "none": "None",
+    "staging": "Staging",
+    "production": "Production",
+    "archived": "Archived",
+}
+
 class InferenceRequest(BaseModel):
     model_id: Optional[int] = Field(default=None, description="등록된 모델의 ID")
     model_name: Optional[str] = Field(default=None, description="등록된 모델 이름")
@@ -50,6 +57,24 @@ class InferenceRequest(BaseModel):
             raise ValueError("Either model_id or model_name must be provided")
         return self
 
+
+class ModelStageUpdateRequest(BaseModel):
+    stage: str = Field(..., description="변경할 MLflow 모델 Stage (None, Staging, Production, Archived)")
+    archive_existing_versions: bool = Field(
+        default=False,
+        description="Production 단계로 변경 시 기존 Production 버전을 Archived 상태로 전환할지 여부",
+    )
+
+    @field_validator("stage")
+    @classmethod
+    def validate_stage(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Stage must be a string")
+        normalized = value.strip().lower()
+        stage = _MLFLOW_STAGE_MAP.get(normalized)
+        if not stage:
+            raise ValueError("Stage must be one of: None, Staging, Production, Archived")
+        return stage
 
 def _sanitize_name(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", value).strip("_.")
@@ -1536,6 +1561,165 @@ async def sync_model_artifacts(request: Request):
     }
 
 
+@router.post("/{model_id}/stage")
+async def update_model_stage(
+    request: Request,
+    model_id: int,
+    payload: ModelStageUpdateRequest,
+):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, _coerce_user_id(user_id), request)
+
+    logger.info(
+        "[update_model_stage] Stage change requested | user_id=%s model_id=%s target_stage=%s",
+        user_id,
+        model_id,
+        payload.stage,
+    )
+
+    registry_service = ModelRegistryService(app_db)
+    model = registry_service.get_model_by_id(model_id)
+    if not model:
+        logger.warning(
+            "[update_model_stage] Model not found | user_id=%s model_id=%s",
+            user_id,
+            model_id,
+        )
+        backend_log.warn(
+            "Stage update requested for missing model",
+            metadata={"model_id": model_id},
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="MODEL_NOT_FOUND")
+
+    mlflow_service = _get_mlflow_service_or_none(request)
+    if not mlflow_service:
+        logger.error(
+            "[update_model_stage] MLflow service unavailable | user_id=%s model_id=%s",
+            user_id,
+            model_id,
+        )
+        backend_log.error("MLflow service unavailable for stage update")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
+
+    mlflow_info = extract_mlflow_info(model, model.file_path)
+    metadata_payload = _build_mlflow_metadata_payload(model)
+
+    registered_model_name = None
+    if mlflow_info and mlflow_info.registered_model_name:
+        registered_model_name = mlflow_info.registered_model_name
+    elif metadata_payload.get("registered_model_name"):
+        registered_model_name = metadata_payload["registered_model_name"]
+    additional_meta = metadata_payload.get("additional_metadata") if metadata_payload else None
+
+    model_version = None
+    if mlflow_info and mlflow_info.model_version:
+        model_version = mlflow_info.model_version
+    elif metadata_payload.get("model_version"):
+        model_version = metadata_payload["model_version"]
+    elif model.model_version:
+        model_version = model.model_version
+
+    if not registered_model_name or not model_version:
+        logger.error(
+            "[update_model_stage] Missing registry identifiers | user_id=%s model_id=%s",
+            user_id,
+            model_id,
+        )
+        backend_log.error(
+            "Stage update unsupported; missing registry identifiers",
+            metadata={"model_id": model_id},
+        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="MODEL_STAGE_UPDATE_UNAVAILABLE")
+
+    previous_stage = None
+    if isinstance(additional_meta, dict):
+        previous_stage = additional_meta.get("stage")
+
+    try:
+        mlflow_service.transition_model_stage(
+            model_name=registered_model_name,
+            version=model_version,
+            stage=payload.stage,
+            archive_existing_versions=payload.archive_existing_versions,
+        )
+    except Exception as exc:  # pragma: no cover - depends on MLflow backend
+        logger.exception(
+            "[update_model_stage] Failed to transition stage | user_id=%s model_id=%s",
+            user_id,
+            model_id,
+        )
+        backend_log.error(
+            "Failed to transition MLflow stage",
+            metadata={
+                "model_id": model_id,
+                "model_name": registered_model_name,
+                "model_version": model_version,
+                "stage": payload.stage,
+            },
+            exception=exc,
+        )
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_STAGE_TRANSITION_FAILED") from exc
+
+    metadata_dict: Dict[str, Any]
+    metadata_dict = model.metadata if isinstance(model.metadata, dict) else {}
+    mlflow_meta = metadata_dict.get("mlflow")
+    if not isinstance(mlflow_meta, dict):
+        mlflow_meta = {}
+    additional = mlflow_meta.get("additional_metadata")
+    if not isinstance(additional, dict):
+        additional = {}
+    additional["stage"] = payload.stage
+    mlflow_meta["additional_metadata"] = {
+        key: value for key, value in additional.items() if value not in (None, {}, [])
+    }
+    mlflow_meta.setdefault("registered_model_name", registered_model_name)
+    mlflow_meta.setdefault("model_version", model_version)
+    metadata_dict["mlflow"] = mlflow_meta
+    model.metadata = metadata_dict
+
+    if not registry_service.update_model(model):
+        logger.error(
+            "[update_model_stage] Failed to persist stage | user_id=%s model_id=%s",
+            user_id,
+            model_id,
+        )
+        backend_log.error(
+            "Failed to persist stage change",
+            metadata={"model_id": model_id},
+        )
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="MODEL_STAGE_UPDATE_FAILED")
+
+    updated_metadata = _build_mlflow_metadata_payload(model)
+
+    logger.info(
+        "[update_model_stage] Stage updated | user_id=%s model_id=%s stage=%s",
+        user_id,
+        model_id,
+        payload.stage,
+    )
+    backend_log.success(
+        "Model stage updated",
+        metadata={
+            "model_id": model_id,
+            "target_stage": payload.stage,
+            "previous_stage": previous_stage,
+            "archive_existing_versions": payload.archive_existing_versions,
+        },
+    )
+
+    return {
+        "model_id": model.id,
+        "model_name": model.model_name,
+        "model_version": model.model_version,
+        "registered_model_name": registered_model_name,
+        "stage": payload.stage,
+        "previous_stage": previous_stage,
+        "archive_existing_versions": payload.archive_existing_versions,
+        "mlflow_metadata": updated_metadata,
+    }
+
+
 @router.delete("/{model_id}")
 async def delete_model(request: Request, model_id: int):
     user_id = extract_user_id_from_request(request)
@@ -1562,21 +1746,124 @@ async def delete_model(request: Request, model_id: int):
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MODEL_NOT_FOUND")
 
-    run_id, artifact_path = _resolve_mlflow_binding(existing.metadata, existing.file_path)
-    if run_id and artifact_path:
-        mlflow_service = _get_mlflow_service_or_none(request)
-        if not mlflow_service:
+    metadata_payload = _build_mlflow_metadata_payload(existing)
+    additional_meta = metadata_payload.get("additional_metadata") if isinstance(metadata_payload, dict) else None
+    current_stage = None
+    if isinstance(additional_meta, dict):
+        stage_value = additional_meta.get("stage")
+        if isinstance(stage_value, str):
+            current_stage = stage_value.strip()
+
+    if current_stage and current_stage.lower() == "production":
+        logger.warning(
+            "[delete_model] Deletion blocked due to Production stage | user_id=%s model_id=%s",
+            user_id,
+            model_id,
+        )
+        backend_log.warn(
+            "Attempted deletion of Production stage model",
+            metadata={"model_id": model_id, "stage": current_stage},
+        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="MODEL_STAGE_DELETE_BLOCKED")
+
+    mlflow_service = None
+    try:
+        mlflow_service = get_mlflow_service(request)
+    except HTTPException:
+        mlflow_service = None
+
+    mlflow_info = extract_mlflow_info(existing, existing.file_path)
+
+    run_id = None
+    artifact_path = None
+    if mlflow_info and mlflow_info.run_id and mlflow_info.artifact_path is not None:
+        run_id = mlflow_info.run_id
+        artifact_path = mlflow_info.artifact_path
+    else:
+        fallback_run_id, fallback_artifact = _resolve_mlflow_binding(existing.metadata, existing.file_path)
+        run_id = fallback_run_id
+        artifact_path = fallback_artifact
+
+    is_registry_model = False
+    registry_model_name: Optional[str] = None
+    registry_version: Optional[str] = None
+
+    if mlflow_info and (mlflow_info.registered_model_name or (mlflow_info.model_uri and mlflow_info.model_uri.startswith("models:/"))):
+        registry_model_name = mlflow_info.registered_model_name or existing.model_name
+        registry_version = mlflow_info.model_version or existing.model_version
+        is_registry_model = True
+    elif isinstance(metadata_payload, dict):
+        registry_model_name = metadata_payload.get("registered_model_name") or existing.model_name
+        registry_version = metadata_payload.get("model_version") or existing.model_version
+        if metadata_payload.get("model_uri", "").startswith("models:/"):
+            is_registry_model = True
+
+    if is_registry_model:
+        if not registry_model_name or not registry_version:
             logger.error(
-                "[delete_model] MLflow service unavailable; cannot delete artifact | user_id=%s model_id=%s",
+                "[delete_model] Missing registry identifiers for delete | user_id=%s model_id=%s",
                 user_id,
                 model_id,
             )
             backend_log.error(
-                "MLflow service unavailable; remote artifact not deleted",
-                metadata={"model_id": model_id, "run_id": run_id},
+                "Registry delete failed; missing identifiers",
+                metadata={"model_id": model_id},
+            )
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="MODEL_DELETE_METADATA_MISSING")
+
+        if not mlflow_service:
+            logger.error(
+                "[delete_model] MLflow service unavailable for registry delete | user_id=%s model_id=%s",
+                user_id,
+                model_id,
+            )
+            backend_log.error(
+                "MLflow service unavailable; cannot delete model version",
+                metadata={"model_id": model_id, "registered_model_name": registry_model_name, "model_version": registry_version},
             )
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
 
+        try:
+            mlflow_service.delete_model_version(registry_model_name, registry_version)
+            logger.info(
+                "[delete_model] Deleted MLflow registry version | user_id=%s model_id=%s model=%s version=%s",
+                user_id,
+                model_id,
+                registry_model_name,
+                registry_version,
+            )
+        except Exception as exc:  # pragma: no cover - depends on MLflow backend
+            logger.exception(
+                "[delete_model] Failed to delete MLflow model version | user_id=%s model_id=%s model=%s version=%s",
+                user_id,
+                model_id,
+                registry_model_name,
+                registry_version,
+            )
+            backend_log.error(
+                "Failed to delete MLflow model version",
+                metadata={
+                    "model_id": model_id,
+                    "model_name": registry_model_name,
+                    "model_version": registry_version,
+                },
+                exception=exc,
+            )
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_MODEL_VERSION_DELETE_FAILED") from exc
+
+    if run_id and artifact_path and not mlflow_service and not is_registry_model:
+        logger.error(
+            "[delete_model] MLflow service unavailable; cannot delete artifact | user_id=%s model_id=%s",
+            user_id,
+            model_id,
+        )
+        backend_log.error(
+            "MLflow service unavailable; remote artifact not deleted",
+            metadata={"model_id": model_id, "run_id": run_id},
+        )
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_SERVICE_UNAVAILABLE")
+
+    if run_id and artifact_path and mlflow_service:
         try:
             mlflow_service.delete_artifact(run_id, artifact_path)
             logger.info(
@@ -1587,25 +1874,22 @@ async def delete_model(request: Request, model_id: int):
                 artifact_path,
             )
         except Exception as exc:
-            logger.exception(
-                "[delete_model] Failed to delete MLflow artifact | user_id=%s model_id=%s run_id=%s path=%s",
+            logger.warning(
+                "[delete_model] Failed to delete MLflow artifact (continuing) | user_id=%s model_id=%s run_id=%s path=%s error=%s",
                 user_id,
                 model_id,
                 run_id,
                 artifact_path,
+                exc,
             )
-            backend_log.error("Failed to delete MLflow artifact", exception=exc)
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="MLFLOW_DELETE_FAILED") from exc
-    else:
-        logger.warning(
-            "[delete_model] MLflow binding missing; deleting registry entry only | user_id=%s model_id=%s",
-            user_id,
-            model_id,
-        )
-        backend_log.warn(
-            "Model metadata missing MLflow binding during delete",
-            metadata={"model_id": model_id},
-        )
+            backend_log.warn(
+                "Failed to delete MLflow artifact during model delete",
+                metadata={
+                    "model_id": model_id,
+                    "run_id": run_id,
+                    "artifact_path": artifact_path,
+                },
+            )
 
     try:
         deleted = deletion_service.delete(
