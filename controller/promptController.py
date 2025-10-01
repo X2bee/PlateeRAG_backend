@@ -13,7 +13,7 @@ import uuid
 
 from service.database.models.prompts import Prompts
 from controller.helper.singletonHelper import get_db_manager
-from controller.helper.controllerHelper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request, require_admin_access
 from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("prompt-controller")
@@ -23,6 +23,16 @@ class CreatePromptRequest(BaseModel):
     prompt_title: str
     prompt_content: str
     public_available: bool = False
+    language: Optional[str] = "ko"
+
+class DeletePromptRequest(BaseModel):
+    prompt_uid: str
+
+class UpdatePromptRequest(BaseModel):
+    prompt_uid: str
+    prompt_title: Optional[str] = None
+    prompt_content: Optional[str] = None
+    public_available: Optional[bool] = None
     language: Optional[str] = "ko"
 
 @router.get("/list")
@@ -108,6 +118,8 @@ async def get_prompt_list(
                 "is_template": prompt.is_template,
                 "language": prompt.language,
                 "user_id": prompt.user_id,
+                "username": None,
+                "full_name": None,
                 "created_at": prompt.created_at,
                 "updated_at": prompt.updated_at,
                 "metadata": prompt.metadata,
@@ -146,6 +158,11 @@ async def get_prompt_list(
             }
             prompt_list.append(prompt_data)
 
+        # id 기준 중복 제거 (딕셔너리 사용)
+        unique_prompts = {prompt['id']: prompt for prompt in prompt_list}.values()
+        prompt_list = list(unique_prompts)
+
+        # updated_at 기준 최신순 정렬
         prompt_list.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
 
         response_data = {
@@ -261,6 +278,124 @@ async def create_prompt(
             )
             raise HTTPException(status_code=500, detail="Failed to create prompt")
 
+    except Exception as e:
+        backend_log.error(
+            "Failed to create prompt",
+            exception=e,
+            metadata={
+                "prompt_title": prompt_data.prompt_title,
+                "user_id": user_id,
+            },
+        )
+        logger.error("Error creating prompt: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create prompt")
+
+@router.delete("/delete")
+async def delete_prompt(
+    request: Request,
+    prompt_data: DeletePromptRequest
+):
+    """프롬프트를 삭제합니다."""
+    try:
+        user_id = extract_user_id_from_request(request)
+    except:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    backend_log.info(
+        "Deleting prompt",
+        metadata={
+            "prompt_title": prompt_data.prompt_title,
+            "public_available": prompt_data.public_available,
+            "language": prompt_data.language,
+        },
+    )
+
+    try:
+        prompt_data = app_db.find_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id}, limit=1)
+        if not prompt_data:
+            backend_log.warn(
+                "Prompt not found or access denied",
+                metadata={"prompt_uid": prompt_data.prompt_uid, "user_id": user_id},
+            )
+            raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+        delete_result = app_db.delete_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id})
+        if delete_result and delete_result.get("result") == "success":
+            backend_log.success(
+                "Successfully deleted prompt",
+                metadata={
+                    "prompt_uid": prompt_data.prompt_uid,
+                    "user_id": user_id,
+                },
+            )
+            return {
+                "success": True,
+                "message": "Prompt deleted successfully"
+            }
+
+    except Exception as e:
+        backend_log.error(
+            "Failed to create prompt",
+            exception=e,
+            metadata={
+                "prompt_title": prompt_data.prompt_title,
+                "user_id": user_id,
+            },
+        )
+        logger.error("Error creating prompt: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create prompt")
+
+@router.post("/update")
+async def update_prompt(
+    request: Request,
+    prompt_data: UpdatePromptRequest
+):
+    """프롬프트를 업데이트합니다."""
+    try:
+        user_id = extract_user_id_from_request(request)
+    except:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    backend_log.info(
+        "Updating prompt",
+        metadata={
+            "prompt_title": prompt_data.prompt_title,
+            "public_available": prompt_data.public_available,
+            "language": prompt_data.language,
+        },
+    )
+
+    try:
+        exist_prompt_data = app_db.find_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id}, limit=1)
+        if not exist_prompt_data:
+            backend_log.warn(
+                "Prompt not found or access denied",
+                metadata={"prompt_uid": prompt_data.prompt_uid, "user_id": user_id},
+            )
+            raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+
+        exist_prompt_data = exist_prompt_data[0]
+        exist_prompt_data.prompt_title = prompt_data.prompt_title if prompt_data.prompt_title is not None else exist_prompt_data.prompt_title
+        exist_prompt_data.prompt_content = prompt_data.prompt_content if prompt_data.prompt_content is not None else exist_prompt_data.prompt_content
+        exist_prompt_data.public_available = prompt_data.public_available if prompt_data.public_available is not None else exist_prompt_data.public_available
+        exist_prompt_data.language = prompt_data.language if prompt_data.language is not None else exist_prompt_data.language
+        app_db.update(exist_prompt_data)
+        backend_log.success(
+            "Successfully updated prompt",
+            metadata={
+                "prompt_uid": prompt_data.prompt_uid,
+                "user_id": user_id,
+            },
+        )
+        return {
+            "success": True,
+            "message": "Prompt updated successfully"
+        }
     except Exception as e:
         backend_log.error(
             "Failed to create prompt",
