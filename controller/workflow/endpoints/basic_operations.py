@@ -10,7 +10,7 @@ import secrets
 import string
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from controller.helper.controllerHelper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request, require_admin_access
 from controller.helper.singletonHelper import get_db_manager, get_config_composer
 from controller.workflow.models.requests import SaveWorkflowRequest
 from service.database.models.executor import ExecutionMeta, ExecutionIO
@@ -636,33 +636,6 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
         app_db = get_db_manager(request)
         using_id = workflow_user_id_extractor(app_db, login_user_id, user_id, workflow_name)
 
-        # origin_path_id = os.path.join(downloads_path, using_id)
-        # target_path_id = os.path.join(downloads_path, login_user_id)
-
-        # filename = f"{workflow_name}.json"
-        # origin_path = os.path.join(origin_path_id, filename)
-
-        # if not os.path.exists(origin_path):
-        #     logger.info(f"Reading workflow data from: {origin_path}")
-        #     raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
-
-        # copy_workflow_name = f"{workflow_name}_copy"
-        # copy_file_name = f"{copy_workflow_name}.json"
-        # target_path = os.path.join(copy_workflow_name, filename)
-
-        # if os.path.exists(target_path):
-        #     logger.warning(f"Workflow already exists for user '{login_user_id}': {filename}. Change target file name.")
-        #     counter = 1
-        #     while os.path.exists(target_path):
-        #         copy_workflow_name = f"{workflow_name}_copy_{counter}"
-        #         copy_file_name = f"{copy_workflow_name}.json"
-        #         target_path = os.path.join(target_path_id, copy_file_name)
-        #         counter += 1
-
-        # with open(origin_path, 'r', encoding='utf-8') as f:
-        #     logger.info(f"Reading workflow data from: {origin_path}")
-        #     workflow_data = json.load(f)
-
         workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": using_id, "workflow_name": workflow_name}, limit=1)
         workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
         if isinstance(workflow_data, str):
@@ -708,7 +681,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
         if insert_result and insert_result.get("result") == "success":
             # copy 데이터의 Deploy metadata 생성
             deploy_meta = DeployMeta(
-                user_id=user_id,
+                user_id=login_user_id,
                 workflow_id=workflow_data.get('workflow_id'),
                 workflow_name=copy_workflow_name,
                 is_deployed=False,
@@ -719,7 +692,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, user_id):
             app_db.insert(deploy_meta)
 
             workflow_version_data = WorkflowVersion(
-                user_id=user_id,
+                user_id=login_user_id,
                 workflow_meta_id=workflow_meta.id,
                 workflow_id=workflow_meta.workflow_id,
                 workflow_name=workflow_meta.workflow_name,
@@ -783,14 +756,15 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
         free_deploy_mode = config_composer.get_config_by_name("FREE_CHAT_DEPLOYMENT_MODE").value
 
         if deploy_enabled:
-            alphabet = string.ascii_letters + string.digits
-            deploy_key = ''.join(secrets.choice(alphabet) for _ in range(32))
-            deploy_meta.deploy_key = deploy_key
+            if not deploy_meta.deploy_key or deploy_meta.deploy_key.strip() == "":
+                alphabet = string.ascii_letters + string.digits
+                deploy_key = ''.join(secrets.choice(alphabet) for _ in range(32))
+                deploy_meta.deploy_key = deploy_key
 
             if not free_deploy_mode:
-                from controller.admin.adminBaseController import is_superuser
-                val_superuser = await is_superuser(request, user_id)
-                if not val_superuser.get("superuser", False):
+                try:
+                    admin_access = require_admin_access(request)
+                except:
                     deploy_meta.is_deployed = False
                     deploy_meta.inquire_deploy = True
 
@@ -807,6 +781,7 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
             "message": "Workflow updated successfully",
             "workflow_name": existing_data.workflow_name,
             "deploy_key": deploy_meta.deploy_key if deploy_meta.is_deployed else None,
+            "inquire_deploy": deploy_meta.inquire_deploy,
         }
 
     except Exception as e:
@@ -948,7 +923,7 @@ async def list_workflows_detail(request: Request):
                 dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
             FROM workflow_meta wm
             LEFT JOIN users u ON wm.user_id = u.id
-            LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
+            LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id AND wm.workflow_name = dm.workflow_name AND wm.user_id = dm.user_id
             WHERE wm.user_id = %s
             ORDER BY wm.updated_at DESC
             LIMIT 10000
@@ -970,7 +945,7 @@ async def list_workflows_detail(request: Request):
                         dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
                     FROM workflow_meta wm
                     LEFT JOIN users u ON wm.user_id = u.id
-                    LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
+                    LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id AND wm.workflow_name = dm.workflow_name AND wm.user_id = dm.user_id
                     WHERE wm.share_group = %s AND wm.is_shared = true
                     ORDER BY wm.updated_at DESC
                     LIMIT 10000

@@ -141,7 +141,7 @@ async def get_io_logs_by_id(request: Request, user_id = None, workflow_name: str
         ) from e
 
 @router.get("/all-io-logs")
-async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: int = 250, user_id = None):
+async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: int = 250, user_id = None, workflow_id: str = None):
     val_superuser = await validate_superuser(request)
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
@@ -164,6 +164,8 @@ async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: in
         conditions = {}
         if user_id:
             conditions['user_id'] = user_id
+        if workflow_id:
+            conditions['workflow_id'] = workflow_id
 
         io_logs_result = app_db.find_by_condition(
             ExecutionIO,
@@ -234,7 +236,7 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
                     dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
                 FROM workflow_meta wm
                 LEFT JOIN users u ON wm.user_id = u.id
-                LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
+                LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id AND wm.workflow_name = dm.workflow_name AND wm.user_id = dm.user_id
                 WHERE wm.user_id = %s
                 ORDER BY wm.created_at DESC
                 LIMIT %s OFFSET %s
@@ -251,7 +253,7 @@ async def get_all_workflows(request: Request, page: int = 1, page_size: int = 25
                     dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
                 FROM workflow_meta wm
                 LEFT JOIN users u ON wm.user_id = u.id
-                LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id
+                LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id AND wm.workflow_name = dm.workflow_name AND wm.user_id = dm.user_id
                 ORDER BY wm.created_at DESC
                 LIMIT %s OFFSET %s
             """
@@ -348,9 +350,6 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
     except Exception as e:
         logger.error(f"Failed to update workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
-
-
-
 
 @router.delete("/delete/{workflow_name}")
 async def delete_workflow(request: Request, user_id, workflow_name: str):
