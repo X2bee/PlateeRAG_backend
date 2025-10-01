@@ -30,7 +30,7 @@ async def get_all_groups(request: Request):
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
 
     try:
-        groups = app_db.find_all(GroupMeta)
+        groups = app_db.find_by_condition(GroupMeta, {'available': True, 'group_name__notlike__': '%__admin__'})
         backend_log.success("Successfully fetched all groups",
                           metadata={"group_count": len(groups)})
         return {"groups": groups}
@@ -46,7 +46,7 @@ async def get_all_groups(request: Request):
 async def get_all_groups_list(request: Request):
     try:
         app_db = get_db_manager(request)
-        groups = app_db.find_by_condition(GroupMeta, {'available': True})
+        groups = app_db.find_by_condition(GroupMeta, {'available': True, 'group_name__notlike__': '%__admin__'})
 
         # group_name만 추출해서 리스트로 반환
         group_names = [group.group_name for group in groups]
@@ -86,8 +86,14 @@ async def create_group(request: Request, group_data: GroupData):
             available=group_data.available,
             available_sections=[],
         )
+        group_admin = GroupMeta(
+            group_name=f"{group_data.group_name}__admin__",
+            available=group_data.available,
+            available_sections=[],
+        )
 
         app_db.insert(group)
+        app_db.insert(group_admin)
         backend_log.success(f"Successfully created group: {group_data.group_name}",
                           metadata={"group_name": group_data.group_name, "available": group_data.available})
         return {"detail": "Group created successfully"}
@@ -184,9 +190,10 @@ async def delete_group(request: Request, group_name: str):
                 status_code=404,
                 detail="Group not found"
             )
+        admin_group_name = f"{group_name}__admin__"
 
         app_db.delete_by_condition(GroupMeta, {'group_name': group_name})
-
+        app_db.delete_by_condition(GroupMeta, {'group_name': admin_group_name})
         # 해당 그룹을 groups 배열에 가지고 있는 모든 사용자 찾기
         db_type = app_db.config_db_manager.db_type
 
@@ -203,10 +210,11 @@ async def delete_group(request: Request, group_name: str):
             results = app_db.config_db_manager.execute_query(query, params)
             users = [User.from_dict(dict(row)) for row in results] if results else []
 
-        # 각 사용자의 groups에서 해당 그룹명 제거
+        # 각 사용자의 groups에서 해당 그룹명과 __admin__ 그룹명 제거
+        admin_group_name = f"{group_name}__admin__"
         for user in users:
             existing_groups = user.groups if user.groups else []
-            new_groups = [group for group in existing_groups if group != group_name]
+            new_groups = [group for group in existing_groups if group != group_name and group != admin_group_name]
 
             # update_list_columns 메서드로 업데이트 (첫 번째 인자는 모델 클래스가 아닌 인스턴스)
             app_db.update_list_columns(User, {"groups": new_groups}, {"id": user.id})

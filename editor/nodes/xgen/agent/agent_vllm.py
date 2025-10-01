@@ -5,7 +5,7 @@ from editor.node_composer import Node
 from langchain.schema.output_parser import StrOutputParser
 from langchain_core.output_parsers import JsonOutputParser
 from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput, use_guarder_for_text_moderation
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from fastapi import Request
@@ -76,7 +76,7 @@ class AgentVLLMNode(Node):
                 if not is_safe:
                     return moderation_message
 
-            default_prompt = prefix_prompt + default_prompt
+            default_prompt = get_prefix_prompt() + default_prompt
             llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=True, plan=plan)
 
             additional_rag_context = ""

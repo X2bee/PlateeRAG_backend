@@ -27,6 +27,7 @@ from controller.appController import router as appRouter
 from controller.authController import router as authRouter
 from controller.vast_proxy_controller import router as vastProxyRouter
 from controller.promptController import router as promptRouter
+from controller.mcpController import router as mcpRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
 from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
@@ -370,16 +371,17 @@ async def lifespan(app: FastAPI):
         logger.info("⚙️  Step 9: Workflow data synchronization starting...")
 
         try:
-            sync_result = await workflow_data_synchronizer(app.state.app_db)
-            if sync_result["success"]:
-                logger.info(f"✅ Step 9: Workflow data sync completed successfully! "
-                           f"Added {sync_result['files_added_to_db']} to DB, "
-                           f"Created {sync_result['files_created_from_db']} files, "
-                           f"Removed {sync_result['orphaned_db_entries_removed']} orphaned entries, "
-                           f"Processed {sync_result['users_processed']} users")
-            else:
-                logger.warning(f"⚠️  Step 9: Workflow data sync completed with issues. "
-                             f"Errors: {sync_result.get('errors', [])}")
+            logger.info("🔄 Step 9: SKIPPED - Workflow data sync is currently disabled")
+            # sync_result = await workflow_data_synchronizer(app.state.app_db)
+            # if sync_result["success"]:
+            #     logger.info(f"✅ Step 9: Workflow data sync completed successfully! "
+            #                f"Added {sync_result['files_added_to_db']} to DB, "
+            #                f"Created {sync_result['files_created_from_db']} files, "
+            #                f"Removed {sync_result['orphaned_db_entries_removed']} orphaned entries, "
+            #                f"Processed {sync_result['users_processed']} users")
+            # else:
+            #     logger.warning(f"⚠️  Step 9: Workflow data sync completed with issues. "
+            #                  f"Errors: {sync_result.get('errors', [])}")
         except Exception as e:
             logger.error(f"❌ Step 9: Failed to sync workflow data: {e}")
 
@@ -538,6 +540,7 @@ app.include_router(appRouter)
 app.include_router(vastProxyRouter)
 app.include_router(huggingfaceRouter)
 app.include_router(promptRouter)
+app.include_router(mcpRouter)
 
 if __name__ == "__main__":
     try:

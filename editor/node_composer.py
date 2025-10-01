@@ -116,7 +116,8 @@ class Node(ABC):
             "tags": cls.tags,
             "inputs": cls.inputs,
             "outputs": cls.outputs,
-            "parameters": cls.parameters
+            "parameters": cls.parameters,
+            "disable": getattr(cls, 'disable', False)
         }
         NODE_REGISTRY.append(spec)
         NODE_CLASS_REGISTRY[cls.nodeId] = cls

@@ -9,14 +9,31 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import logging
+import uuid
 
 from service.database.models.prompts import Prompts
 from controller.helper.singletonHelper import get_db_manager
-from controller.helper.controllerHelper import extract_user_id_from_request
+from controller.helper.controllerHelper import extract_user_id_from_request, require_admin_access
 from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("prompt-controller")
 router = APIRouter(prefix="/api/prompt", tags=["prompt"])
+
+class CreatePromptRequest(BaseModel):
+    prompt_title: str
+    prompt_content: str
+    public_available: bool = False
+    language: Optional[str] = "ko"
+
+class DeletePromptRequest(BaseModel):
+    prompt_uid: str
+
+class UpdatePromptRequest(BaseModel):
+    prompt_uid: str
+    prompt_title: Optional[str] = None
+    prompt_content: Optional[str] = None
+    public_available: Optional[bool] = None
+    language: Optional[str] = "ko"
 
 @router.get("/list")
 async def get_prompt_list(
@@ -24,9 +41,6 @@ async def get_prompt_list(
     limit: int = Query(300, ge=1, le=500, description="Number of prompts to return"),
     offset: int = Query(0, ge=0, description="Number of prompts to skip"),
     language: Optional[str] = Query(None, description="Filter by language (en, ko)"),
-    is_template: Optional[bool] = Query(None, description="Filter by template status"),
-    public_available: Optional[bool] = Query(None, description="Filter by public availability"),
-    search: Optional[str] = Query(None, description="Search in prompt title and content")
 ):
     """프롬프트 목록을 반환합니다."""
     try:
@@ -35,42 +49,34 @@ async def get_prompt_list(
         user_id = None
 
     app_db = get_db_manager(request)
+    # 응답 데이터 구성
+    prompt_list = []
 
     # user_id가 있는 경우에만 로깅
     if user_id:
         backend_log = create_logger(app_db, user_id, request)
-        backend_log.info("Retrieving prompt list",
-                        metadata={"limit": limit, "offset": offset, "language": language,
-                                "is_template": is_template, "public_available": public_available,
-                                "search": search})
-
-    try:
-        # 필터 조건 구성
-        conditions = {}
-
-        if language:
-            conditions["language"] = language
-        if is_template is not None:
-            conditions["is_template"] = is_template
-        if public_available is not None:
-            conditions["public_available"] = public_available
-        if search:
-            # 제목이나 내용에서 검색 (LIKE 검색)
-            conditions["prompt_title__like__"] = search
-
-        # 프롬프트 조회
-        prompts = app_db.find_by_condition(
-            Prompts,
-            conditions=conditions,
-            limit=limit,
-            offset=offset,
-            orderby="id",
-            orderby_asc=False
+        backend_log.info(
+            "Retrieving prompt list",
+            metadata={
+                "limit": limit,
+                "offset": offset,
+                "language": language,
+            },
         )
 
-        # 응답 데이터 구성
-        prompt_list = []
-        for prompt in prompts:
+        my_prompt_conditions = {"user_id": user_id}
+        if language:
+            my_prompt_conditions["language"] = language
+
+        my_prompts = app_db.find_by_condition(
+            Prompts,
+            conditions=my_prompt_conditions,
+            limit=1000,
+            orderby="id",
+            orderby_asc=False,
+            join_user=True,
+        )
+        for prompt in my_prompts:
             prompt_data = {
                 "id": prompt.id,
                 "prompt_uid": prompt.prompt_uid,
@@ -80,11 +86,84 @@ async def get_prompt_list(
                 "is_template": prompt.is_template,
                 "language": prompt.language,
                 "user_id": prompt.user_id,
+                "username": prompt.username,
+                "full_name": prompt.full_name,
                 "created_at": prompt.created_at,
                 "updated_at": prompt.updated_at,
-                "metadata": prompt.metadata
+                "metadata": prompt.metadata,
             }
             prompt_list.append(prompt_data)
+
+    try:
+        template_conditions = {"is_template": True}
+        if language:
+            template_conditions["language"] = language
+
+        template_prompts = app_db.find_by_condition(
+            Prompts,
+            conditions=template_conditions,
+            limit=limit,
+            offset=offset,
+            orderby="id",
+            orderby_asc=False,
+        )
+
+        for prompt in template_prompts:
+            prompt_data = {
+                "id": prompt.id,
+                "prompt_uid": prompt.prompt_uid,
+                "prompt_title": prompt.prompt_title,
+                "prompt_content": prompt.prompt_content,
+                "public_available": prompt.public_available,
+                "is_template": prompt.is_template,
+                "language": prompt.language,
+                "user_id": prompt.user_id,
+                "username": None,
+                "full_name": None,
+                "created_at": prompt.created_at,
+                "updated_at": prompt.updated_at,
+                "metadata": prompt.metadata,
+            }
+            prompt_list.append(prompt_data)
+
+        shared_conditions = {"public_available": True, "is_template": False, "user_id__not__": user_id} if user_id else {"public_available": True, "is_template": False}
+        if language:
+            shared_conditions["language"] = language
+
+        shared_prompts = app_db.find_by_condition(
+            Prompts,
+            conditions=shared_conditions,
+            limit=limit,
+            offset=offset,
+            orderby="id",
+            orderby_asc=False,
+            join_user=True,
+        )
+
+        for prompt in shared_prompts:
+            prompt_data = {
+                "id": prompt.id,
+                "prompt_uid": prompt.prompt_uid,
+                "prompt_title": prompt.prompt_title,
+                "prompt_content": prompt.prompt_content,
+                "public_available": prompt.public_available,
+                "is_template": prompt.is_template,
+                "language": prompt.language,
+                "user_id": prompt.user_id,
+                "username": prompt.username,
+                "full_name": prompt.full_name,
+                "created_at": prompt.created_at,
+                "updated_at": prompt.updated_at,
+                "metadata": prompt.metadata,
+            }
+            prompt_list.append(prompt_data)
+
+        # id 기준 중복 제거 (딕셔너리 사용)
+        unique_prompts = {prompt['id']: prompt for prompt in prompt_list}.values()
+        prompt_list = list(unique_prompts)
+
+        # updated_at 기준 최신순 정렬
+        prompt_list.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
 
         response_data = {
             "prompts": prompt_list,
@@ -93,23 +172,238 @@ async def get_prompt_list(
             "offset": offset,
             "filters_applied": {
                 "language": language,
-                "is_template": is_template,
-                "public_available": public_available,
-                "search": search
-            }
+            },
         }
 
         if user_id:
-            backend_log.success("Successfully retrieved prompt list",
-                              metadata={"prompt_count": len(prompt_list),
-                                      "limit": limit, "offset": offset,
-                                      "filters": conditions})
+            backend_log.success(
+                "Successfully retrieved prompt list",
+                metadata={
+                    "prompt_count": len(prompt_list),
+                    "limit": limit,
+                    "offset": offset,
+                },
+            )
 
         return response_data
 
     except Exception as e:
         if user_id:
-            backend_log.error("Failed to retrieve prompt list", exception=e,
-                            metadata={"limit": limit, "offset": offset, "language": language})
+            backend_log.error(
+                "Failed to retrieve prompt list",
+                exception=e,
+                metadata={"limit": limit, "offset": offset, "language": language},
+            )
         logger.error("Error getting prompt list: %s", e)
         raise HTTPException(status_code=500, detail="Failed to retrieve prompt list")
+
+
+@router.post("/create")
+async def create_prompt(
+    request: Request,
+    prompt_data: CreatePromptRequest
+):
+    """새로운 프롬프트를 생성합니다."""
+    try:
+        user_id = extract_user_id_from_request(request)
+    except:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    backend_log.info(
+        "Creating new prompt",
+        metadata={
+            "prompt_title": prompt_data.prompt_title,
+            "public_available": prompt_data.public_available,
+            "language": prompt_data.language,
+        },
+    )
+
+    try:
+        # prompt_uid 생성 (타이틀 기반)
+        base_uid = prompt_data.prompt_title.replace(' ', '_').lower()
+        base_uid = ''.join(c for c in base_uid if c.isalnum() or c == '_')
+        unique_suffix = str(uuid.uuid4())[:8]
+        prompt_uid = f"{base_uid}_{unique_suffix}"
+
+        # 새로운 Prompt 객체 생성
+        new_prompt = Prompts(
+            user_id=user_id,
+            prompt_uid=prompt_uid,
+            prompt_title=prompt_data.prompt_title,
+            prompt_content=prompt_data.prompt_content,
+            public_available=prompt_data.public_available,
+            is_template=False,
+            language=prompt_data.language,
+            metadata={}
+        )
+
+        # 데이터베이스에 저장
+        result = app_db.insert(new_prompt)
+
+        if result and result.get("result") == "success":
+            # 생성된 프롬프트 정보 반환
+            created_prompt = {
+                "id": result.get("id"),
+                "prompt_uid": prompt_uid,
+                "prompt_title": prompt_data.prompt_title,
+                "prompt_content": prompt_data.prompt_content,
+                "public_available": prompt_data.public_available,
+                "is_template": False,
+                "language": prompt_data.language,
+                "user_id": user_id,
+                "metadata": {}
+            }
+
+            backend_log.success(
+                "Successfully created new prompt",
+                metadata={
+                    "prompt_id": result.get("id"),
+                    "prompt_uid": prompt_uid,
+                    "prompt_title": prompt_data.prompt_title,
+                },
+            )
+
+            return {
+                "success": True,
+                "message": "Prompt created successfully",
+                "prompt": created_prompt
+            }
+        else:
+            backend_log.error(
+                "Failed to create prompt - database insert failed",
+                metadata={"result": result},
+            )
+            raise HTTPException(status_code=500, detail="Failed to create prompt")
+
+    except Exception as e:
+        backend_log.error(
+            "Failed to create prompt",
+            exception=e,
+            metadata={
+                "prompt_title": prompt_data.prompt_title,
+                "user_id": user_id,
+            },
+        )
+        logger.error("Error creating prompt: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create prompt")
+
+@router.delete("/delete")
+async def delete_prompt(
+    request: Request,
+    prompt_data: DeletePromptRequest
+):
+    """프롬프트를 삭제합니다."""
+    try:
+        user_id = extract_user_id_from_request(request)
+    except:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    backend_log.info(
+        "Deleting prompt",
+        metadata={
+            "prompt_title": prompt_data.prompt_title,
+            "public_available": prompt_data.public_available,
+            "language": prompt_data.language,
+        },
+    )
+
+    try:
+        prompt_data = app_db.find_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id}, limit=1)
+        if not prompt_data:
+            backend_log.warn(
+                "Prompt not found or access denied",
+                metadata={"prompt_uid": prompt_data.prompt_uid, "user_id": user_id},
+            )
+            raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+        delete_result = app_db.delete_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id})
+        if delete_result and delete_result.get("result") == "success":
+            backend_log.success(
+                "Successfully deleted prompt",
+                metadata={
+                    "prompt_uid": prompt_data.prompt_uid,
+                    "user_id": user_id,
+                },
+            )
+            return {
+                "success": True,
+                "message": "Prompt deleted successfully"
+            }
+
+    except Exception as e:
+        backend_log.error(
+            "Failed to create prompt",
+            exception=e,
+            metadata={
+                "prompt_title": prompt_data.prompt_title,
+                "user_id": user_id,
+            },
+        )
+        logger.error("Error creating prompt: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create prompt")
+
+@router.post("/update")
+async def update_prompt(
+    request: Request,
+    prompt_data: UpdatePromptRequest
+):
+    """프롬프트를 업데이트합니다."""
+    try:
+        user_id = extract_user_id_from_request(request)
+    except:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    backend_log.info(
+        "Updating prompt",
+        metadata={
+            "prompt_title": prompt_data.prompt_title,
+            "public_available": prompt_data.public_available,
+            "language": prompt_data.language,
+        },
+    )
+
+    try:
+        exist_prompt_data = app_db.find_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id}, limit=1)
+        if not exist_prompt_data:
+            backend_log.warn(
+                "Prompt not found or access denied",
+                metadata={"prompt_uid": prompt_data.prompt_uid, "user_id": user_id},
+            )
+            raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+
+        exist_prompt_data = exist_prompt_data[0]
+        exist_prompt_data.prompt_title = prompt_data.prompt_title if prompt_data.prompt_title is not None else exist_prompt_data.prompt_title
+        exist_prompt_data.prompt_content = prompt_data.prompt_content if prompt_data.prompt_content is not None else exist_prompt_data.prompt_content
+        exist_prompt_data.public_available = prompt_data.public_available if prompt_data.public_available is not None else exist_prompt_data.public_available
+        exist_prompt_data.language = prompt_data.language if prompt_data.language is not None else exist_prompt_data.language
+        app_db.update(exist_prompt_data)
+        backend_log.success(
+            "Successfully updated prompt",
+            metadata={
+                "prompt_uid": prompt_data.prompt_uid,
+                "user_id": user_id,
+            },
+        )
+        return {
+            "success": True,
+            "message": "Prompt updated successfully"
+        }
+    except Exception as e:
+        backend_log.error(
+            "Failed to create prompt",
+            exception=e,
+            metadata={
+                "prompt_title": prompt_data.prompt_title,
+                "user_id": user_id,
+            },
+        )
+        logger.error("Error creating prompt: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create prompt")

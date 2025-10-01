@@ -43,6 +43,7 @@ class NodeSpec(TypedDict):
     inputs: List[Port]
     outputs: List[Port]
     parameters: List[Parameter]
+    disable: NotRequired[Optional[bool]]  # 노드 비활성화 여부
 
 
 CATEGORIES_LABEL_MAP = {
@@ -76,6 +77,7 @@ FUNCTION_LABEL_MAP = {
     'api_loader': 'API Loader',
     'mcp': 'MCP',
     'arithmetic':'Arithmetic',
+    'router': 'Router',
     'endnode': 'End Node',
     'startnode': 'Start Node',
 }

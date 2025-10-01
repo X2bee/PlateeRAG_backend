@@ -236,6 +236,10 @@ async def edit_user(request: Request, user_data: dict):
 
         db_user_info = db_user_info[0]
 
+        # 기존 값 저장 (변경 전 상태 확인용)
+        original_is_admin = db_user_info.is_admin
+        original_user_type = db_user_info.user_type
+
         db_user_info.email = user_data.get("email", db_user_info.email)
         db_user_info.username = user_data.get("username", db_user_info.username)
         db_user_info.full_name = user_data.get("full_name", db_user_info.full_name)
@@ -246,6 +250,21 @@ async def edit_user(request: Request, user_data: dict):
         db_user_info.password_hash = user_data.get("password_hash", db_user_info.password_hash)
 
         app_db.update(db_user_info)
+
+        # admin 권한이 제거되는 경우 (is_admin이 False가 되거나 user_type이 standard가 되는 경우)
+        is_demoted = False
+        if original_is_admin and not db_user_info.is_admin:
+            is_demoted = True
+        if original_user_type != "standard" and db_user_info.user_type == "standard":
+            is_demoted = True
+
+        # admin 권한이 제거되면 __admin__ 그룹들도 모두 제거
+        if is_demoted:
+            existing_groups = db_user_info.groups if db_user_info.groups else []
+            # __admin__으로 끝나지 않는 그룹만 유지
+            new_groups = [group for group in existing_groups if not group.endswith("__admin__")]
+            app_db.update_list_columns(User, {"groups": new_groups}, {"id": user_id})
+            logger.info(f"User {user_id} demoted from admin - removed all __admin__ groups. Groups: {existing_groups} -> {new_groups}")
 
         backend_log.success(f"Successfully edited user: {user_id}",
                           metadata={"user_id": user_id, "updated_fields": list(user_data.keys())})
@@ -293,8 +312,14 @@ async def edit_user_groups(request: Request, user_data: dict):
         elif not isinstance(add_group, list):
             add_group = []
 
-        new_groups = list(set(existing_groups) | set(add_group))
+        has_admin_group = any(group.endswith("__admin__") for group in add_group)
+        if has_admin_group and not db_user_info.is_admin and db_user_info.user_type == "standard":
+            db_user_info.is_admin = True
+            db_user_info.user_type = "admin"
+            app_db.update(db_user_info)
+            logger.info(f"User {user_id} promoted to admin due to __admin__ group assignment")
 
+        new_groups = list(set(existing_groups) | set(add_group))
         app_db.update_list_columns(User, {"groups": new_groups}, {"id": user_id})
 
         logger.info(f"Successfully edited user {user_id}")

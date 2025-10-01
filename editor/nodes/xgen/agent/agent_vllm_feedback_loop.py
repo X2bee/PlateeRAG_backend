@@ -15,7 +15,7 @@ from editor.nodes.xgen.agent.functions import (
 )
 from editor.type_model.feedback_state import FeedbackState
 from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ class AgentVLLMFeedbackLoopNode(Node):
                     }
 
             # LLM 컴포넌트 준비
-            enhanced_prompt = prefix_prompt + default_prompt
+            enhanced_prompt = get_prefix_prompt() + default_prompt
             llm, tools_list, chat_history = prepare_llm_components(
                 text, tools, memory, model, temperature, max_tokens, base_url, streaming=False, plan=plan
             )

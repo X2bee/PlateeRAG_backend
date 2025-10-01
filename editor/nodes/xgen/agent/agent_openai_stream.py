@@ -5,7 +5,7 @@ from editor.node_composer import Node
 from editor.utils.helper.async_helper import sync_run_async
 from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
-from editor.utils.prefix_prompt import prefix_prompt
+from editor.utils.prefix_prompt import get_prefix_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
 from editor.utils.helper.service_helper import AppServiceManager
@@ -38,16 +38,18 @@ class AgentOpenAIStreamNode(Node):
         {
             "id": "model", "name": "Model", "type": "STR", "value": "gpt-5", "required": True,
             "options": [
-                {"value": "gpt-oss-20b", "label": "GPT-OSS-20B"},
-                {"value": "gpt-oss-120b", "label": "GPT-OSS-120B"},
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
                 {"value": "gpt-4", "label": "GPT-4"},
                 {"value": "gpt-4o", "label": "GPT-4o"},
+                {"value": "o4-mini", "label": "o4 mini"},
+                {"value": "gpt-4.1", "label": "GPT-4.1"},
+                {"value": "gpt-4.1-mini", "label": "GPT-4.1 Mini"},
                 {"value": "gpt-5", "label": "GPT-5"},
                 {"value": "gpt-5-mini", "label": "GPT-5 Mini"},
+                {"value": "gpt-5-nano", "label": "GPT-5 Nano"}
             ]
         },
-        {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 0.7, "min": 0.0, "max": 2.0, "step": 0.1},
+        {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 1, "min": 0.0, "max": 2.0, "step": 0.1},
         {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "min": 1, "max": 65536, "step": 1},
         {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "optional": True},
         {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
@@ -65,7 +67,7 @@ class AgentOpenAIStreamNode(Node):
         args_schema: Optional[BaseModel] = None,
         plan: Optional[Dict[str, Any]] = None,
         model: str = "gpt-5",
-        temperature: float = 0.7,
+        temperature: float = 1,
         max_tokens: int = 8192,
         base_url: str = "https://api.openai.com/v1",
         strict_citation: bool = True,
@@ -81,7 +83,7 @@ class AgentOpenAIStreamNode(Node):
                     yield moderation_message
                     return
 
-            default_prompt= prefix_prompt+default_prompt
+            default_prompt= get_prefix_prompt()+default_prompt
             llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=True, plan=plan)
             additional_rag_context = ""
             if rag_context:
