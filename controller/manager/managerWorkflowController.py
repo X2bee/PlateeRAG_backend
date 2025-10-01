@@ -203,9 +203,7 @@ async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: in
 
         app_db = get_db_manager(request)
 
-        conditions = {
-            "workflow_id__in__": workflow_ids
-        }
+        conditions = {}
         if user_id:
             conditions['user_id'] = user_id
         if workflow_name:
