@@ -168,7 +168,7 @@ async def get_io_logs_by_id(request: Request, user_id = None, workflow_name: str
         ) from e
 
 @router.get("/all-io-logs")
-async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: int = 250, user_id = None, workflow_id: str = None):
+async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: int = 250, user_id = None, workflow_id: str = None, workflow_name: str = None):
     """
     매니저용 모든 ExecutionIO 로그를 페이지네이션과 함께 반환합니다.
     """
@@ -186,7 +186,7 @@ async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: in
     workflow_ids = get_manager_accessible_workflows(app_db, manager_id)
     if workflow_id:
         if workflow_id in workflow_ids:
-            workflow_ids = [workflow_id]
+            logger.info(f"Filtering logs for workflow_id: {workflow_id}")
         else:
             raise HTTPException(
                 status_code=403,
@@ -203,96 +203,11 @@ async def get_all_workflows_by_id(request: Request, page: int = 1, page_size: in
 
         app_db = get_db_manager(request)
 
-        conditions = {
-            "workflow_id__in__": workflow_ids
-        }
+        conditions = {}
         if user_id:
             conditions['user_id'] = user_id
-
-        io_logs_result = app_db.find_by_condition(
-            ExecutionIO,
-            conditions,
-            limit=page_size,
-            offset=offset,
-            orderby="updated_at",
-            orderby_asc=False,
-            return_list=True,
-            join_user=True
-        )
-
-        # 딕셔너리 형태의 결과를 처리
-        processed_logs = []
-        for log in io_logs_result:
-            log_dict = dict(log)
-            log_dict.update({
-                "input_data": extract_result_from_json(log_dict["input_data"]),
-                "output_data": extract_result_from_json(log_dict["output_data"])
-            })
-            processed_logs.append(log_dict)
-
-        backend_log.success("Successfully retrieved all IO logs",
-                          metadata={"page": page, "page_size": page_size, "log_count": len(processed_logs)})
-        return {
-            "io_logs": processed_logs,
-            "pagination": {
-                "page": page,
-                "page_size": page_size,
-                "offset": offset,
-                "total_returned": len(processed_logs)
-            }
-        }
-    except Exception as e:
-        backend_log.error("Error fetching all IO logs", exception=e,
-                         metadata={"page": page, "page_size": page_size, "user_id": user_id})
-        logger.error("Error fetching all IO logs: %s", str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        ) from e
-
-
-@router.get("/workflow/all-io-logs")
-async def get_all_workflows_by_workflow(request: Request, page: int = 1, page_size: int = 250, user_id = None, workflow_id: str = None):
-    """
-    특정 workflow_id에 대한 모든 ExecutionIO 로그를 페이지네이션과 함께 반환합니다.
-    """
-    user_session = require_admin_access(request)
-    if not user_session:
-        raise HTTPException(
-            status_code=403,
-            detail="Admin access required"
-        )
-    app_db = get_db_manager(request)
-    manager_id = user_session['user_id']
-    backend_log = create_logger(app_db, manager_id, request)
-
-    db_type = app_db.config_db_manager.db_type
-    workflow_ids = get_manager_accessible_workflows(app_db, manager_id)
-    if workflow_id:
-        if workflow_id in workflow_ids:
-            workflow_ids = [workflow_id]
-        else:
-            raise HTTPException(
-                status_code=403,
-                detail="You do not have access to this workflow"
-            )
-
-    try:
-        # 페이지 번호 검증
-        if page < 1:
-            page = 1
-        if page_size < 1 or page_size > 1000:
-            page_size = 250
-
-        offset = (page - 1) * page_size
-
-        app_db = get_db_manager(request)
-
-        conditions = {
-            "workflow_id__in__": workflow_ids
-        }
-        if user_id:
-            conditions['user_id'] = user_id
+        if workflow_name:
+            conditions['workflow_name'] = workflow_name
 
         io_logs_result = app_db.find_by_condition(
             ExecutionIO,
