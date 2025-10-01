@@ -179,19 +179,19 @@ class VastConfig(BaseConfig):
         self.VAST_PROXY_MODE = self.create_persistent_config(
             env_name="VAST_PROXY_MODE",
             config_path="vast.proxy.mode",
-            default_value="local",
+            default_value="proxy",
             type_converter=convert_to_str,
         )
         self.VAST_PROXY_BASE_URL = self.create_persistent_config(
             env_name="VAST_PROXY_BASE_URL",
             config_path="vast.proxy.base_url",
-            default_value="",
+            default_value="http://host.docker.internal:8024",
             type_converter=convert_to_str,
         )
         self.VAST_PROXY_TIMEOUT = self.create_persistent_config(
             env_name="VAST_PROXY_TIMEOUT",
             config_path="vast.proxy.timeout",
-            default_value="30",
+            default_value="300",
             type_converter=convert_to_int,
         )
         self.VAST_PROXY_API_TOKEN = self.create_persistent_config(
