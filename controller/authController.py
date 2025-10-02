@@ -14,8 +14,7 @@ from zoneinfo import ZoneInfo
 from service.database.models.user import User
 from service.database.models.group import GroupMeta
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
-
-from controller.utils.section_config import available_sections
+from controller.utils.section_config import available_sections, available_admin_sections
 
 logger = logging.getLogger("auth-controller")
 
@@ -587,9 +586,14 @@ async def get_group_available_sections(request: Request, user_id=None):
         groups = user.groups
         user_type = user.user_type
 
-
         if user_type == "superuser":
-            return {"available_sections": available_sections}
+            from controller.admin.adminBaseController import validate_superuser
+            user_info = await validate_superuser(request)
+            if user_info.get("superuser") is True:
+                return {"available_sections": available_sections}
+            else:
+                logger.warning(f"User {user_id} is not a superuser despite user_type. Possible data inconsistency.")
+                return {"available_sections": []}
 
         if not groups or groups == None or groups == [] or len(groups) == 0:
             return {"available_sections": []}
@@ -610,8 +614,44 @@ async def get_group_available_sections(request: Request, user_id=None):
                     logger.warning(f"Group not found: {group_name}")
 
             if user_type == "admin":
-                total_available_sections.extend(["manager-page"])
+                total_available_sections.extend(["admin-page"])
         return {"available_sections": total_available_sections}
+
+    except Exception as e:
+        logger.error("Error fetching all users: %s", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        ) from e
+
+@router.get("/admin/available-section")
+async def get_admin_available_sections(request: Request, user_id=None):
+    try:
+        from controller.helper.controllerHelper import require_admin_access
+        user_session = require_admin_access(request)
+        user_auth_id = user_session['user_id']
+
+        if user_auth_id != user_id:
+            logger.warning(f"User ID mismatch: token user {user_auth_id} vs query user {user_id}")
+            return {"available_admin_sections": []}
+
+        app_db = get_db_manager(request)
+        user = app_db.find_by_id(User, user_id)
+        user_type = user.user_type
+        user_available_admin_sections = user.available_admin_sections
+
+        if user_type == "superuser":
+            return {"available_admin_sections": available_admin_sections}
+
+        elif user_type == "admin":
+            if user_available_admin_sections and isinstance(user_available_admin_sections, list):
+                return {"available_admin_sections": user_available_admin_sections}
+            else:
+                logger.info(f"Admin user {user_id} has no available_admin_sections set.")
+                return {"available_admin_sections": []}
+        else:
+            logger.warning(f"User {user_id} is not an admin or superuser.")
+            return {"available_admin_sections": []}
 
     except Exception as e:
         logger.error("Error fetching all users: %s", str(e))

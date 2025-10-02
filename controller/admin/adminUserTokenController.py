@@ -25,7 +25,7 @@ def normalize_datetime_for_comparison(dt):
     """
     if dt is None:
         return None
-    
+
     if isinstance(dt, str):
         # Parse string datetime
         try:
@@ -38,11 +38,11 @@ def normalize_datetime_for_comparison(dt):
                     dt = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     return dt  # Return as-is if can't parse
-    
+
     # If datetime is naive, make it timezone-aware (assume UTC)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    
+
     return dt
 
 @router.get("/usage")
@@ -65,11 +65,11 @@ async def get_user_token_usage(
 
     try:
         app_db = get_db_manager(request)
-        
+
         # Parse date filters
         start_datetime = None
         end_datetime = None
-        
+
         if start_date:
             try:
                 start_datetime = datetime.strptime(start_date, "%Y-%m-%d")
@@ -77,7 +77,7 @@ async def get_user_token_usage(
                 start_datetime = start_datetime.replace(tzinfo=timezone.utc)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
-        
+
         if end_date:
             try:
                 end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
@@ -88,13 +88,10 @@ async def get_user_token_usage(
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
 
-        # Always get all logs to calculate complete user statistics
-        all_logs = app_db.find_all(ExecutionIO)
-
-        # Get all users to map user_id to username
         all_users = app_db.find_all(User)
         user_id_to_username = {user.id: user.username for user in all_users}
 
+        all_logs = app_db.find_all(ExecutionIO)
         # First pass: identify users who had activity in the date range (if specified)
         users_in_date_range = set()
         if start_datetime or end_datetime:
@@ -102,31 +99,31 @@ async def get_user_token_usage(
                 user_id = log.user_id
                 if user_id is None:
                     continue
-                
+
                 log_date = normalize_datetime_for_comparison(log.created_at)
-                
+
                 # Check if this log falls within the date range
                 in_range = True
                 if start_datetime and log_date < start_datetime:
                     in_range = False
                 if end_datetime and log_date > end_datetime:
                     in_range = False
-                
+
                 if in_range:
                     users_in_date_range.add(user_id)
-        
+
         # Second pass: calculate complete statistics for all users (or filtered users)
         user_stats = {}
-        
+
         for log in all_logs:
             user_id = log.user_id
             if user_id is None:
                 continue  # Skip logs without user_id
-            
+
             # If date filtering is active, only include users who had activity in the date range
             if (start_datetime or end_datetime) and user_id not in users_in_date_range:
                 continue
-            
+
             if user_id not in user_stats:
                 username = user_id_to_username.get(user_id, None)
                 user_stats[user_id] = {
@@ -140,27 +137,31 @@ async def get_user_token_usage(
                     'first_interaction': None,
                     'last_interaction': None
                 }
-            
+
             # Count tokens for this interaction
             try:
                 token_counts = count_io_tokens(log.input_data, log.output_data)
             except Exception as e:
                 logger.warning(f"Failed to count tokens for log {log.id}: {e}")
                 token_counts = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
-            
+
             # Update user statistics
             stats = user_stats[user_id]
             stats['total_interactions'] += 1
             stats['total_input_tokens'] += token_counts['input_tokens']
             stats['total_output_tokens'] += token_counts['output_tokens']
             stats['total_tokens'] += token_counts['total_tokens']
-            
+
             # Track workflow usage
             workflow_name = log.workflow_name or 'Unknown'
             if workflow_name not in stats['workflow_usage']:
-                stats['workflow_usage'][workflow_name] = 0
-            stats['workflow_usage'][workflow_name] += 1
-            
+                stats['workflow_usage'][workflow_name] = {'usage_count': 0, 'total_tokens': 0, 'interactions': 0, 'input_tokens': 0, 'output_tokens': 0}
+            stats['workflow_usage'][workflow_name]['usage_count'] += 1
+            stats['workflow_usage'][workflow_name]['total_tokens'] += token_counts['total_tokens']
+            stats['workflow_usage'][workflow_name]['interactions'] += 1
+            stats['workflow_usage'][workflow_name]['input_tokens'] += token_counts['input_tokens']
+            stats['workflow_usage'][workflow_name]['output_tokens'] += token_counts['output_tokens']
+
             # Track interaction dates (complete history, not just filtered range)
             created_at = normalize_datetime_for_comparison(log.created_at)
             if stats['first_interaction'] is None or created_at < stats['first_interaction']:
@@ -168,18 +169,20 @@ async def get_user_token_usage(
             if stats['last_interaction'] is None or created_at > stats['last_interaction']:
                 stats['last_interaction'] = created_at
 
+
+
         # Convert to list and add derived fields
         user_list = []
         for user_id, stats in user_stats.items():
             # Find most used workflow
             if stats['workflow_usage']:
-                most_used_workflow = max(stats['workflow_usage'].items(), key=lambda x: x[1])
+                most_used_workflow = max(stats['workflow_usage'].items(), key=lambda x: x[1]['usage_count'])
                 stats['most_used_workflow'] = most_used_workflow[0]
                 stats['workflow_usage_count'] = most_used_workflow[1]
             else:
                 stats['most_used_workflow'] = None
                 stats['workflow_usage_count'] = 0
-            
+
             # Calculate averages
             if stats['total_interactions'] > 0:
                 stats['average_input_tokens'] = round(stats['total_input_tokens'] / stats['total_interactions'], 2)
@@ -187,26 +190,26 @@ async def get_user_token_usage(
             else:
                 stats['average_input_tokens'] = 0
                 stats['average_output_tokens'] = 0
-            
+
             # Format dates
             if stats['first_interaction']:
                 stats['first_interaction'] = stats['first_interaction'].isoformat()
             else:
                 stats['first_interaction'] = None
-                
+
             if stats['last_interaction']:
                 stats['last_interaction'] = stats['last_interaction'].isoformat()
             else:
                 stats['last_interaction'] = None
-            
+
             # Remove workflow_usage dict (not needed in response)
-            del stats['workflow_usage']
-            
+            # del stats['workflow_usage']
+
             user_list.append(stats)
 
         # Sort by total tokens (descending)
         user_list.sort(key=lambda x: x['total_tokens'], reverse=True)
-        
+
         # Apply pagination
         total_users = len(user_list)
         total_pages = (total_users + page_size - 1) // page_size
@@ -251,18 +254,18 @@ async def get_token_usage_summary(
 
     try:
         app_db = get_db_manager(request)
-        
+
         # Parse date filters (same logic as main endpoint)
         start_datetime = None
         end_datetime = None
-        
+
         if start_date:
             try:
                 start_datetime = datetime.strptime(start_date, "%Y-%m-%d")
                 start_datetime = start_datetime.replace(tzinfo=timezone.utc)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
-        
+
         if end_date:
             try:
                 end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
@@ -273,19 +276,19 @@ async def get_token_usage_summary(
 
         # Get all logs
         all_logs = app_db.find_all(ExecutionIO)
-        
+
         # Filter logs by date range if specified
         filtered_logs = []
         if start_datetime or end_datetime:
             for log in all_logs:
                 log_date = normalize_datetime_for_comparison(log.created_at)
-                
+
                 in_range = True
                 if start_datetime and log_date < start_datetime:
                     in_range = False
                 if end_datetime and log_date > end_datetime:
                     in_range = False
-                
+
                 if in_range:
                     filtered_logs.append(log)
         else:
@@ -303,7 +306,7 @@ async def get_token_usage_summary(
                 unique_users.add(log.user_id)
             if log.workflow_name:
                 unique_workflows.add(log.workflow_name)
-            
+
             try:
                 token_counts = count_io_tokens(log.input_data, log.output_data)
                 total_input_tokens += token_counts['input_tokens']

@@ -1,8 +1,8 @@
+import json
 import logging
 from pydantic import BaseModel
 from typing import Optional
 from fastapi import APIRouter, Request, HTTPException
-from controller.helper.controllerHelper import require_admin_access
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from controller.admin.adminBaseController import validate_superuser
 from service.database.logger_helper import create_logger
@@ -381,6 +381,58 @@ async def delete_user_groups(request: Request, user_data: dict):
         }
     except Exception as e:
         logger.error(f"Error removing user groups: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.post("/update-user/available-admin-sections")
+async def edit_user_available_admin_sections(request: Request, user_data: dict):
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
+    try:
+        app_db = get_db_manager(request)
+        user_id = user_data.get("id")
+        db_user_info = app_db.find_by_condition(User, {"id": user_id})
+        if not db_user_info:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+
+        db_user_info = db_user_info[0]
+        available_sections = user_data.get("available_admin_sections", db_user_info.available_admin_sections)
+        if available_sections is not None:
+            if isinstance(available_sections, str):
+                try:
+                    available_sections = json.loads(available_sections)
+                except json.JSONDecodeError:
+                    available_sections = [s.strip() for s in available_sections.split(',') if s.strip()]
+
+            if not isinstance(available_sections, list):
+                available_sections = [str(available_sections)]
+
+        updates = {}
+        if available_sections is not None:
+            updates['available_admin_sections'] = available_sections
+
+        app_db.update_list_columns(User, updates, {"id": user_id})
+
+        logger.info(f"Successfully edited user {user_id}")
+        return {
+            "detail": "User groups updated successfully",
+            "user": {
+                "id": user_id,
+                "available_admin_sections": available_sections
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error approving user: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
