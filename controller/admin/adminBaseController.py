@@ -7,6 +7,8 @@ from service.database.models.user import User
 from service.database.models.backend import BackendLogs
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from service.database.logger_helper import create_logger
+from controller.utils.section_config import available_sections, available_admin_sections
+
 logger = logging.getLogger("admin-controller")
 router = APIRouter(prefix="/base", tags=["Admin"])
 
@@ -89,13 +91,13 @@ async def validate_superuser(request: Request):
         user_info = user_info[0] if user_info and len(user_info) > 0 else None
 
         if user_info.user_type == "superuser":
-            return {"superuser": True, "user_id": user_id}
+            return {"superuser": True, "user_id": user_id, "available_admin_sections": available_admin_sections, "user_type": "superuser"}
 
         elif user_info.user_type == "admin" and user_info.available_admin_sections is not None and user_info.available_admin_sections != []:
-            return {"superuser": True, "user_id": user_id, "available_admin_sections": user_info.available_admin_sections}
+            return {"superuser": True, "user_id": user_id, "available_admin_sections": user_info.available_admin_sections, "user_type": "admin"}
 
         else:
-            return {"superuser": False}
+            return {"superuser": False, "user_id": None, "available_admin_sections": [], "user_type": "standard"}
 
     except Exception as e:
         logger.error(f"Token refresh error: {str(e)}")

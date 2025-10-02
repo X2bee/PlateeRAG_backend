@@ -8,8 +8,8 @@ from controller.admin.adminBaseController import validate_superuser
 from service.database.logger_helper import create_logger
 
 # authController에서 필요한 함수들과 모델들 import
-from controller.authController import (LoginRequest, LoginResponse, login, find_user_by_email)
-
+from controller.admin.adminHelper import get_manager_accessible_users, manager_section_access
+from controller.authController import LoginRequest, LoginResponse, login, find_user_by_email
 from service.database.models.user import User
 from service.database.models.executor import ExecutionIO, ExecutionMeta
 from service.database.models.workflow import WorkflowMeta
@@ -71,7 +71,6 @@ async def superuser_login(request: Request, login_data: LoginRequest):
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
-
 @router.get("/all-users")
 async def get_all_users(request: Request, page: int = 1, page_size: int = 100):
     val_superuser = await validate_superuser(request)
@@ -82,6 +81,7 @@ async def get_all_users(request: Request, page: int = 1, page_size: int = 100):
         )
 
     app_db = get_db_manager(request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["users", "group-permissions"])
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
 
     try:
@@ -93,7 +93,12 @@ async def get_all_users(request: Request, page: int = 1, page_size: int = 100):
 
         offset = (page - 1) * page_size
 
-        users = app_db.find_all(User, limit=page_size, offset=offset)
+        if val_superuser.get("user_type") == "superuser":
+            users = app_db.find_all(User, limit=page_size, offset=offset)
+        elif val_superuser.get("user_type") == "admin" and section_access:
+            users = get_manager_accessible_users(app_db, val_superuser.get("user_id"))
+        else:
+            users = []
 
         backend_log.success("Successfully fetched all users",
                           metadata={"page": page, "page_size": page_size, "returned_count": len(users)})
@@ -125,9 +130,16 @@ async def get_standby_users(request: Request):
         )
 
     app_db = get_db_manager(request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), "user-create")
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    if not section_access:
+        raise HTTPException(
+            status_code=403,
+            detail="Access to user creation section required"
+        )
 
     try:
+
         users = app_db.find_by_condition(User, {"is_active": False})
         backend_log.success("Successfully fetched standby users",
                           metadata={"standby_user_count": len(users)})
@@ -151,7 +163,12 @@ async def approve_user(request: Request, user_data: dict):
 
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
-
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), "user-create")
+    if not section_access:
+        raise HTTPException(
+            status_code=403,
+            detail="Access to user creation section required"
+        )
     try:
         user_id = user_data.get("id")
         username = user_data.get("username")
@@ -221,6 +238,7 @@ async def edit_user(request: Request, user_data: dict):
 
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["users", "group-permissions"])
 
     try:
         user_id = user_data.get("id")
@@ -233,12 +251,39 @@ async def edit_user(request: Request, user_data: dict):
                 status_code=404,
                 detail="User not found"
             )
+        if val_superuser.get("user_type") == "admin":
+            users = get_manager_accessible_users(app_db, val_superuser.get("user_id"))
+            if not any(u.id == user_id for u in users):
+                backend_log.warn(f"Admin user {val_superuser.get('user_id')} attempted to edit inaccessible user: {user_id}")
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have permission to edit this user"
+                )
 
         db_user_info = db_user_info[0]
-
-        # 기존 값 저장 (변경 전 상태 확인용)
         original_is_admin = db_user_info.is_admin
         original_user_type = db_user_info.user_type
+
+        if val_superuser.get("user_type") == "admin":
+            restricted_fields = {
+                "is_admin": db_user_info.is_admin,
+                "user_type": db_user_info.user_type,
+                "preferences": db_user_info.preferences,
+                "is_active": db_user_info.is_active
+            }
+
+            restricted_fields_changed = [
+                field for field, current_value in restricted_fields.items()
+                if field in user_data and user_data.get(field) != current_value
+            ]
+
+            if restricted_fields_changed:
+                backend_log.warn(f"Admin user {val_superuser.get('user_id')} attempted to edit restricted fields for user {user_id}",
+                                 metadata={"user_id": user_id, "restricted_fields": restricted_fields_changed, "user_data": user_data})
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Admin users cannot modify these fields: {', '.join(restricted_fields_changed)}"
+                )
 
         db_user_info.email = user_data.get("email", db_user_info.email)
         db_user_info.username = user_data.get("username", db_user_info.username)
@@ -264,6 +309,7 @@ async def edit_user(request: Request, user_data: dict):
             # __admin__으로 끝나지 않는 그룹만 유지
             new_groups = [group for group in existing_groups if not group.endswith("__admin__")]
             app_db.update_list_columns(User, {"groups": new_groups}, {"id": user_id})
+            app_db.update_list_columns(User, {"available_admin_sections": []}, {"id": user_id})
             logger.info(f"User {user_id} demoted from admin - removed all __admin__ groups. Groups: {existing_groups} -> {new_groups}")
 
         backend_log.success(f"Successfully edited user: {user_id}",
@@ -292,17 +338,39 @@ async def edit_user_groups(request: Request, user_data: dict):
             status_code=403,
             detail="Admin privileges required"
         )
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["users", "group-permissions"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access group permissions without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Access to group permissions section required"
+        )
 
     try:
-        app_db = get_db_manager(request)
         user_id = user_data.get("id")
         db_user_info = app_db.find_by_condition(User, {"id": user_id})
         if not db_user_info:
+            backend_log.warn(f"User not found for editing groups: {user_id}")
             raise HTTPException(
                 status_code=404,
                 detail="User not found"
             )
-
+        if val_superuser.get("user_type") == "admin":
+            users = get_manager_accessible_users(app_db, val_superuser.get("user_id"))
+            if not any(u.id == user_id for u in users):
+                backend_log.warn(f"Admin user {val_superuser.get('user_id')} attempted to edit groups of inaccessible user: {user_id}")
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have permission to edit this user"
+                )
+        if val_superuser.get("user_type") == "admin" and (user_data.get("group_name").endswith("__admin__")):
+            backend_log.warn(f"Admin user {val_superuser.get('user_id')} attempted to assign __admin__ group to user {user_id}")
+            raise HTTPException(
+                status_code=403,
+                detail="Admin users cannot assign __admin__ groups"
+            )
         db_user_info = db_user_info[0]
         existing_groups = db_user_info.groups if db_user_info.groups else []
         add_group = user_data.get("group_name", db_user_info.group_name)
@@ -345,17 +413,36 @@ async def delete_user_groups(request: Request, user_data: dict):
             status_code=403,
             detail="Admin privileges required"
         )
-
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["users", "group-permissions"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access group permissions without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Access to group permissions section required"
+        )
     try:
-        app_db = get_db_manager(request)
         user_id = user_data.get("id")
-
-        # 사용자 존재 여부 확인
         db_user_info = app_db.find_by_condition(User, {"id": user_id})
         if not db_user_info:
             raise HTTPException(
                 status_code=404,
                 detail="User not found"
+            )
+        if val_superuser.get("user_type") == "admin":
+            users = get_manager_accessible_users(app_db, val_superuser.get("user_id"))
+            if not any(u.id == user_id for u in users):
+                backend_log.warn(f"Admin user {val_superuser.get('user_id')} attempted to edit groups of inaccessible user: {user_id}")
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have permission to edit this user"
+                )
+        if val_superuser.get("user_type") == "admin" and (user_data.get("group_name").endswith("__admin__")):
+            backend_log.warn(f"Admin user {val_superuser.get('user_id')} attempted to assign __admin__ group to user {user_id}")
+            raise HTTPException(
+                status_code=403,
+                detail="Admin users cannot assign __admin__ groups"
             )
 
         db_user_info = db_user_info[0]
@@ -394,6 +481,11 @@ async def edit_user_available_admin_sections(request: Request, user_data: dict):
             status_code=403,
             detail="Admin privileges required"
         )
+    if val_superuser.get("user_type") == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only superusers can modify available admin sections"
+        )
 
     try:
         app_db = get_db_manager(request)
@@ -420,6 +512,10 @@ async def edit_user_available_admin_sections(request: Request, user_data: dict):
         updates = {}
         if available_sections is not None:
             updates['available_admin_sections'] = available_sections
+        if db_user_info.is_admin is not True:
+            updates['is_admin'] = True
+        if db_user_info.user_type != "admin":
+            updates['user_type'] = "admin"
 
         app_db.update_list_columns(User, updates, {"id": user_id})
 
@@ -445,6 +541,11 @@ async def delete_user(request: Request, user_data: dict):
         raise HTTPException(
             status_code=403,
             detail="Admin privileges required"
+        )
+    if val_superuser.get("user_type") == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only superusers can delete user accounts"
         )
 
     try:
