@@ -6,7 +6,7 @@ available_sections = [
     # LLM-Models
     "train", "train-monitor", "eval", "model-storage",
     # ML-Models
-    "model-upload", "model-hub", "model-inference" , "ml-train", "ml-train-monitor",
+    "model-hub", "model-inference" , "ml-train", "ml-train-monitor",
     # Admin
     "admin-page",
 ]

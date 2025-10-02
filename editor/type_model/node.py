@@ -70,6 +70,7 @@ FUNCTION_LABEL_MAP = {
     'embeddings': 'Embedding',
     'graph': 'Graph',
     'memory': 'Memory',
+    'ml': 'Machine Learning',
     'moderation': 'Moderation',
     'output_parsers': 'Output Parser',
     'feedback':'Feedback',

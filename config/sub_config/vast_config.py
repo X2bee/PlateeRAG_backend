@@ -175,6 +175,31 @@ class VastConfig(BaseConfig):
             type_converter=convert_to_int,
         )
 
+        # ‣ 프록시 설정 ────────────────────────────────
+        self.VAST_PROXY_MODE = self.create_persistent_config(
+            env_name="VAST_PROXY_MODE",
+            config_path="vast.proxy.mode",
+            default_value="proxy",
+            type_converter=convert_to_str,
+        )
+        self.VAST_PROXY_BASE_URL = self.create_persistent_config(
+            env_name="VAST_PROXY_BASE_URL",
+            config_path="vast.proxy.base_url",
+            default_value="http://host.docker.internal:8024",
+            type_converter=convert_to_str,
+        )
+        self.VAST_PROXY_TIMEOUT = self.create_persistent_config(
+            env_name="VAST_PROXY_TIMEOUT",
+            config_path="vast.proxy.timeout",
+            default_value="300",
+            type_converter=convert_to_int,
+        )
+        self.VAST_PROXY_API_TOKEN = self.create_persistent_config(
+            env_name="VAST_PROXY_API_TOKEN",
+            config_path="vast.proxy.api_token",
+            default_value="",
+        )
+
         # ‣ onstart 명령어 설정 ──────────────────────────
         self.VAST_ONSTART_SCRIPT = self.create_persistent_config(
             env_name="VAST_ONSTART_SCRIPT",
