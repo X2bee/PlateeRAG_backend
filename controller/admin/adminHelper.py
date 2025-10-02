@@ -18,16 +18,23 @@ def get_manager_accessible_users(app_db: AppDatabaseManager, manager_id):
     all_users = app_db.find_by_condition(User, {"user_type__in__": ['admin', 'standard']}, limit=10000)
     own_admin_account = app_db.find_by_condition(User, {"id": manager_id, "user_type": "admin"}, limit=1)
 
-    filtered_users = [own_admin_account[0]] if own_admin_account else []
+    # user.id를 기준으로 중복 제거를 위한 dict 사용
+    filtered_users_dict = {}
+
+    # 자신의 계정 먼저 추가
+    if own_admin_account:
+        filtered_users_dict[own_admin_account[0].id] = own_admin_account[0]
+
+    # 관리 가능한 사용자들 추가
     for user in all_users:
         user_groups = user.groups if user.groups else []
         user_normal_groups = [g for g in user_groups if not g.endswith("__admin__")]
         user_groups_set = set(user_normal_groups)
 
         if user_groups_set and user_groups_set.issubset(set(admin_groups)):
-            filtered_users.append(user)
+            filtered_users_dict[user.id] = user
 
-    return filtered_users
+    return list(filtered_users_dict.values())
 
 def manager_section_access(app_db: AppDatabaseManager, manager_id, section_name):
     db_user_info = app_db.find_by_condition(User, {"id": manager_id}, limit=1)
