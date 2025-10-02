@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request, HTTPException
 from controller.helper.singletonHelper import get_db_manager
 from controller.admin.adminBaseController import validate_superuser
 from service.database.logger_helper import create_logger
-
+from controller.admin.adminHelper import get_manager_groups, get_manager_accessible_users, manager_section_access
 from service.database.models.group import GroupMeta
 from service.database.models.user import User
 
@@ -28,11 +28,29 @@ async def get_all_groups(request: Request):
 
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["group-permissions"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access group permissions without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Group permissions access required"
+        )
 
     try:
-        groups = app_db.find_by_condition(GroupMeta, {'available': True, 'group_name__notlike__': '%__admin__'})
-        backend_log.success("Successfully fetched all groups",
-                          metadata={"group_count": len(groups)})
+        if val_superuser.get("user_type") == "superuser":
+            groups = app_db.find_by_condition(GroupMeta, {'available': True, 'group_name__notlike__': '%__admin__'})
+            backend_log.success("Successfully fetched all groups",
+                              metadata={"group_count": len(groups)})
+        elif val_superuser.get("user_type") == "admin":
+            manager_groups = get_manager_groups(app_db, val_superuser.get("user_id"))
+            groups = app_db.find_by_condition(GroupMeta, {'available': True, 'group_name__in__': manager_groups})
+            backend_log.success("Successfully fetched all groups for admin",
+                              metadata={"admin_id": val_superuser.get("user_id"), "group_count": len(groups)})
+        else:
+            raise HTTPException(
+                status_code=403,
+                detail="Admin or Superuser privileges required"
+            )
         return {"groups": groups}
     except Exception as e:
         backend_log.error("Error fetching all groups", exception=e)
@@ -44,11 +62,31 @@ async def get_all_groups(request: Request):
 
 @router.get("/all-groups/list")
 async def get_all_groups_list(request: Request):
-    try:
-        app_db = get_db_manager(request)
-        groups = app_db.find_by_condition(GroupMeta, {'available': True, 'group_name__notlike__': '%__admin__'})
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+    app_db = get_db_manager(request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["users", "group-permissions"])
+    if not section_access:
+        raise HTTPException(
+            status_code=403,
+            detail="Group permissions access required"
+        )
 
-        # group_name만 추출해서 리스트로 반환
+    try:
+        if val_superuser.get("user_type") == "superuser":
+            groups = app_db.find_by_condition(GroupMeta, {'available': True, 'group_name__notlike__': '%__admin__'})
+        elif val_superuser.get("user_type") == "admin":
+            manager_groups = get_manager_groups(app_db, val_superuser.get("user_id"))
+            groups = app_db.find_by_condition(GroupMeta, {'available': True, 'group_name__in__': manager_groups})
+        else:
+            raise HTTPException(
+                status_code=403,
+                detail="Admin or Superuser privileges required"
+            )
         group_names = [group.group_name for group in groups]
 
         return {"groups": group_names}
@@ -66,6 +104,11 @@ async def create_group(request: Request, group_data: GroupData):
         raise HTTPException(
             status_code=403,
             detail="Admin privileges required"
+        )
+    if val_superuser.get("user_type") != "superuser":
+        raise HTTPException(
+            status_code=403,
+            detail="Only superusers can create groups"
         )
 
     app_db = get_db_manager(request)
@@ -114,9 +157,26 @@ async def get_group_users(request: Request, group_name: str):
             status_code=403,
             detail="Admin privileges required"
         )
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["group-permissions"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access group permissions without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Group permissions access required"
+        )
+
+    if val_superuser.get("user_type") == "admin":
+        manager_groups = get_manager_groups(app_db, val_superuser.get("user_id"))
+        if group_name not in manager_groups:
+            backend_log.warn(f"Admin {val_superuser.get('user_id')} attempted to access unauthorized group: {group_name}")
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have access to this group"
+            )
 
     try:
-        app_db = get_db_manager(request)
         db_type = app_db.config_db_manager.db_type
 
         if db_type == "postgresql":
@@ -177,6 +237,11 @@ async def delete_group(request: Request, group_name: str):
         raise HTTPException(
             status_code=403,
             detail="Admin privileges required"
+        )
+    if val_superuser.get("user_type") != "superuser":
+        raise HTTPException(
+            status_code=403,
+            detail="Only superusers can delete groups"
         )
 
     app_db = get_db_manager(request)
@@ -239,6 +304,11 @@ async def update_group_permissions(request: Request, group_data: dict):
         raise HTTPException(
             status_code=403,
             detail="Admin privileges required"
+        )
+    if val_superuser.get("user_type") != "superuser":
+        raise HTTPException(
+            status_code=403,
+            detail="Only superusers can update group permissions"
         )
 
     try:

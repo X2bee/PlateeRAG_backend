@@ -2,6 +2,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
 from fastapi import APIRouter, Request, HTTPException
+from controller.admin.adminHelper import manager_section_access
 from controller.helper.singletonHelper import get_db_manager
 from controller.admin.adminBaseController import validate_superuser
 from service.database.logger_helper import create_logger
@@ -33,15 +34,21 @@ async def get_table_list(request: Request):
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
             status_code=403,
-            detail="Superuser privileges required"
+            detail="Admin privileges required"
         )
 
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["database"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         tables = app_db.get_table_list()
-
         backend_log.success("Successfully retrieved database table list",
                           metadata={"table_count": len(tables)})
         logger.info("Retrieved %d tables from database", len(tables))
@@ -69,11 +76,18 @@ async def execute_query(request: Request, query_request: QueryRequest):
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
             status_code=403,
-            detail="Superuser privileges required"
+            detail="Admin privileges required"
         )
 
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["database"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         # 파라미터 튜플로 변환
@@ -120,11 +134,20 @@ async def get_table_structure(request: Request, table_name: str):
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
             status_code=403,
-            detail="Superuser privileges required"
+            detail="Admin privileges required"
+        )
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["database"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
         )
 
     try:
-        app_db = get_db_manager(request)
         db_type = app_db.config_db_manager.db_type
 
         if db_type == "postgresql":
@@ -183,7 +206,17 @@ async def get_table_sample_data(request: Request, table_name: str, limit: int = 
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
             status_code=403,
-            detail="Superuser privileges required"
+            detail="Admin privileges required"
+        )
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["database"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
         )
 
     try:
@@ -191,7 +224,6 @@ async def get_table_sample_data(request: Request, table_name: str, limit: int = 
         if limit < 1 or limit > 1000:
             limit = 100
 
-        app_db = get_db_manager(request)
         db_type = app_db.config_db_manager.db_type
 
         if db_type == "postgresql":
@@ -244,11 +276,20 @@ async def get_database_info(request: Request):
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
             status_code=403,
-            detail="Superuser privileges required"
+            detail="Admin privileges required"
+        )
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["database"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
         )
 
     try:
-        app_db = get_db_manager(request)
         db_type = app_db.config_db_manager.db_type
 
         # 기본 데이터베이스 정보
@@ -297,13 +338,20 @@ async def get_table_row_count(request: Request, table_name: str):
     if val_superuser.get("superuser") is not True:
         raise HTTPException(
             status_code=403,
-            detail="Superuser privileges required"
+            detail="Admin privileges required"
+        )
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["database"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
         )
 
     try:
-        app_db = get_db_manager(request)
-
-        # 테이블명 검증 (SQL 인젝션 방지를 위해 간단한 검증)
         if not table_name.replace('_', '').replace('-', '').isalnum():
             return {
                 "success": False,
