@@ -2,6 +2,7 @@ import logging
 from pydantic import BaseModel
 from typing import Optional
 from fastapi import APIRouter, Request, HTTPException
+from controller.admin.adminHelper import get_manager_groups, get_manager_accessible_users, manager_section_access, get_manager_accessible_workflows_ids
 from controller.helper.controllerHelper import require_admin_access
 from service.database.models.user import User
 from service.database.models.backend import BackendLogs
@@ -207,14 +208,20 @@ async def create_superuser(request: Request, signup_data: SignupRequest):
 @router.get("/backend/logs")
 async def get_backend_logs(request: Request, page: int = 1, page_size: int = 250):
     val_superuser = await validate_superuser(request)
-    if not val_superuser.get("superuser", False):
+    if val_superuser.get("superuser") is not True:
         raise HTTPException(
             status_code=403,
-            detail="Superuser access required"
+            detail="Admin privileges required"
         )
-
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["backend-logs"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access backend logs without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Backend logs access required"
+        )
 
     try:
         if page < 1:
@@ -224,9 +231,15 @@ async def get_backend_logs(request: Request, page: int = 1, page_size: int = 250
 
         offset = (page - 1) * page_size
 
+        if val_superuser.get("user_type") != "superuser":
+            accessible_user_ids = [user.id for user in get_manager_accessible_users(app_db, val_superuser.get("user_id"))]
+            conditions = {"user_id__in__": accessible_user_ids}
+        else:
+            conditions = {}
+
         logs = app_db.find_by_condition(
             BackendLogs,
-            {},
+            conditions,
             orderby="created_at",
             limit=page_size,
             offset=offset

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, List, Any
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
+from controller.admin.adminHelper import manager_section_access
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from controller.admin.adminBaseController import validate_superuser
 from service.database.logger_helper import create_logger
@@ -233,9 +234,15 @@ async def get_system_status(request: Request):
             status_code=403,
             detail="Admin privileges required"
         )
-
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["system-monitor"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access system monitor without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="System monitor access required"
+        )
 
     try:
         # Gather all system information
@@ -307,6 +314,15 @@ async def stream_system_status(request: Request):
         raise HTTPException(
             status_code=403,
             detail="Admin privileges required"
+        )
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["system-monitor"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access system monitor without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="System monitor access required"
         )
 
     return StreamingResponse(

@@ -9,6 +9,8 @@ from typing import Optional, Dict, List, Any
 from fastapi import APIRouter, Request, HTTPException, Query
 from controller.helper.singletonHelper import get_db_manager
 from controller.admin.adminBaseController import validate_superuser
+from service.database.logger_helper import create_logger
+from controller.admin.adminHelper import get_manager_groups, get_manager_accessible_users, manager_section_access, get_manager_accessible_workflows_ids
 
 from service.database.models.executor import ExecutionIO
 from service.database.models.user import User
@@ -62,11 +64,17 @@ async def get_user_token_usage(
             status_code=403,
             detail="Admin privileges required"
         )
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["user-token-dashboard"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access user token dashboard without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="User token dashboard access required"
+        )
 
     try:
-        app_db = get_db_manager(request)
-
-        # Parse date filters
         start_datetime = None
         end_datetime = None
 
@@ -88,10 +96,16 @@ async def get_user_token_usage(
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
 
-        all_users = app_db.find_all(User)
-        user_id_to_username = {user.id: user.username for user in all_users}
+        if val_superuser.get("user_type") != "superuser":
+            manager_accessible_users = get_manager_accessible_users(app_db, val_superuser.get("user_id"))
+            user_id_to_username = {user.id: user.username for user in manager_accessible_users}
+            manager_accessible_user_ids = list(user_id_to_username.keys())
+            all_logs = app_db.find_by_condition(ExecutionIO, {"user_id__in__": manager_accessible_user_ids})
+        else:
+            all_users = app_db.find_all(User)
+            user_id_to_username = {user.id: user.username for user in all_users}
+            all_logs = app_db.find_all(ExecutionIO)
 
-        all_logs = app_db.find_all(ExecutionIO)
         # First pass: identify users who had activity in the date range (if specified)
         users_in_date_range = set()
         if start_datetime or end_datetime:
@@ -101,8 +115,6 @@ async def get_user_token_usage(
                     continue
 
                 log_date = normalize_datetime_for_comparison(log.created_at)
-
-                # Check if this log falls within the date range
                 in_range = True
                 if start_datetime and log_date < start_datetime:
                     in_range = False
@@ -251,10 +263,17 @@ async def get_token_usage_summary(
             status_code=403,
             detail="Admin privileges required"
         )
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["user-token-dashboard"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access user token dashboard without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="User token dashboard access required"
+        )
 
     try:
-        app_db = get_db_manager(request)
-
         # Parse date filters (same logic as main endpoint)
         start_datetime = None
         end_datetime = None
@@ -275,7 +294,12 @@ async def get_token_usage_summary(
                 raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
 
         # Get all logs
-        all_logs = app_db.find_all(ExecutionIO)
+        if val_superuser.get("user_type") != "superuser":
+            manager_accessible_users = get_manager_accessible_users(app_db, val_superuser.get("user_id"))
+            manager_accessible_user_ids = [user.id for user in manager_accessible_users]
+            all_logs = app_db.find_by_condition(ExecutionIO, {"user_id__in__": manager_accessible_user_ids})
+        else:
+            all_logs = app_db.find_all(ExecutionIO)
 
         # Filter logs by date range if specified
         filtered_logs = []
