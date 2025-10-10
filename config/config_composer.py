@@ -398,6 +398,9 @@ class ConfigComposer:
             # 2. config_composer의 all_configs 업데이트
             self.update_config_by_name(config_name, config_obj.value)
 
+            # 3. 런타임에서 필요한 부수효과 적용 (환경변수 등)
+            self._apply_runtime_side_effects(config_name, config_obj.value)
+
             self.logger.info("Successfully updated config '%s': %s -> %s",
                            config_name, old_value, config_obj.value)
 
@@ -417,6 +420,34 @@ class ConfigComposer:
         except Exception as e:
             self.logger.error("Failed to update config '%s': %s", config_name, e)
             raise
+
+    def _apply_runtime_side_effects(self, config_name: str, new_value: Any) -> None:
+        """특정 설정 변경 시 런타임 환경에 즉시 반영이 필요한 부수효과 처리"""
+        if config_name == "OPENAI_API_KEY":
+            sanitized = str(new_value).strip() if new_value is not None else ""
+            if sanitized:
+                os.environ["OPENAI_API_KEY"] = sanitized
+                self.logger.debug("Updated OPENAI_API_KEY environment variable")
+            else:
+                removed = False
+                if os.environ.pop("OPENAI_API_KEY", None) is not None:
+                    removed = True
+                if removed:
+                    self.logger.debug("Cleared OPENAI_API_KEY environment variable")
+        elif config_name == "OPENAI_API_BASE_URL":
+            sanitized = str(new_value).strip() if new_value is not None else ""
+            if sanitized:
+                os.environ["OPENAI_API_BASE_URL"] = sanitized
+                os.environ["OPENAI_BASE_URL"] = sanitized
+                self.logger.debug("Updated OPENAI_API_BASE_URL/OPENAI_BASE_URL environment variables")
+            else:
+                removed = False
+                if os.environ.pop("OPENAI_API_BASE_URL", None) is not None:
+                    removed = True
+                if os.environ.pop("OPENAI_BASE_URL", None) is not None:
+                    removed = True
+                if removed:
+                    self.logger.debug("Cleared OPENAI_API_BASE_URL/OPENAI_BASE_URL environment variables")
 
 # 전역 설정 컴포저 인스턴스
 config_composer = ConfigComposer()
