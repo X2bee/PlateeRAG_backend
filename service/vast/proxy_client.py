@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 import httpx
 from fastapi import HTTPException
@@ -19,16 +19,10 @@ class VastProxyClient:
     is_proxy: bool = True
 
     def __init__(self, config_composer):
-        vast_config = config_composer.get_config_by_category_name("vast")
-        self._base_url = (vast_config.VAST_PROXY_BASE_URL.value or "").rstrip("/")
-        self._timeout = vast_config.VAST_PROXY_TIMEOUT.value or 30
-        self._proxy_token = vast_config.VAST_PROXY_API_TOKEN.value or ""
-        self._api_key = getattr(vast_config, "VAST_API_KEY", None)
-        if self._api_key is not None and hasattr(self._api_key, "value"):
-            self._api_key = self._api_key.value
-        self._api_key_synced = False
+        self._vast_config = config_composer.get_config_by_category_name("vast")
+        self._synced_context: Optional[Tuple[str, str, str]] = None
 
-        if not self._base_url:
+        if not self._get_base_url():
             logger.warning("Vast proxy client enabled but base URL is not configured.")
 
     # ------------------------------------------------------------------
@@ -54,11 +48,12 @@ class VastProxyClient:
         timeout: Optional[float] = None,
         extra_headers: Optional[Dict[str, str]] = None,
     ) -> Any:
-        if not self._base_url:
+        base_url = self._get_base_url()
+        if not base_url:
             raise HTTPException(status_code=500, detail="Vast proxy base URL is not configured")
 
-        url = f"{self._base_url}{path}"
-        request_timeout = timeout if timeout is not None else self._timeout
+        url = f"{base_url}{path}"
+        request_timeout = timeout if timeout is not None else self._get_timeout()
 
         try:
             async with httpx.AsyncClient(timeout=request_timeout, headers=self._build_headers(extra_headers)) as client:
@@ -150,13 +145,14 @@ class VastProxyClient:
     # SSE support
     # ------------------------------------------------------------------
     async def stream_instance_status(self, instance_id: str, headers: Optional[Dict[str, str]] = None) -> StreamingResponse:
-        if not self._base_url:
+        base_url = self._get_base_url()
+        if not base_url:
             raise HTTPException(status_code=500, detail="Vast proxy base URL is not configured")
 
-        url = f"{self._base_url}/api/vast/instances/{instance_id}/status-stream"
+        url = f"{base_url}/api/vast/instances/{instance_id}/status-stream"
         client_headers = self._build_headers(headers)
         # SSE should not enforce strict timeout; keep-alive from remote
-        timeout = httpx.Timeout(None, connect=self._timeout)
+        timeout = httpx.Timeout(None, connect=self._get_timeout())
 
         await self._ensure_api_key()
 
@@ -184,21 +180,42 @@ class VastProxyClient:
         )
 
     async def _ensure_api_key(self) -> None:
-        if self._api_key_synced:
+        api_key = self._get_api_key()
+        if not api_key:
+            self._synced_context = None
             return
 
-        if not self._api_key:
-            self._api_key_synced = True
+        proxy_token = self._get_proxy_token()
+        context = (api_key, self._get_base_url(), proxy_token)
+        if self._synced_context == context:
             return
 
-        extra_headers = None
-        if self._proxy_token:
-            extra_headers = {"Authorization": f"Bearer {self._proxy_token}"}
+        extra_headers = {"Authorization": f"Bearer {proxy_token}"} if proxy_token else None
 
         await self._request(
             "POST",
             "/api/vast/proxy/api-key",
-            json_body={"api_key": self._api_key},
+            json_body={"api_key": api_key},
             extra_headers=extra_headers,
         )
-        self._api_key_synced = True
+        self._synced_context = context
+
+    def _get_base_url(self) -> str:
+        config_obj = getattr(self._vast_config, "VAST_PROXY_BASE_URL", None)
+        base_url = getattr(config_obj, "value", None) or ""
+        return base_url.rstrip("/")
+
+    def _get_timeout(self) -> float:
+        config_obj = getattr(self._vast_config, "VAST_PROXY_TIMEOUT", None)
+        timeout_value = getattr(config_obj, "value", None)
+        return timeout_value or 30
+
+    def _get_proxy_token(self) -> str:
+        config_obj = getattr(self._vast_config, "VAST_PROXY_API_TOKEN", None)
+        return getattr(config_obj, "value", None) or ""
+
+    def _get_api_key(self) -> Optional[str]:
+        config_obj = getattr(self._vast_config, "VAST_API_KEY", None)
+        if config_obj is None:
+            return None
+        return getattr(config_obj, "value", None) or None
