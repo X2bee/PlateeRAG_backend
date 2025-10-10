@@ -11,7 +11,6 @@ from controller.node.nodeApiController import register_node_api_routes
 
 from controller.node.router import node_router
 from controller.admin.router import admin_router
-from controller.manager.router import manager_router
 from controller.workflow.router import workflow_router
 from controller.rag.router import rag_router
 from controller.audio.router import audio_router
@@ -25,7 +24,7 @@ from controller.interactionController import router as interactionRouter
 from controller.huggingface.huggingfaceController import router as huggingfaceRouter
 from controller.appController import router as appRouter
 from controller.authController import router as authRouter
-from controller.vastController import router as vastRouter
+from controller.vast_proxy_controller import router as vastProxyRouter
 from controller.promptController import router as promptRouter
 from controller.mcpController import router as mcpRouter
 from editor.node_composer import run_discovery, generate_json_spec, get_node_registry
@@ -39,11 +38,12 @@ from service.embedding.embedding_factory import EmbeddingFactory
 from service.stt.stt_factory import STTFactory
 from service.tts.tts_factory import TTSFactory
 from service.guarder.guarder_factory import GuarderFactory
-from service.vast.vast_service import VastService
+from service.vast.proxy_client import VastProxyClient
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
 from service.data_manager.data_manager_register import DataManagerRegistry
+from service.mlflow.mlflow_artifact_service import MLflowArtifactService
 from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
 from controller.helper.utils.workflow_helpers import workflow_data_synchronizer
 
@@ -303,11 +303,14 @@ async def lifespan(app: FastAPI):
             print_step_banner(5.7, "GUARDER SERVICE SETUP", "Guarder service is disabled in configuration")
             app.state.guarder_service = None
 
-        # 6. vast_service Instance 생성
-        print_step_banner(6, "VAST SERVICE SETUP", "Initializing cloud compute management")
-        logger.info("⚙️  Step 6: VAST service initialization starting...")
-        app.state.vast_service = VastService(app_db, config_composer)
-        logger.info("✅ Step 6: VAST service initialized successfully!")
+        # 6. Vast proxy client 생성
+        print_step_banner(6, "VAST PROXY SETUP", "Initializing remote VastAI proxy")
+        logger.info("⚙️  Step 6: VAST proxy client initialization starting...")
+        vast_proxy_client = VastProxyClient(config_composer)
+        app.state.vast_proxy_client = vast_proxy_client
+        # 기존 의존성을 사용하는 코드 호환을 위해 동일 객체를 vast_service로도 노출
+        app.state.vast_service = vast_proxy_client
+        logger.info("✅ Step 6: VAST proxy client initialized successfully")
 
         # 7. 워크플로우 실행 매니저 초기화
         print_step_banner(7, "WORKFLOW MANAGER SETUP", "Setting up workflow execution engine")
@@ -320,6 +323,35 @@ async def lifespan(app: FastAPI):
         logger.info("⚙️  Step 7.5: Data manager registry initialization starting...")
         app.state.data_manager_registry = DataManagerRegistry()
         logger.info("✅ Step 7.5: Data manager registry initialized successfully!")
+
+        # 7.7. MLflow artifact service initialization
+        print_step_banner(7.7, "MLFLOW ARTIFACT SERVICE", "Integrating MLflow tracking and artifacts")
+        mlflow_tracking_uri = os.getenv("MLFLOW_URL", "").strip()
+        mlflow_default_experiment_id = os.getenv("MLFLOW_DEFAULT_EXPERIMENT_ID")
+        mlflow_cache_dir = os.getenv("MLFLOW_CACHE_DIR")
+        mlflow_token = os.getenv("MLFLOW_TRACKING_TOKEN")
+
+        if mlflow_tracking_uri:
+            try:
+                logger.info("⚙️  Step 7.7: MLflow artifact service initialization starting...")
+                mlflow_service = MLflowArtifactService(
+                    tracking_uri=mlflow_tracking_uri,
+                    default_experiment_id=mlflow_default_experiment_id,
+                    cache_dir=mlflow_cache_dir,
+                    tracking_token=mlflow_token,
+                )
+                app.state.mlflow_service = mlflow_service
+                logger.info("✅ Step 7.7: MLflow artifact service initialized successfully!")
+            except Exception as mlflow_error:
+                app.state.mlflow_service = None
+                logger.error(
+                    "❌ Step 7.7: Failed to initialize MLflow service: %s",
+                    mlflow_error,
+                    exc_info=True,
+                )
+        else:
+            app.state.mlflow_service = None
+            logger.warning("⚠️  MLflow tracking URI not configured. MLflow integration is disabled.")
 
         print_step_banner(8, "SYSTEM VALIDATION", "Validating configurations and directories")
         logger.info("⚙️  Step 8: System validation starting...")
@@ -491,7 +523,6 @@ app.add_middleware(
 
 app.include_router(node_router)
 app.include_router(admin_router)
-app.include_router(manager_router)
 app.include_router(workflow_router)
 app.include_router(rag_router)
 app.include_router(audio_router)
@@ -504,7 +535,7 @@ app.include_router(performanceRouter)
 app.include_router(trainRouter)
 app.include_router(interactionRouter)
 app.include_router(appRouter)
-app.include_router(vastRouter)
+app.include_router(vastProxyRouter)
 app.include_router(huggingfaceRouter)
 app.include_router(promptRouter)
 app.include_router(mcpRouter)

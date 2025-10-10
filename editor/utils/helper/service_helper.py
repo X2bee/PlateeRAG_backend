@@ -152,6 +152,45 @@ def get_guarder_service() -> Optional[object]:
         logger.error(f"Guarder 서비스 접근 중 오류: {e}")
         return None
 
+
+def get_mlflow_artifact_service() -> Optional[object]:
+    """FastAPI 앱에서 MLflow artifact 서비스를 가져오는 헬퍼 함수"""
+    try:
+        import sys
+
+        if 'main' in sys.modules:
+            main_module = sys.modules['main']
+            try:
+                if hasattr(main_module, 'app'):
+                    app = main_module.app
+                    if hasattr(app, 'state') and hasattr(app.state, 'mlflow_service'):
+                        service = getattr(app.state, 'mlflow_service', None)
+                        if service is not None:
+                            logger.info("main 모듈에서 MLflow 서비스를 찾았습니다.")
+                            return service
+            except Exception as app_error:
+                logger.debug(f"main 모듈에서 MLflow 서비스 접근 실패: {app_error}")
+
+        for module_name, module in sys.modules.items():
+            try:
+                if hasattr(module, 'app'):
+                    app = getattr(module, 'app')
+                    if hasattr(app, 'state') and hasattr(app.state, 'mlflow_service'):
+                        service = getattr(app.state, 'mlflow_service', None)
+                        if service is not None:
+                            logger.info(f"{module_name} 모듈에서 MLflow 서비스를 찾았습니다.")
+                            return service
+            except Exception as app_error:
+                logger.debug(f"{module_name} 모듈에서 MLflow 서비스 접근 실패: {app_error}")
+                continue
+
+        logger.warning("MLflow 서비스를 찾을 수 없습니다. 서버가 실행되지 않았을 수 있습니다.")
+        return None
+
+    except Exception as exc:
+        logger.error(f"MLflow 서비스 접근 중 오류: {exc}")
+        return None
+
 class RAGServiceManager:
     @classmethod
     def get_service(cls):
@@ -196,6 +235,18 @@ class GuarderServiceManager:
         """캐시 초기화"""
         cls._cached_service = None
 
+
+class MLflowServiceManager:
+    @classmethod
+    def get_service(cls):
+        cls._cached_service = get_mlflow_artifact_service()
+        return cls._cached_service
+
+    @classmethod
+    def clear_cache(cls):
+        """캐시 초기화"""
+        cls._cached_service = None
+
 # 통합 매니저 클래스
 class AppServiceManager:
     @staticmethod
@@ -217,3 +268,8 @@ class AppServiceManager:
     def get_guarder_service():
         """Guarder 서비스 반환"""
         return GuarderServiceManager.get_service()
+
+    @staticmethod
+    def get_mlflow_service():
+        """MLflow artifact 서비스 반환"""
+        return MLflowServiceManager.get_service()
