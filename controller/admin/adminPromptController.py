@@ -15,6 +15,7 @@ from service.database.models.prompts import Prompts
 from controller.helper.singletonHelper import get_db_manager
 from controller.admin.adminBaseController import validate_superuser
 from service.database.logger_helper import create_logger
+from controller.admin.adminHelper import get_manager_groups, get_manager_accessible_users, manager_section_access, get_manager_accessible_workflows_ids
 
 logger = logging.getLogger("admin-prompt-controller")
 router = APIRouter(prefix="/prompt", tags=["Admin"])
@@ -53,9 +54,15 @@ async def get_all_prompts(
             status_code=403,
             detail="Admin privileges required"
         )
-
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["prompt-store"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access prompt store without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Prompt store access required"
+        )
 
     backend_log.info(
         "Retrieving all prompts (admin)",
@@ -69,12 +76,24 @@ async def get_all_prompts(
     )
 
     try:
-        # 조건 구성
-        conditions = {}
+        if user_id:
+            if val_superuser.get("user_type") != "superuser":
+                accessible_user_ids = [user.id for user in get_manager_accessible_users(app_db, val_superuser.get("user_id"))]
+                if user_id not in accessible_user_ids:
+                    backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access prompts of user {user_id} without permission")
+                    raise HTTPException(
+                        status_code=403,
+                        detail="You do not have access to prompts of this user"
+                    )
+            conditions = {"user_id": user_id}
+        else:
+            if val_superuser.get("user_type") != "superuser":
+                accessible_user_ids = [user.id for user in get_manager_accessible_users(app_db, val_superuser.get("user_id"))]
+                conditions = {"user_id__in__": accessible_user_ids}
+            else:
+                conditions = {}
         if language:
             conditions["language"] = language
-        if user_id:
-            conditions["user_id"] = user_id
         if is_template is not None:
             conditions["is_template"] = is_template
 
@@ -157,11 +176,15 @@ async def create_prompt(
             status_code=403,
             detail="Admin privileges required"
         )
-
     app_db = get_db_manager(request)
-    admin_user_id = val_superuser.get("user_id")
-    backend_log = create_logger(app_db, admin_user_id, request)
-
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["prompt-store"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access prompt store without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Prompt store access required"
+        )
     backend_log.info(
         "Creating new prompt (admin)",
         metadata={
@@ -181,7 +204,7 @@ async def create_prompt(
 
         # 새로운 Prompt 객체 생성
         new_prompt = Prompts(
-            user_id=admin_user_id,
+            user_id=val_superuser.get("user_id"),
             prompt_uid=prompt_uid,
             prompt_title=prompt_data.prompt_title,
             prompt_content=prompt_data.prompt_content,
@@ -203,7 +226,7 @@ async def create_prompt(
                 "public_available": prompt_data.public_available,
                 "is_template": prompt_data.is_template,
                 "language": prompt_data.language,
-                "user_id": admin_user_id,
+                "user_id": val_superuser.get("user_id"),
                 "metadata": {}
             }
 
@@ -252,9 +275,15 @@ async def update_prompt(
             status_code=403,
             detail="Admin privileges required"
         )
-
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["prompt-store"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access prompt store without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Prompt store access required"
+        )
 
     backend_log.info(
         "Updating prompt (admin)",
@@ -277,6 +306,15 @@ async def update_prompt(
                 metadata={"prompt_uid": prompt_data.prompt_uid},
             )
             raise HTTPException(status_code=404, detail="Prompt not found")
+
+        if val_superuser.get("user_type") != "superuser":
+            accessible_user_ids = [user.id for user in get_manager_accessible_users(app_db, val_superuser.get("user_id"))]
+            if exist_prompt_data[0].user_id not in accessible_user_ids:
+                backend_log.warn(f"User {val_superuser.get('user_id')} attempted to update prompt of user {exist_prompt_data[0].user_id} without permission")
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have access to update this prompt"
+                )
 
         exist_prompt_data = exist_prompt_data[0]
 
@@ -333,9 +371,15 @@ async def delete_prompt(
             status_code=403,
             detail="Admin privileges required"
         )
-
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["prompt-store"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access prompt store without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Prompt store access required"
+        )
 
     backend_log.info(
         "Deleting prompt (admin)",
@@ -359,7 +403,15 @@ async def delete_prompt(
             )
             raise HTTPException(status_code=404, detail="Prompt not found")
 
-        # 삭제
+        if val_superuser.get("user_type") != "superuser":
+            accessible_user_ids = [user.id for user in get_manager_accessible_users(app_db, val_superuser.get("user_id"))]
+            if prompt[0].user_id not in accessible_user_ids:
+                backend_log.warn(f"User {val_superuser.get('user_id')} attempted to delete prompt of user {prompt[0].user_id} without permission")
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have access to delete this prompt"
+                )
+
         delete_result = app_db.delete_by_condition(
             Prompts,
             {"prompt_uid": prompt_data.prompt_uid}

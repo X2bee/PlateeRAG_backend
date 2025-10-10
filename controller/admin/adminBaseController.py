@@ -2,11 +2,14 @@ import logging
 from pydantic import BaseModel
 from typing import Optional
 from fastapi import APIRouter, Request, HTTPException
+from controller.admin.adminHelper import get_manager_groups, get_manager_accessible_users, manager_section_access, get_manager_accessible_workflows_ids
 from controller.helper.controllerHelper import require_admin_access
 from service.database.models.user import User
 from service.database.models.backend import BackendLogs
 from controller.helper.singletonHelper import get_config_composer, get_vector_manager, get_rag_service, get_document_processor, get_db_manager
 from service.database.logger_helper import create_logger
+from controller.utils.section_config import available_sections, available_admin_sections
+
 logger = logging.getLogger("admin-controller")
 router = APIRouter(prefix="/base", tags=["Admin"])
 
@@ -89,13 +92,13 @@ async def validate_superuser(request: Request):
         user_info = user_info[0] if user_info and len(user_info) > 0 else None
 
         if user_info.user_type == "superuser":
-            return {"superuser": True, "user_id": user_id}
+            return {"superuser": True, "user_id": user_id, "available_admin_sections": available_admin_sections, "user_type": "superuser"}
 
         elif user_info.user_type == "admin" and user_info.available_admin_sections is not None and user_info.available_admin_sections != []:
-            return {"superuser": True, "user_id": user_id, "available_admin_sections": user_info.available_admin_sections}
+            return {"superuser": True, "user_id": user_id, "available_admin_sections": user_info.available_admin_sections, "user_type": "admin"}
 
         else:
-            return {"superuser": False}
+            return {"superuser": False, "user_id": None, "available_admin_sections": [], "user_type": "standard"}
 
     except Exception as e:
         logger.error(f"Token refresh error: {str(e)}")
@@ -205,14 +208,20 @@ async def create_superuser(request: Request, signup_data: SignupRequest):
 @router.get("/backend/logs")
 async def get_backend_logs(request: Request, page: int = 1, page_size: int = 250):
     val_superuser = await validate_superuser(request)
-    if not val_superuser.get("superuser", False):
+    if val_superuser.get("superuser") is not True:
         raise HTTPException(
             status_code=403,
-            detail="Superuser access required"
+            detail="Admin privileges required"
         )
-
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["backend-logs"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access backend logs without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Backend logs access required"
+        )
 
     try:
         if page < 1:
@@ -222,9 +231,15 @@ async def get_backend_logs(request: Request, page: int = 1, page_size: int = 250
 
         offset = (page - 1) * page_size
 
+        if val_superuser.get("user_type") != "superuser":
+            accessible_user_ids = [user.id for user in get_manager_accessible_users(app_db, val_superuser.get("user_id"))]
+            conditions = {"user_id__in__": accessible_user_ids}
+        else:
+            conditions = {}
+
         logs = app_db.find_by_condition(
             BackendLogs,
-            {},
+            conditions,
             orderby="created_at",
             limit=page_size,
             offset=offset
