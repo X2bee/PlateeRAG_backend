@@ -411,17 +411,125 @@ def _download_schema_field_names(
     return _deduplicate_names(extracted)
 
 
+def _parse_signature_section(signature_payload: Any) -> tuple[Optional[List[str]], Optional[List[str]]]:
+    if isinstance(signature_payload, str):
+        candidate = signature_payload.strip()
+        if not candidate:
+            return None, None
+        try:
+            signature_payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            return None, None
+
+    if isinstance(signature_payload, dict):
+        inputs = _deduplicate_names(_collect_schema_column_names(signature_payload.get("inputs")))
+        outputs = _deduplicate_names(_collect_schema_column_names(signature_payload.get("outputs")))
+        return inputs, outputs
+
+    if isinstance(signature_payload, list):
+        inputs = _deduplicate_names(_collect_schema_column_names(signature_payload))
+        return inputs, None
+
+    return None, None
+
+
+def _extract_schema_from_mlmodel(
+    mlflow_service: Any,
+    *,
+    run_id: Optional[str],
+    artifact_path: Optional[str],
+) -> tuple[Optional[List[str]], Optional[List[str]]]:
+    if not mlflow_service or not run_id:
+        return None, None
+
+    normalized_path = (artifact_path or "").strip("/")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="mlmodel_schema_") as tmp_dir:
+            downloaded = Path(
+                mlflow_service.client.download_artifacts(
+                    run_id,
+                    normalized_path or "",
+                    dst_path=tmp_dir,
+                )
+            )
+
+            candidates: List[Path] = []
+            if downloaded.is_file():
+                if downloaded.name == "MLmodel":
+                    candidates.append(downloaded)
+                else:
+                    mlmodel_candidate = downloaded.parent / "MLmodel"
+                    if mlmodel_candidate.exists():
+                        candidates.append(mlmodel_candidate)
+            else:
+                direct = downloaded / "MLmodel"
+                if direct.exists():
+                    candidates.append(direct)
+                else:
+                    candidates.extend(downloaded.rglob("MLmodel"))
+
+            for mlmodel_path in candidates:
+                try:
+                    raw_text = mlmodel_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+
+                payload: Any = None
+                try:
+                    import yaml  # type: ignore
+
+                    payload = yaml.safe_load(raw_text)
+                except Exception:
+                    try:
+                        payload = json.loads(raw_text)
+                    except json.JSONDecodeError:
+                        payload = None
+
+                if not isinstance(payload, dict):
+                    continue
+
+                for key in ("signature", "model_signature", "signature_dict"):
+                    inputs, outputs = _parse_signature_section(payload.get(key))
+                    if inputs or outputs:
+                        return inputs, outputs
+
+                input_payload = payload.get("input_schema")
+                output_payload = payload.get("output_schema")
+                inferred_inputs = _deduplicate_names(_collect_schema_column_names(input_payload)) if input_payload else None
+                inferred_outputs = _deduplicate_names(_collect_schema_column_names(output_payload)) if output_payload else None
+                if inferred_inputs or inferred_outputs:
+                    return inferred_inputs, inferred_outputs
+    except Exception as exc:  # pragma: no cover - artifact download failures
+        logger.debug(
+            "[schema-fetch] Failed to inspect MLmodel for schema | run_id=%s path=%s error=%s",
+            run_id,
+            artifact_path,
+            exc,
+        )
+
+    return None, None
+
+
 def _resolve_schema_field_names(
     mlflow_service: Any,
     *,
     run_id: Optional[str],
     tags: Optional[Dict[str, Any]],
+    artifact_path: Optional[str],
 ) -> tuple[Optional[List[str]], Optional[List[str]]]:
     tag_dict = tags if isinstance(tags, dict) else {}
 
-    input_schema_fields = _parse_literal_list(tag_dict.get("input_feature_names"))
+    input_schema_fields, output_schema_fields = _extract_schema_from_mlmodel(
+        mlflow_service,
+        run_id=run_id,
+        artifact_path=artifact_path,
+    )
+
     if not input_schema_fields:
         input_schema_fields = _parse_literal_list(tag_dict.get("feature_names"))
+    if not input_schema_fields:
+        input_schema_fields = _parse_literal_list(tag_dict.get("input_feature_names"))
     if not input_schema_fields:
         input_schema_fields = _download_schema_field_names(
             mlflow_service,
@@ -429,7 +537,8 @@ def _resolve_schema_field_names(
             run_id=run_id,
         )
 
-    output_schema_fields = _parse_literal_list(tag_dict.get("task_original_classes"))
+    if not output_schema_fields:
+        output_schema_fields = _parse_literal_list(tag_dict.get("task_original_classes"))
     if not output_schema_fields:
         output_schema_fields = _parse_literal_list(tag_dict.get("output_classes"))
     if not output_schema_fields:
@@ -1366,6 +1475,7 @@ async def sync_model_artifacts(request: Request):
                 mlflow_service,
                 run_id=parsed_run_id,
                 tags=tags_dict,
+                artifact_path=artifact_path,
             )
 
             remote_lookup[key] = {
