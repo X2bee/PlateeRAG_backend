@@ -447,6 +447,62 @@ class VectorManager:
             logger.error(f"Failed to delete points from '{collection_name}': {e}")
             raise
 
+    def update_point(self, collection_name: str, point_id: Union[str, int],
+                     vector: List[float], payload: Dict[str, Any]) -> Dict[str, Any]:
+        """특정 포인트 업데이트
+
+        Args:
+            collection_name: 대상 컬렉션 이름
+            point_id: 업데이트할 포인트 ID
+            vector: 새로운 벡터
+            payload: 새로운 페이로드
+
+        Returns:
+            업데이트 결과 정보
+
+        Raises:
+            Exception: 포인트 업데이트 실패
+        """
+        self.ensure_connected()
+
+        try:
+            # 포인트 ID 유효성 검증
+            try:
+                # 정수로 변환 시도
+                validated_id = int(point_id)
+            except (ValueError, TypeError):
+                try:
+                    # UUID 형식 검증 시도
+                    uuid.UUID(str(point_id))
+                    validated_id = str(point_id)
+                except ValueError:
+                    raise ValueError(f"Invalid point ID format: {point_id}")
+
+            # 업데이트할 포인트 생성
+            updated_point = PointStruct(
+                id=validated_id,
+                vector=vector,
+                payload=payload
+            )
+
+            # upsert를 사용하여 포인트 업데이트
+            operation_info = self.client.upsert(
+                collection_name=collection_name,
+                points=[updated_point]
+            )
+
+            logger.info(f"Updated point '{point_id}' in collection '{collection_name}'")
+            return {
+                "message": f"Successfully updated point",
+                "point_id": point_id,
+                "operation_id": operation_info.operation_id,
+                "status": operation_info.status
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to update point '{point_id}' in '{collection_name}': {e}")
+            raise
+
     def scroll_points(self, collection_name: str, filter_criteria: Dict[str, Any] = None,
                      limit: int = 100, offset: Optional[str] = None,
                      with_payload: bool = True, with_vectors: bool = False) -> Tuple[List, Optional[str]]:
