@@ -26,5 +26,5 @@ available_admin_sections = [
     # Security
     "security-settings", "audit-logs", "error-logs",
     # MCP
-    "mcp-market",
+    "mcp-market", "mcp-station",
 ]

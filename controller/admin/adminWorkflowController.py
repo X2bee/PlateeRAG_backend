@@ -549,6 +549,8 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
 
         existing_data.is_shared = update_dict.get("is_shared", existing_data.is_shared)
         existing_data.share_group = update_dict.get("share_group", existing_data.share_group)
+        existing_data.share_permissions = update_dict.get("share_permissions", existing_data.share_permissions)
+
         deploy_enabled = update_dict.get("enable_deploy", deploy_meta.is_deployed)
         deploy_meta.is_deployed = deploy_enabled
 

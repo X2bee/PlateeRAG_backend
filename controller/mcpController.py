@@ -12,6 +12,8 @@ import httpx
 from controller.helper.singletonHelper import get_config_composer, get_db_manager
 from controller.helper.controllerHelper import extract_user_id_from_request
 from service.database.logger_helper import create_logger
+from controller.admin.adminHelper import manager_section_access
+from controller.admin.adminBaseController import validate_superuser
 
 router = APIRouter(
     prefix="/api/mcp",
@@ -33,6 +35,7 @@ class CreateSessionRequest(BaseModel):
     server_args: Optional[List[str]] = Field(None, description="추가 명령줄 인자")
     env_vars: Optional[Dict[str, str]] = Field(None, description="환경 변수")
     working_dir: Optional[str] = Field(None, description="작업 디렉토리")
+    session_name: Optional[str] = Field(None, description="세션 이름 (식별용)")
 
 
 class MCPRequestModel(BaseModel):
@@ -46,11 +49,14 @@ class MCPRequestModel(BaseModel):
 class SessionInfo(BaseModel):
     """세션 정보"""
     session_id: str = Field(..., description="세션 ID")
+    session_name: Optional[str] = Field(None, description="세션 이름")
     server_type: str = Field(..., description="서버 타입")
     status: str = Field(..., description="세션 상태")
     created_at: str = Field(..., description="생성 시간")
     pid: Optional[int] = Field(None, description="프로세스 ID")
     error_message: Optional[str] = Field(None, description="에러 메시지")
+    server_command: Optional[str] = Field(None, description="서버 명령어")
+    server_args: Optional[List[str]] = Field(None, description="서버 인자")
 
 
 class MCPResponse(BaseModel):
@@ -117,9 +123,22 @@ async def make_mcp_request(
     response_description="서비스 상태 정보")
 async def health_check(request: Request):
     """MCP Station 헬스체크"""
-    user_id = extract_user_id_from_request(request)
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
     app_db = get_db_manager(request)
-    backend_log = create_logger(app_db, user_id, request)
+    backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["database"])
+    if not section_access:
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         result = await make_mcp_request("GET", "/")
@@ -140,21 +159,41 @@ async def health_check(request: Request):
     status_code=201)
 async def create_session(request: Request, session_request: CreateSessionRequest):
     """새로운 MCP 서버 세션 생성"""
-    user_id = extract_user_id_from_request(request)
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
     app_db = get_db_manager(request)
+    user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
+    section_access = manager_section_access(app_db, user_id, ["database"])
+    if not section_access:
+        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
+        # session_name이 유효한 문자열인 경우에만 포함
+        session_data = session_request.model_dump()
+        if not session_request.session_name or not session_request.session_name.strip():
+            session_data.pop('session_name', None)
+
         result = await make_mcp_request(
             "POST",
             "/sessions",
-            data=session_request.model_dump()
+            data=session_data
         )
         backend_log.success(
             "MCP 세션 생성 성공",
             metadata={
                 "session_id": result.get("session_id"),
-                "server_type": session_request.server_type
+                "server_type": session_request.server_type,
+                "session_name": session_request.session_name if session_request.session_name else None
             }
         )
         return SessionInfo(**result)
@@ -171,9 +210,23 @@ async def create_session(request: Request, session_request: CreateSessionRequest
     response_model=List[SessionInfo])
 async def list_sessions(request: Request):
     """모든 활성 세션 목록 조회"""
-    user_id = extract_user_id_from_request(request)
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
     app_db = get_db_manager(request)
+    user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
+    section_access = manager_section_access(app_db, user_id, ["database"])
+    if not section_access:
+        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         result = await make_mcp_request("GET", "/sessions")
@@ -192,9 +245,23 @@ async def list_sessions(request: Request):
     response_model=SessionInfo)
 async def get_session(request: Request, session_id: str):
     """특정 세션 정보 조회"""
-    user_id = extract_user_id_from_request(request)
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
     app_db = get_db_manager(request)
+    user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
+    section_access = manager_section_access(app_db, user_id, ["database"])
+    if not section_access:
+        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         result = await make_mcp_request("GET", f"/sessions/{session_id}")
@@ -213,9 +280,23 @@ async def get_session(request: Request, session_id: str):
     status_code=204)
 async def delete_session(request: Request, session_id: str):
     """세션 삭제 및 프로세스 종료"""
-    user_id = extract_user_id_from_request(request)
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
     app_db = get_db_manager(request)
+    user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
+    section_access = manager_section_access(app_db, user_id, ["database"])
+    if not section_access:
+        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         await make_mcp_request("DELETE", f"/sessions/{session_id}")
@@ -233,9 +314,23 @@ async def delete_session(request: Request, session_id: str):
     description="특정 세션에서 사용 가능한 MCP 도구 목록을 조회합니다.")
 async def get_session_tools(request: Request, session_id: str):
     """특정 세션의 MCP 도구 목록 조회"""
-    user_id = extract_user_id_from_request(request)
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
     app_db = get_db_manager(request)
+    user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
+    section_access = manager_section_access(app_db, user_id, ["database"])
+    if not section_access:
+        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         result = await make_mcp_request("GET", f"/sessions/{session_id}/tools")
@@ -260,9 +355,23 @@ async def get_session_tools(request: Request, session_id: str):
     response_model=MCPResponse)
 async def mcp_request(request: Request, mcp_request: MCPRequestModel):
     """MCP 서버로 요청 라우팅"""
-    user_id = extract_user_id_from_request(request)
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
     app_db = get_db_manager(request)
+    user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
+    section_access = manager_section_access(app_db, user_id, ["database"])
+    if not section_access:
+        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         result = await make_mcp_request(
@@ -309,9 +418,23 @@ async def mcp_request(request: Request, mcp_request: MCPRequestModel):
     description="MCP Station의 상세한 상태 정보를 조회합니다.")
 async def detailed_health_check(request: Request):
     """상세 헬스체크"""
-    user_id = extract_user_id_from_request(request)
+    val_superuser = await validate_superuser(request)
+    if val_superuser.get("superuser") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required"
+        )
+
     app_db = get_db_manager(request)
+    user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
+    section_access = manager_section_access(app_db, user_id, ["database"])
+    if not section_access:
+        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        raise HTTPException(
+            status_code=403,
+            detail="Database permissions access required"
+        )
 
     try:
         result = await make_mcp_request("GET", "/health")
