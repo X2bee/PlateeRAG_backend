@@ -33,6 +33,9 @@ class VastProxyClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        proxy_token = self._get_proxy_token()
+        if proxy_token and (not extra_headers or "Authorization" not in extra_headers):
+            headers["Authorization"] = f"Bearer {proxy_token}"
         if extra_headers:
             for key, value in extra_headers.items():
                 if value:

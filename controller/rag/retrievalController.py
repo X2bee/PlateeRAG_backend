@@ -88,6 +88,10 @@ class DocumentSearchRequest(BaseModel):
     rerank: Optional[bool] = False
     rerank_top_k: Optional[int] = 20
 
+class ChunkUpdateRequest(BaseModel):
+    new_content: str
+    metadata: Optional[Dict[str, Any]] = None
+
 @router.get("/collections")
 async def list_collections(request: Request):
     """모든 컬렉션 목록 조회"""
@@ -562,6 +566,88 @@ async def get_document_details(request: Request, collection_name: str, document_
         return rag_default_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get document details: {str(e)}")
+
+@router.post("/collections/{collection_name}/documents/{document_id}/{chunk_id}")
+async def update_chunk_content(
+    request: Request,
+    collection_name: str,
+    document_id: str,
+    chunk_id: str,
+    update_request: ChunkUpdateRequest
+):
+    """특정 청크의 내용 업데이트
+
+    청크의 텍스트 내용을 업데이트하고, 새로운 내용으로 임베딩을 다시 생성하여
+    벡터 데이터베이스와 일반 데이터베이스 모두를 업데이트합니다.
+    """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    try:
+        # 입력 검증
+        if not update_request.new_content or not update_request.new_content.strip():
+            raise HTTPException(status_code=400, detail="New content cannot be empty")
+
+        backend_log.info("Starting chunk content update",
+                        metadata={
+                            "collection_name": collection_name,
+                            "document_id": document_id,
+                            "chunk_id": chunk_id,
+                            "new_content_length": len(update_request.new_content)
+                        })
+
+        # 권한 확인 - 해당 컬렉션이 사용자의 소유인지 확인
+        collection_meta = app_db.find_by_condition(VectorDB, {
+            'user_id': user_id,
+            'collection_name': collection_name
+        })
+
+        if not collection_meta:
+            backend_log.warn("Unauthorized collection access attempt",
+                           metadata={"collection_name": collection_name})
+            raise HTTPException(
+                status_code=403,
+                detail="Collection not found or not owned by user"
+            )
+
+        # RAG 서비스를 통해 청크 업데이트
+        rag_service = get_rag_service(request)
+        result = await rag_service.update_chunk(
+            user_id=user_id,
+            app_db=app_db,
+            collection_name=collection_name,
+            document_id=document_id,
+            chunk_id=chunk_id,
+            new_content=update_request.new_content,
+            metadata=update_request.metadata
+        )
+
+        backend_log.success("Chunk content updated successfully",
+                          metadata={
+                              "collection_name": collection_name,
+                              "document_id": document_id,
+                              "chunk_id": chunk_id,
+                              "old_content_length": result.get("old_content_length"),
+                              "new_content_length": result.get("new_content_length")
+                          })
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        backend_log.error("Chunk content update failed", exception=e,
+                         metadata={
+                             "collection_name": collection_name,
+                             "document_id": document_id,
+                             "chunk_id": chunk_id
+                         })
+        logger.error(f"Failed to update chunk content: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update chunk content: {str(e)}")
 
 @router.get("/collections/detail/{collection_name}/documents")
 async def get_document_detail_meta(request: Request, collection_name: str):

@@ -955,6 +955,141 @@ class RAGService:
             logger.error(f"Failed to delete document '{document_id}': {e}")
             raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
+    async def update_chunk(self, user_id: int, app_db, collection_name: str,
+                          document_id: str, chunk_id: str,
+                          new_content: str, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
+        """특정 청크의 내용 업데이트
+
+        Args:
+            user_id: 사용자 ID
+            app_db: 데이터베이스 매니저
+            collection_name: 컬렉션 이름
+            document_id: 문서 ID
+            chunk_id: 청크 ID
+            new_content: 새로운 청크 내용
+            metadata: 추가 메타데이터 (선택)
+
+        Returns:
+            업데이트 결과 정보
+
+        Raises:
+            HTTPException: 업데이트 실패
+        """
+        if not self.vector_manager.is_connected():
+            raise HTTPException(status_code=500, detail="Vector database not connected")
+
+        try:
+            # 1. 기존 청크 조회 (벡터 DB에서)
+            logger.info(f"Retrieving chunk '{chunk_id}' from collection '{collection_name}'")
+
+            search_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchValue(value=document_id)
+                    )
+                ]
+            )
+
+            scroll_result = self.vector_manager.client.scroll(
+                collection_name=collection_name,
+                scroll_filter=search_filter,
+                limit=1000,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            points, _ = scroll_result
+
+            # chunk_id에 해당하는 포인트 찾기
+            target_point = None
+            for point in points:
+                if str(point.id) == str(chunk_id):
+                    target_point = point
+                    break
+
+            if not target_point:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Chunk '{chunk_id}' not found in document '{document_id}'"
+                )
+
+            old_payload = target_point.payload
+            logger.info(f"Found chunk '{chunk_id}', old content length: {len(old_payload.get('chunk_text', ''))}")
+
+            # 2. 새로운 내용으로 임베딩 생성
+            logger.info(f"Generating new embedding for updated content (length: {len(new_content)})")
+            new_embedding = await self.generate_embeddings([new_content])
+            new_vector = new_embedding[0]
+
+            # 3. 새로운 페이로드 생성 (기존 페이로드 유지하면서 업데이트)
+            updated_payload = dict(old_payload)
+            updated_payload.update({
+                "chunk_text": new_content,
+                "chunk_size": len(new_content),
+                "updated_at": datetime.now(TIMEZONE).isoformat()
+            })
+
+            # 추가 메타데이터가 있으면 병합
+            if metadata:
+                updated_payload.update(metadata)
+
+            # 4. 벡터 DB 업데이트
+            logger.info(f"Updating point '{chunk_id}' in vector database")
+            update_result = self.vector_manager.update_point(
+                collection_name=collection_name,
+                point_id=chunk_id,
+                vector=new_vector,
+                payload=updated_payload
+            )
+
+            # 5. 일반 DB (VectorDBChunkMeta) 업데이트
+            logger.info(f"Updating chunk metadata in database")
+
+            chunk_meta = app_db.find_by_condition(VectorDBChunkMeta, {
+                'user_id': user_id,
+                'collection_name': collection_name,
+                'chunk_id': chunk_id,
+                'document_id': document_id
+            })
+
+            if chunk_meta:
+                chunk_meta = chunk_meta[0]
+                chunk_meta.chunk_text = new_content
+                chunk_meta.chunk_size = len(new_content)
+                chunk_meta.updated_at = datetime.now(TIMEZONE)
+
+                # 메타데이터 필드들도 업데이트 (있는 경우)
+                if metadata:
+                    for key, value in metadata.items():
+                        if hasattr(chunk_meta, key):
+                            setattr(chunk_meta, key, value)
+
+                app_db.update(chunk_meta)
+                logger.info(f"Database metadata updated for chunk '{chunk_id}'")
+            else:
+                logger.warning(f"Chunk metadata not found in database for chunk '{chunk_id}'")
+
+            logger.info(f"Chunk '{chunk_id}' updated successfully")
+
+            return {
+                "message": "Chunk updated successfully",
+                "chunk_id": chunk_id,
+                "document_id": document_id,
+                "collection_name": collection_name,
+                "old_content_length": len(old_payload.get('chunk_text', '')),
+                "new_content_length": len(new_content),
+                "updated_at": datetime.now(TIMEZONE).isoformat(),
+                "vector_db_update": update_result,
+                "database_updated": bool(chunk_meta)
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to update chunk '{chunk_id}': {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to update chunk: {str(e)}")
+
     def get_embedding_status(self) -> Dict[str, Any]:
         """현재 임베딩 클라이언트 상태 조회
 
