@@ -22,7 +22,7 @@ available_admin_sections = [
     # System Monitoring
     "system-monitor", "system-health", "backend-logs",
     # Data Management
-    "database", "storage", "backup",
+    "database", "storage", "backup", "data-scraper",
     # Security
     "security-settings", "audit-logs", "error-logs",
     # MCP
