@@ -260,7 +260,7 @@ async def get_io_logs_by_id(request: Request, user_id: int = None, workflow_name
             result = app_db.find_by_condition(
                 ExecutionIO,
                 conditions,
-                limit=1000000,
+                limit=10000000,
                 offset=0,
                 orderby="updated_at",
                 orderby_asc=True,
@@ -484,17 +484,21 @@ async def download_all_io_logs_excel(
         if workflow_name:
             conditions['workflow_name'] = workflow_name
 
-        # 날짜 필터 추가
+        # 날짜 필터 추가 (시간은 무시하고 날짜만 사용)
         if start_date:
             try:
+                # 날짜만 파싱하고 시간은 00:00:00으로 설정
                 start_datetime = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                start_datetime = start_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
                 conditions['created_at__gte__'] = start_datetime
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid start_date format. Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)")
 
         if end_date:
             try:
+                # 날짜만 파싱하고 시간은 23:59:59로 설정
                 end_datetime = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
                 conditions['created_at__lte__'] = end_datetime
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid end_date format. Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)")
