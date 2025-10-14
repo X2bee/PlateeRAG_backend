@@ -1,6 +1,6 @@
 available_sections = [
     # Workflow
-    "canvas", "workflows", "documents", "prompt-store",
+    "canvas", "workflows", "documents", "prompt-store", "workflow-store",
     # Data Management
     "data-station", "data-storage",
     # LLM-Models
@@ -22,7 +22,7 @@ available_admin_sections = [
     # System Monitoring
     "system-monitor", "system-health", "backend-logs",
     # Data Management
-    "database", "storage", "backup",
+    "database", "storage", "backup", "data-scraper",
     # Security
     "security-settings", "audit-logs", "error-logs",
     # MCP

@@ -20,6 +20,7 @@ class User(BaseModel):
         self.preferences: Optional[Dict] = kwargs.get('preferences', {})
         self.groups: List[str] = kwargs.get('groups', [])
         self.group_name: str = kwargs.get('group_name', 'none')
+        self.available_user_sections: List[str] = kwargs.get('available_user_sections', [])
         self.available_admin_sections: List[str] = kwargs.get('available_admin_sections', [])
 
     def get_table_name(self) -> str:
@@ -38,6 +39,7 @@ class User(BaseModel):
             'group_name': "VARCHAR(50) DEFAULT 'none'",
             'last_login': 'TIMESTAMP',
             'preferences': 'TEXT',
+            'available_user_sections': 'TEXT[]',
             'available_admin_sections': 'TEXT[]'
         }
 

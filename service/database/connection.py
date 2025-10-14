@@ -186,6 +186,68 @@ class AppDatabaseManager:
                     else:
                         where_clauses.append(f"{real_key} != ?")
                     values.append(value)
+                elif key.endswith("__gte__"):
+                    # Greater than or equal (>=)
+                    real_key = key.removesuffix("__gte__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{real_key} >= %s")
+                    else:
+                        where_clauses.append(f"{real_key} >= ?")
+                    values.append(value)
+                elif key.endswith("__lte__"):
+                    # Less than or equal (<=)
+                    real_key = key.removesuffix("__lte__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{real_key} <= %s")
+                    else:
+                        where_clauses.append(f"{real_key} <= ?")
+                    values.append(value)
+                elif key.endswith("__gt__"):
+                    # Greater than (>)
+                    real_key = key.removesuffix("__gt__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{real_key} > %s")
+                    else:
+                        where_clauses.append(f"{real_key} > ?")
+                    values.append(value)
+                elif key.endswith("__lt__"):
+                    # Less than (<)
+                    real_key = key.removesuffix("__lt__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{real_key} < %s")
+                    else:
+                        where_clauses.append(f"{real_key} < ?")
+                    values.append(value)
+                elif key.endswith("__in__"):
+                    # IN clause
+                    real_key = key.removesuffix("__in__")
+                    if not isinstance(value, (list, tuple)):
+                        self.logger.warning(f"__in__ operator requires list or tuple, got {type(value)}")
+                        continue
+                    if not value:  # Skip empty list
+                        continue
+                    if db_type == "postgresql":
+                        placeholders = ', '.join(['%s'] * len(value))
+                        where_clauses.append(f"{real_key} IN ({placeholders})")
+                    else:
+                        placeholders = ', '.join(['?'] * len(value))
+                        where_clauses.append(f"{real_key} IN ({placeholders})")
+                    values.extend(value)
+                elif key.endswith("__notin__"):
+                    # NOT IN clause
+                    real_key = key.removesuffix("__notin__")
+                    if not isinstance(value, (list, tuple)):
+                        self.logger.warning(f"__notin__ operator requires list or tuple, got {type(value)}")
+                        continue
+                    if not value:  # Skip empty list
+                        continue
+                    if db_type == "postgresql":
+                        placeholders = ', '.join(['%s'] * len(value))
+                        where_clauses.append(f"{real_key} NOT IN ({placeholders})")
+                    else:
+                        placeholders = ', '.join(['?'] * len(value))
+                        where_clauses.append(f"{real_key} NOT IN ({placeholders})")
+                    values.extend(value)
                 else:
                     if db_type == "postgresql":
                         where_clauses.append(f"{key} = %s")
@@ -309,6 +371,38 @@ class AppDatabaseManager:
                         where_clauses.append(f"{table_name}.{real_key} != %s")
                     else:
                         where_clauses.append(f"{table_name}.{real_key} != ?")
+                    values.append(value)
+                elif key.endswith("__gte__"):
+                    # Greater than or equal (>=)
+                    real_key = key.removesuffix("__gte__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{table_name}.{real_key} >= %s")
+                    else:
+                        where_clauses.append(f"{table_name}.{real_key} >= ?")
+                    values.append(value)
+                elif key.endswith("__lte__"):
+                    # Less than or equal (<=)
+                    real_key = key.removesuffix("__lte__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{table_name}.{real_key} <= %s")
+                    else:
+                        where_clauses.append(f"{table_name}.{real_key} <= ?")
+                    values.append(value)
+                elif key.endswith("__gt__"):
+                    # Greater than (>)
+                    real_key = key.removesuffix("__gt__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{table_name}.{real_key} > %s")
+                    else:
+                        where_clauses.append(f"{table_name}.{real_key} > ?")
+                    values.append(value)
+                elif key.endswith("__lt__"):
+                    # Less than (<)
+                    real_key = key.removesuffix("__lt__")
+                    if db_type == "postgresql":
+                        where_clauses.append(f"{table_name}.{real_key} < %s")
+                    else:
+                        where_clauses.append(f"{table_name}.{real_key} < ?")
                     values.append(value)
                 elif key.endswith("__in__"):
                     # IN 절 처리: value는 리스트여야 함
