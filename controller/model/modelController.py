@@ -1503,6 +1503,7 @@ async def sync_model_artifacts(request: Request):
     for key, model in existing_lookup.items():
         remote_info = remote_lookup.get(key)
         if not remote_info:
+            # MLflow에서 삭제되었지만 DB에 있는 경우 -> 삭제
             logger.warning(
                 "[sync_model_artifacts] Removing stale registry entry | model_id=%s name=%s version=%s",
                 model.id,
@@ -1513,32 +1514,8 @@ async def sync_model_artifacts(request: Request):
                 removed_ids.append(model.id)
             continue
 
-        if not mlflow_service.artifact_exists(remote_info["run_id"], remote_info["artifact_path"]):
-            logger.warning(
-                "[sync_model_artifacts] Missing MLflow artifact detected | model_id=%s run_id=%s path=%s",
-                model.id,
-                remote_info["run_id"],
-                remote_info["artifact_path"],
-            )
-            if deletion_service.delete(model.id, model=model, remove_artifact=False):
-                removed_ids.append(model.id)
-            continue
-
-        staged_changes = False
-        if model.file_path != remote_info["model_uri"]:
-            model.file_path = remote_info["model_uri"]
-            staged_changes = True
-
-        remote_input_schema = remote_info.get("input_schema_fields")
-        if remote_input_schema is not None and model.input_schema != remote_input_schema:
-            model.input_schema = remote_input_schema
-            staged_changes = True
-
-        remote_output_schema = remote_info.get("output_schema_fields")
-        if remote_output_schema is not None and model.output_schema != remote_output_schema:
-            model.output_schema = remote_output_schema
-            staged_changes = True
-
+        # MLflow에 있고 DB에도 있는 경우 -> 메타데이터만 비교하여 변경이 있을 때만 업데이트
+        # 아티팩트 다운로드는 하지 않음
         metadata = model.metadata if isinstance(model.metadata, dict) else {}
         mlflow_meta = metadata.get("mlflow") if isinstance(metadata, dict) else None
         if not isinstance(mlflow_meta, dict):
@@ -1572,9 +1549,27 @@ async def sync_model_artifacts(request: Request):
             if value not in (None, {}, [])
         }
 
+        # 메타데이터나 file_path가 변경된 경우에만 업데이트
+        staged_changes = False
+
+        if model.file_path != remote_info["model_uri"]:
+            model.file_path = remote_info["model_uri"]
+            staged_changes = True
+
         if mlflow_meta != desired_mlflow_meta:
             metadata["mlflow"] = desired_mlflow_meta
             model.metadata = metadata
+            staged_changes = True
+
+        # 기존 모델의 스키마가 없고 remote_info에 스키마가 있는 경우에만 업데이트
+        remote_input_schema = remote_info.get("input_schema_fields")
+        if remote_input_schema is not None and not model.input_schema:
+            model.input_schema = remote_input_schema
+            staged_changes = True
+
+        remote_output_schema = remote_info.get("output_schema_fields")
+        if remote_output_schema is not None and not model.output_schema:
+            model.output_schema = remote_output_schema
             staged_changes = True
 
         if staged_changes and registry_service.update_model(model):
