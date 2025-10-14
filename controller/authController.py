@@ -585,6 +585,7 @@ async def get_group_available_sections(request: Request, user_id=None):
         user = app_db.find_by_id(User, user_id)
         groups = user.groups
         user_type = user.user_type
+        default_available_user_sections = user.available_user_sections
 
         if user_type == "superuser":
             from controller.admin.adminBaseController import validate_superuser
@@ -593,14 +594,14 @@ async def get_group_available_sections(request: Request, user_id=None):
                 return {"available_sections": available_sections}
             else:
                 logger.warning(f"User {user_id} is not a superuser despite user_type. Possible data inconsistency.")
-                return {"available_sections": []}
+                return {"available_sections": default_available_user_sections}
 
         if not groups or groups == None or groups == [] or len(groups) == 0:
-            return {"available_sections": []}
+            return {"available_sections": default_available_user_sections}
 
         else:
             groups = [group for group in groups if not group.endswith("__admin__")]
-            total_available_sections = []
+            total_available_sections = default_available_user_sections.copy() if default_available_user_sections else []
             for group_name in groups:
                 group = app_db.find_by_condition(GroupMeta, {'group_name': group_name})
                 if group:
@@ -615,6 +616,10 @@ async def get_group_available_sections(request: Request, user_id=None):
 
             if user_type == "admin":
                 total_available_sections.extend(["admin-page"])
+
+            # 중복 제거
+            total_available_sections = list(set(total_available_sections))
+
         return {"available_sections": total_available_sections}
 
     except Exception as e:

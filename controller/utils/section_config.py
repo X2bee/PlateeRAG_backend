@@ -1,12 +1,12 @@
 available_sections = [
     # Workflow
-    "canvas", "workflows", "documents", "prompt-store",
+    "canvas", "workflows", "documents", "prompt-store", "workflow-store",
     # Data Management
     "data-station", "data-storage",
     # LLM-Models
     "train", "train-monitor", "eval", "model-storage",
     # ML-Models
-    "model-hub", "model-inference" , "ml-train", "ml-train-monitor",
+    "model-upload", "model-hub", "model-inference" , "ml-train", "ml-train-monitor",
     # Admin
     "admin-page",
 ]
