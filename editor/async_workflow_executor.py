@@ -167,13 +167,29 @@ def clean_router_input_text(text: str) -> str:
 
     return text
 
-def get_route_key_from_data(data: Any, routing_criteria: str) -> str:
+def get_route_key_from_data(data: Any, routing_criteria: str, logger_instance=None) -> str:
     """
     RouterNode의 데이터와 라우팅 기준을 바탕으로 라우팅 키를 결정합니다.
     Boolean과 String 값에 대해 강건한 처리를 제공합니다.
+    문자열 데이터인 경우 JSON 파싱을 시도합니다.
     """
     if not routing_criteria or routing_criteria.strip() == "":
         return "default"
+
+    # 데이터가 문자열인 경우 JSON 파싱 시도
+    if isinstance(data, str):
+        if logger_instance:
+            logger_instance.info(" -> 라우팅 데이터가 문자열입니다. JSON 파싱 시도 중...")
+
+        parsed_data, is_json = parse_json_safely(data, logger_instance)
+        if is_json and isinstance(parsed_data, dict):
+            if logger_instance:
+                logger_instance.info(" -> JSON 파싱 성공, Dict로 변환됨")
+            data = parsed_data
+        else:
+            if logger_instance:
+                logger_instance.warning(" -> JSON 파싱 실패 또는 Dict가 아님, 'default' 반환")
+            return "default"
 
     if not isinstance(data, dict):
         return "default"
@@ -439,10 +455,19 @@ class AsyncWorkflowExecutor:
                                 logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
                             processed_kwargs[key] = processed_value
                         else:
-                            # 일반 값도 문자열인 경우 정리 적용
+                            # 일반 값도 문자열인 경우 정리 및 JSON 파싱 시도
                             if isinstance(value, str):
-                                processed_kwargs[key] = clean_router_input_text(value)
+                                # 먼저 텍스트 정리
+                                cleaned_value = clean_router_input_text(value)
                                 logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
+
+                                # JSON 파싱 시도
+                                parsed_value, is_json = parse_json_safely(cleaned_value, logger)
+                                if is_json:
+                                    logger.info(f" -> RouterNode JSON 파싱 성공: {key}")
+                                    processed_kwargs[key] = parsed_value
+                                else:
+                                    processed_kwargs[key] = cleaned_value
                             else:
                                 processed_kwargs[key] = value
 
@@ -535,8 +560,8 @@ class AsyncWorkflowExecutor:
                                 routing_criteria = param.get('value', '')
                                 break
 
-                        # 라우팅 키 결정
-                        routed_port_id = get_route_key_from_data(result, routing_criteria)
+                        # 라우팅 키 결정 (logger 전달)
+                        routed_port_id = get_route_key_from_data(result, routing_criteria, logger)
                         output_ports = node_info['data']['outputs']
 
                         logger.info(" -> 라우팅 기준: '%s', 결정된 포트: '%s'", routing_criteria, routed_port_id)
