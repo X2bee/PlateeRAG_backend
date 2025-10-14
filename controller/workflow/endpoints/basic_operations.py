@@ -17,7 +17,7 @@ from service.database.models.executor import ExecutionMeta, ExecutionIO
 from controller.helper.utils.auth_helpers import workflow_user_id_extractor
 from controller.helper.utils.data_parsers import parse_input_data
 from service.database.models.user import User
-from service.database.models.workflow import WorkflowMeta, WorkflowVersion
+from service.database.models.workflow import WorkflowMeta, WorkflowStoreMeta, WorkflowVersion
 from service.database.models.deploy import DeployMeta
 from service.database.logger_helper import create_logger
 
@@ -1147,12 +1147,11 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
         logger.error(f"Error deleting workflow logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")
 
-
 @router.post("/upload/{workflow_name}")
 async def upload_workflow(request: Request, workflow_name: str, workflow_upload_name: str, description: str = "", tags: list = []):
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
-    config_composer = get_config_composer(request)
+    backend_log = create_logger(app_db, user_id, request)
 
     try:
         existing_data = app_db.find_by_condition(
@@ -1181,15 +1180,57 @@ async def upload_workflow(request: Request, workflow_name: str, workflow_upload_
         if not deploy_data[0].is_accepted:
             raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
 
+        if not workflow_upload_name or workflow_upload_name.strip() == "":
+            raise HTTPException(status_code=400, detail="업로드할 워크플로우 이름을 입력하세요.")
 
+        existing_upload_data = app_db.find_by_condition(
+            WorkflowStoreMeta,
+            {
+                "user_id": user_id,
+                "workflow_upload_name": workflow_upload_name,
+                "current_version": existing_data.current_version,
+            },
+            limit=1
+        )
+        if existing_upload_data:
+            raise HTTPException(status_code=400, detail="이미 동일한 이름의 업로드된 워크플로우가 존재합니다. 다른 이름을 사용하세요.")
+
+        workflow_store_data = WorkflowStoreMeta(
+            user_id=user_id,
+            workflow_id=existing_data.workflow_id,
+            workflow_name=existing_data.workflow_name,
+            workflow_upload_name=workflow_upload_name,
+            node_count=existing_data.node_count,
+            edge_count=existing_data.edge_count,
+            has_startnode=existing_data.has_startnode,
+            has_endnode=existing_data.has_endnode,
+            is_completed=existing_data.is_completed,
+            metadata=existing_data.metadata,
+            current_version=existing_data.current_version,
+            latest_version=existing_data.latest_version,
+            is_template=False,
+            description=description,
+            tags=tags,
+            workflow_data=existing_data.workflow_data,
+        )
+
+        insert_result = app_db.insert(workflow_store_data)
+        backend_log.info("Successfully uploaded workflow",
+                        metadata={"workflow_name": workflow_name,
+                                  "workflow_upload_name": workflow_upload_name,
+                                  "description": description,
+                        })
 
         return {
-            "message": "Workflow updated successfully",
-            "workflow_name": existing_data.workflow_name,
-            "deploy_key": deploy_meta.deploy_key if deploy_meta.is_deployed else None,
-            "inquire_deploy": deploy_meta.inquire_deploy,
+            "message": "Workflow uploaded successfully",
+            "workflow_upload_name": workflow_upload_name,
         }
 
     except Exception as e:
-        logger.error(f"Failed to update workflow: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
+        logger.error(f"Failed to upload workflow: {str(e)}")
+        backend_log.error("Failed to upload workflow", exception=e,
+                         metadata={"workflow_name": workflow_name,
+                                   "workflow_upload_name": workflow_upload_name if 'workflow_upload_name' in locals() else None,
+                                   "description": description if 'description' in locals() else None,
+                        })
+        raise HTTPException(status_code=500, detail=f"Failed to upload workflow: {str(e)}")

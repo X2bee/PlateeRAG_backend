@@ -78,6 +78,7 @@ class WorkflowStoreMeta(BaseModel):
         self.user_id: Optional[int] = kwargs.get('user_id')
         self.workflow_id: str = kwargs.get('workflow_id', '')
         self.workflow_name: str = kwargs.get('workflow_name', '')
+        self.workflow_upload_name: str = kwargs.get('workflow_upload_name', '')
         self.node_count: int = kwargs.get('node_count', 0)
         self.edge_count: int = kwargs.get('edge_count', 0)
         self.has_startnode: bool = kwargs.get('has_startnode', False)
@@ -99,6 +100,7 @@ class WorkflowStoreMeta(BaseModel):
             'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
             'workflow_id': 'VARCHAR(100) NOT NULL',
             'workflow_name': 'VARCHAR(200) NOT NULL',
+            'workflow_upload_name': 'VARCHAR(200) NOT NULL',
             'node_count': 'INTEGER DEFAULT 0',
             'edge_count': 'INTEGER DEFAULT 0',
             'has_startnode': 'BOOLEAN DEFAULT FALSE',
