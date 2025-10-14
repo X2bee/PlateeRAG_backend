@@ -131,12 +131,12 @@ async def health_check(request: Request):
 
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, val_superuser.get("user_id"), request)
-    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["database"])
+    section_access = manager_section_access(app_db, val_superuser.get("user_id"), ["mcp-market", "mcp-station"])
     if not section_access:
-        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access database without permission")
+        backend_log.warn(f"User {val_superuser.get('user_id')} attempted to access mcp-market or mcp-station without permission")
         raise HTTPException(
             status_code=403,
-            detail="Database permissions access required"
+            detail="MCP Market or MCP Station permissions access required"
         )
 
     try:
@@ -168,12 +168,12 @@ async def create_session(request: Request, session_request: CreateSessionRequest
     app_db = get_db_manager(request)
     user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
-    section_access = manager_section_access(app_db, user_id, ["database"])
+    section_access = manager_section_access(app_db, user_id, ["mcp-market", "mcp-station"])
     if not section_access:
-        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        backend_log.warn(f"User {user_id} attempted to access mcp-market or mcp-station without permission")
         raise HTTPException(
             status_code=403,
-            detail="Database permissions access required"
+            detail="MCP Market or MCP Station permissions access required"
         )
 
     try:
@@ -219,12 +219,12 @@ async def list_sessions(request: Request):
     app_db = get_db_manager(request)
     user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
-    section_access = manager_section_access(app_db, user_id, ["database"])
+    section_access = manager_section_access(app_db, user_id, ["mcp-market", "mcp-station"])
     if not section_access:
-        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        backend_log.warn(f"User {user_id} attempted to access mcp-market or mcp-station without permission")
         raise HTTPException(
             status_code=403,
-            detail="Database permissions access required"
+            detail="MCP Market or MCP Station permissions access required"
         )
 
     try:
@@ -254,12 +254,12 @@ async def get_session(request: Request, session_id: str):
     app_db = get_db_manager(request)
     user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
-    section_access = manager_section_access(app_db, user_id, ["database"])
+    section_access = manager_section_access(app_db, user_id, ["mcp-market", "mcp-station"])
     if not section_access:
-        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        backend_log.warn(f"User {user_id} attempted to access mcp-market or mcp-station without permission")
         raise HTTPException(
             status_code=403,
-            detail="Database permissions access required"
+            detail="MCP Market or MCP Station permissions access required"
         )
 
     try:
@@ -289,12 +289,12 @@ async def delete_session(request: Request, session_id: str):
     app_db = get_db_manager(request)
     user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
-    section_access = manager_section_access(app_db, user_id, ["database"])
+    section_access = manager_section_access(app_db, user_id, ["mcp-market", "mcp-station"])
     if not section_access:
-        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        backend_log.warn(f"User {user_id} attempted to access mcp-market or mcp-station without permission")
         raise HTTPException(
             status_code=403,
-            detail="Database permissions access required"
+            detail="MCP Market or MCP Station permissions access required"
         )
 
     try:
@@ -323,12 +323,12 @@ async def get_session_tools(request: Request, session_id: str):
     app_db = get_db_manager(request)
     user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
-    section_access = manager_section_access(app_db, user_id, ["database"])
+    section_access = manager_section_access(app_db, user_id, ["mcp-market", "mcp-station"])
     if not section_access:
-        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        backend_log.warn(f"User {user_id} attempted to access mcp-market or mcp-station without permission")
         raise HTTPException(
             status_code=403,
-            detail="Database permissions access required"
+            detail="MCP Market or MCP Station permissions access required"
         )
 
     try:
@@ -364,12 +364,12 @@ async def mcp_request(request: Request, mcp_request: MCPRequestModel):
     app_db = get_db_manager(request)
     user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
-    section_access = manager_section_access(app_db, user_id, ["database"])
+    section_access = manager_section_access(app_db, user_id, ["mcp-market", "mcp-station"])
     if not section_access:
-        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        backend_log.warn(f"User {user_id} attempted to access mcp-market or mcp-station without permission")
         raise HTTPException(
             status_code=403,
-            detail="Database permissions access required"
+            detail="MCP Market or MCP Station permissions access required"
         )
 
     try:
@@ -427,12 +427,12 @@ async def detailed_health_check(request: Request):
     app_db = get_db_manager(request)
     user_id = val_superuser.get("user_id")
     backend_log = create_logger(app_db, user_id, request)
-    section_access = manager_section_access(app_db, user_id, ["database"])
+    section_access = manager_section_access(app_db, user_id, ["mcp-market", "mcp-station"])
     if not section_access:
-        backend_log.warn(f"User {user_id} attempted to access database without permission")
+        backend_log.warn(f"User {user_id} attempted to access mcp-market or mcp-station without permission")
         raise HTTPException(
             status_code=403,
-            detail="Database permissions access required"
+            detail="MCP Market or MCP Station permissions access required"
         )
 
     try:
