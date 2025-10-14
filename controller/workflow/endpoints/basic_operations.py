@@ -1146,3 +1146,50 @@ async def delete_workflow_io_logs(request: Request, workflow_name: str, workflow
     except Exception as e:
         logger.error(f"Error deleting workflow logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete workflow logs: {str(e)}")
+
+
+@router.post("/upload/{workflow_name}")
+async def upload_workflow(request: Request, workflow_name: str, workflow_upload_name: str, description: str = "", tags: list = []):
+    user_id = extract_user_id_from_request(request)
+    app_db = get_db_manager(request)
+    config_composer = get_config_composer(request)
+
+    try:
+        existing_data = app_db.find_by_condition(
+            WorkflowMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name
+            },
+            limit=1
+        )
+
+        if not existing_data:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        existing_data = existing_data[0]
+
+        deploy_data = app_db.find_by_condition(
+            DeployMeta,
+            {
+                "user_id": user_id,
+                "workflow_name": workflow_name,
+            },
+            limit=1
+        )
+        if not deploy_data:
+            raise HTTPException(status_code=404, detail="배포 메타데이터를 찾을 수 없습니다")
+        if not deploy_data[0].is_accepted:
+            raise HTTPException(status_code=400, detail="해당 워크플로우에 대한 권한이 박탈되었습니다. 편집할 수 없습니다.")
+
+
+
+        return {
+            "message": "Workflow updated successfully",
+            "workflow_name": existing_data.workflow_name,
+            "deploy_key": deploy_meta.deploy_key if deploy_meta.is_deployed else None,
+            "inquire_deploy": deploy_meta.inquire_deploy,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to update workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
