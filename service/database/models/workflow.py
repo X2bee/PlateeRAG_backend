@@ -90,6 +90,8 @@ class WorkflowStoreMeta(BaseModel):
         self.is_template: bool = kwargs.get('is_template', False)
         self.description: Optional[str] = kwargs.get('description', '')
         self.tags: List[str] = kwargs.get('tags', [])
+        self.rating_count: int = kwargs.get('rating_count', 0)
+        self.rating_sum: int = kwargs.get('rating_sum', 0)
         self.workflow_data: Optional[Dict] = kwargs.get('workflow_data', {})
 
     def get_table_name(self) -> str:
@@ -112,5 +114,30 @@ class WorkflowStoreMeta(BaseModel):
             'is_template': 'BOOLEAN DEFAULT FALSE',
             'description': 'TEXT',
             'tags': 'TEXT[]',
+            'rating_count': 'INTEGER DEFAULT 0',
+            'rating_sum': 'INTEGER DEFAULT 0',
             'workflow_data': 'TEXT'
+        }
+
+class WorkflowStoreRating(BaseModel):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.user_id: int = kwargs.get('user_id')
+        self.workflow_store_id: int = kwargs.get('workflow_store_id')
+        self.workflow_id: str = kwargs.get('workflow_id', '')
+        self.workflow_name: str = kwargs.get('workflow_name', '')
+        self.workflow_upload_name: str = kwargs.get('workflow_upload_name', '')
+        self.rating: int = kwargs.get('rating', 1)  # 1 to 5
+
+    def get_table_name(self) -> str:
+        return "workflow_store_rating"
+
+    def get_schema(self) -> Dict[str, str]:
+        return {
+            'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
+            'workflow_store_id': 'INTEGER REFERENCES workflow_store_meta(id) ON DELETE CASCADE',
+            'workflow_id': 'VARCHAR(100) NOT NULL',
+            'workflow_name': 'VARCHAR(200) NOT NULL',
+            'workflow_upload_name': 'VARCHAR(200) NOT NULL',
+            'rating': 'INTEGER CHECK (rating >= 1 AND rating <= 5)'
         }

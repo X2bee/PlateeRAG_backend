@@ -18,7 +18,7 @@ from service.database.models.executor import ExecutionMeta, ExecutionIO
 from controller.helper.utils.auth_helpers import workflow_user_id_extractor
 from controller.helper.utils.data_parsers import parse_input_data
 from service.database.models.user import User
-from service.database.models.workflow import WorkflowMeta, WorkflowStoreMeta, WorkflowVersion
+from service.database.models.workflow import WorkflowMeta, WorkflowStoreMeta, WorkflowVersion, WorkflowStoreRating
 from service.database.models.deploy import DeployMeta
 from service.database.logger_helper import create_logger
 from controller.admin.adminBaseController import validate_superuser
@@ -367,6 +367,108 @@ async def delete_workflow(request: Request, workflow_name: str, workflow_upload_
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
         app_db.delete_by_condition(WorkflowStoreMeta, search_conditions)
+        app_db.delete_by_condition(WorkflowStoreRating, {"workflow_upload_name": existing_data.workflow_upload_name, "workflow_store_id": existing_data.id})
+
+        backend_log.success("Workflow deleted successfully",
+                          metadata={"workflow_name": workflow_name,
+                                  "workflow_upload_name": workflow_upload_name,
+                                  "current_version": current_version})
+
+        logger.info(f"Workflow deleted successfully: {workflow_name}")
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Workflow '{workflow_name}' deleted successfully"
+        })
+
+    except Exception as e:
+        backend_log.error("Workflow deletion failed", exception=e,
+                         metadata={"workflow_name": workflow_name})
+        logger.error(f"Error deleting workflow: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete workflow: {str(e)}")
+
+@router.post("/rating/{workflow_name}")
+async def rate_workflow(request: Request, workflow_name: str, workflow_upload_name: str, user_id: int, is_template: bool, current_version: float, rating: int):
+    """
+    특정 workflow에 대한 평가를 추가합니다.
+    """
+    login_user_id = extract_user_id_from_request(request)
+    if not login_user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    if rating < 1 or rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, login_user_id, request)
+
+    search_conditions = {
+        "user_id": user_id,
+        "workflow_name": workflow_name,
+        "workflow_upload_name": workflow_upload_name,
+        "current_version": current_version,
+    }
+
+    if is_template:
+        search_conditions.pop("user_id", None)
+        search_conditions["is_template"] = True
+
+    try:
+        backend_log.info("Starting workflow rating",
+                        metadata={"workflow_name": workflow_name})
+
+        existing_data = app_db.find_by_condition(
+            WorkflowStoreMeta,
+            search_conditions,
+            ignore_columns=['workflow_data'],
+            limit=1
+        )
+
+        if not existing_data:
+            backend_log.warn("Workflow metadata not found for deletion",
+                           metadata={"workflow_name": workflow_name})
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+        existing_data = existing_data[0]
+
+        existing_rating = app_db.find_by_condition(
+            WorkflowStoreRating,
+            {
+                "user_id": login_user_id,
+                "workflow_store_id": existing_data.id,
+            },
+            limit=1
+        )
+
+        if existing_rating:
+            existing_rating = existing_rating[0]
+            existing_rating_score = existing_rating.rating
+            existing_rating.rating = rating
+            existing_data.rating_sum = existing_data.rating_sum - existing_rating_score + rating
+            app_db.update(existing_rating)
+            app_db.update(existing_data)
+            backend_log.info("Updated existing workflow rating",
+                            metadata={"workflow_name": workflow_name,
+                                        "rating": rating,
+                                        "workflow_store_id": existing_data.id,
+                            })
+        else:
+            new_rating = WorkflowStoreRating(
+                user_id=login_user_id,
+                workflow_store_id=existing_data.id,
+                workflow_id=existing_data.workflow_id,
+                workflow_name=existing_data.workflow_name,
+                workflow_upload_name=existing_data.workflow_upload_name,
+                rating=rating
+            )
+            app_db.insert(new_rating)
+            existing_data.rating_count += 1
+            existing_data.rating_sum += rating
+            app_db.update(existing_data)
+            backend_log.info("Inserted new workflow rating",
+                            metadata={"workflow_name": workflow_name,
+                                        "rating": rating,
+                                        "workflow_store_id": existing_data.id,
+                            })
 
         backend_log.success("Workflow deleted successfully",
                           metadata={"workflow_name": workflow_name,
