@@ -253,15 +253,12 @@ def load_workflow_templates(app_db, templates_dir: str):
                 if isinstance(tags, str):
                     tags = [tags]
 
-                # workflow_upload_name은 파일명에서 추출 (.json 제거)
-                workflow_upload_name = json_file.stem
-
                 # WorkflowStoreMeta 객체 생성
                 new_template = WorkflowStoreMeta(
                     user_id=None,  # 템플릿이므로 None
                     workflow_id=workflow_id,
                     workflow_name=workflow_name,
-                    workflow_upload_name=workflow_upload_name,
+                    workflow_upload_name=workflow_name,
                     node_count=node_count,
                     edge_count=edge_count,
                     has_startnode=has_startnode,
