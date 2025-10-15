@@ -120,12 +120,10 @@ def parse_json_safely(text: str, logger=None) -> tuple[Any, bool]:
         return text, False
 
     # 1. 마크다운 코드 블록 제거 후 시도 (먼저 시도)
+    # 여러 줄 들여쓰기된 JSON도 처리할 수 있도록 매우 유연한 패턴 사용
     code_block_patterns = [
-        r'```json\s*\n(.*?)\n\s*```',  # ```json\n...\n```
-        r'```json\s+(.*?)\s*```',      # ```json ... ```
-        r'```\s*\n(.*?)\n\s*```',      # ```\n...\n``` (가장 흔한 케이스)
-        r'```\s+(.*?)\s+```',          # ``` ... ``` (공백 있음)
-        r'```(.*?)```',                # ```...``` (공백 없음, 최후 수단)
+        r'```json\s*(.*?)\s*```',  # ```json ... ``` (모든 공백/개행 허용)
+        r'```\s*(.*?)\s*```',      # ``` ... ``` (모든 공백/개행 허용)
     ]
 
     for pattern in code_block_patterns:
@@ -140,7 +138,9 @@ def parse_json_safely(text: str, logger=None) -> tuple[Any, bool]:
                 if logger:
                     logger.info(f"코드 블록 제거 후 JSON 파싱 성공: {parsed_data}")
                 return parsed_data, True
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError) as e:
+                if logger:
+                    logger.debug(f"코드 블록 파싱 실패: {e}")
                 continue
 
     # 2. 전체 텍스트를 직접 JSON으로 파싱 시도
