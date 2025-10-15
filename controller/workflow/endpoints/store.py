@@ -341,7 +341,7 @@ async def delete_workflow(request: Request, workflow_name: str, workflow_upload_
 
     if is_template:
         try:
-            val_super = validate_superuser(request)
+            val_super = await validate_superuser(request)
             if not val_super.get("superuser", False):
                 raise HTTPException(status_code=403, detail="Only superusers can delete template workflows")
             else:
@@ -367,7 +367,7 @@ async def delete_workflow(request: Request, workflow_name: str, workflow_upload_
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
         app_db.delete_by_condition(WorkflowStoreMeta, search_conditions)
-        app_db.delete_by_condition(WorkflowStoreRating, {"workflow_upload_name": existing_data.workflow_upload_name, "workflow_store_id": existing_data.id})
+        app_db.delete_by_condition(WorkflowStoreRating, {"workflow_upload_name": existing_data[0].workflow_upload_name, "workflow_store_id": existing_data[0].id})
 
         backend_log.success("Workflow deleted successfully",
                           metadata={"workflow_name": workflow_name,
