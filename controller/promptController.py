@@ -16,7 +16,7 @@ import json
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 
-from service.database.models.prompts import Prompts
+from service.database.models.prompts import Prompts, PromptStoreRating
 from controller.helper.singletonHelper import get_db_manager
 from controller.helper.controllerHelper import extract_user_id_from_request, require_admin_access
 from service.database.logger_helper import create_logger
@@ -96,6 +96,8 @@ async def get_prompt_list(
                 "created_at": prompt.created_at,
                 "updated_at": prompt.updated_at,
                 "metadata": prompt.metadata,
+                "rating_count": prompt.rating_count,
+                "rating_sum": prompt.rating_sum,
             }
             prompt_list.append(prompt_data)
 
@@ -128,6 +130,8 @@ async def get_prompt_list(
                 "created_at": prompt.created_at,
                 "updated_at": prompt.updated_at,
                 "metadata": prompt.metadata,
+                "rating_count": prompt.rating_count,
+                "rating_sum": prompt.rating_sum,
             }
             prompt_list.append(prompt_data)
 
@@ -160,6 +164,8 @@ async def get_prompt_list(
                 "created_at": prompt.created_at,
                 "updated_at": prompt.updated_at,
                 "metadata": prompt.metadata,
+                "rating_count": prompt.rating_count,
+                "rating_sum": prompt.rating_sum,
             }
             prompt_list.append(prompt_data)
 
@@ -319,22 +325,24 @@ async def delete_prompt(
     )
 
     try:
-        prompt_data = app_db.find_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id}, limit=1)
-        if not prompt_data:
+        existing_prompt_data = app_db.find_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id}, limit=1)
+        if not existing_prompt_data:
             backend_log.warn(
                 "Prompt not found or access denied",
                 metadata={"prompt_uid": prompt_data.prompt_uid, "user_id": user_id},
             )
             raise HTTPException(status_code=404, detail="Prompt not found or access denied")
-        delete_result = app_db.delete_by_condition(Prompts, {"prompt_uid": prompt_data.prompt_uid, "user_id": user_id})
+        delete_result = app_db.delete_by_condition(Prompts, {"prompt_uid": existing_prompt_data.prompt_uid, "user_id": user_id})
         if delete_result and delete_result.get("result") == "success":
             backend_log.success(
                 "Successfully deleted prompt",
                 metadata={
-                    "prompt_uid": prompt_data.prompt_uid,
+                    "prompt_uid": existing_prompt_data.prompt_uid,
                     "user_id": user_id,
                 },
             )
+
+            app_db.delete_by_condition(PromptStoreRating, {"prompt_uid": existing_prompt_data.prompt_uid, "prompt_store_id": existing_prompt_data.id})
             return {
                 "success": True,
                 "message": "Prompt deleted successfully"
@@ -412,3 +420,129 @@ async def update_prompt(
         )
         logger.error("Error updating prompt: %s", e)
         raise HTTPException(status_code=500, detail="Failed to update prompt")
+
+
+@router.post("/rating/{prompt_uid}")
+async def rate_prompt(
+    request: Request,
+    prompt_uid: str,
+    user_id: int,
+    is_template: bool,
+    rating: int
+):
+    """
+    특정 prompt에 대한 평가를 추가합니다.
+    """
+    login_user_id = extract_user_id_from_request(request)
+    if not login_user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    if rating < 1 or rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, login_user_id, request)
+
+    search_conditions = {
+        "user_id": user_id,
+        "prompt_uid": prompt_uid,
+    }
+
+    if is_template:
+        search_conditions.pop("user_id", None)
+        search_conditions["is_template"] = True
+
+    try:
+        backend_log.info(
+            "Starting prompt rating",
+            metadata={"prompt_uid": prompt_uid}
+        )
+
+        existing_data = app_db.find_by_condition(
+            Prompts,
+            search_conditions,
+            limit=1
+        )
+
+        if not existing_data:
+            backend_log.warn(
+                "Prompt not found for rating",
+                metadata={"prompt_uid": prompt_uid}
+            )
+            raise HTTPException(status_code=404, detail=f"Prompt '{prompt_uid}' not found")
+
+        existing_data = existing_data[0]
+
+        existing_rating = app_db.find_by_condition(
+            PromptStoreRating,
+            {
+                "user_id": login_user_id,
+                "prompt_store_id": existing_data.id,
+            },
+            limit=1
+        )
+
+        if existing_rating:
+            # 기존 평가 업데이트
+            existing_rating = existing_rating[0]
+            existing_rating_score = existing_rating.rating
+            existing_rating.rating = rating
+            existing_data.rating_sum = existing_data.rating_sum - existing_rating_score + rating
+            app_db.update(existing_rating)
+            app_db.update(existing_data)
+            backend_log.info(
+                "Updated existing prompt rating",
+                metadata={
+                    "prompt_uid": prompt_uid,
+                    "rating": rating,
+                    "prompt_store_id": existing_data.id,
+                }
+            )
+        else:
+            # 새로운 평가 추가
+            new_rating = PromptStoreRating(
+                user_id=login_user_id,
+                prompt_store_id=existing_data.id,
+                prompt_uid=existing_data.prompt_uid,
+                prompt_title=existing_data.prompt_title,
+                rating=rating
+            )
+            app_db.insert(new_rating)
+            existing_data.rating_count += 1
+            existing_data.rating_sum += rating
+            app_db.update(existing_data)
+            backend_log.info(
+                "Inserted new prompt rating",
+                metadata={
+                    "prompt_uid": prompt_uid,
+                    "rating": rating,
+                    "prompt_store_id": existing_data.id,
+                }
+            )
+
+        backend_log.success(
+            "Prompt rating completed successfully",
+            metadata={
+                "prompt_uid": prompt_uid,
+                "rating": rating
+            }
+        )
+
+        logger.info(f"Prompt rated successfully: {prompt_uid}")
+        return {
+            "success": True,
+            "message": f"Prompt '{prompt_uid}' rated successfully",
+            "rating": rating,
+            "average_rating": existing_data.rating_sum / existing_data.rating_count if existing_data.rating_count > 0 else 0
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        backend_log.error(
+            "Prompt rating failed",
+            exception=e,
+            metadata={"prompt_uid": prompt_uid}
+        )
+        logger.error(f"Error rating prompt: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to rate prompt: {str(e)}")
