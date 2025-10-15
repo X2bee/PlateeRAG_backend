@@ -341,7 +341,7 @@ async def delete_workflow(request: Request, workflow_name: str, workflow_upload_
 
     if is_template:
         try:
-            val_super = validate_superuser(request)
+            val_super = await validate_superuser(request)
             if not val_super.get("superuser", False):
                 raise HTTPException(status_code=403, detail="Only superusers can delete template workflows")
             else:
@@ -367,7 +367,7 @@ async def delete_workflow(request: Request, workflow_name: str, workflow_upload_
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
         app_db.delete_by_condition(WorkflowStoreMeta, search_conditions)
-        app_db.delete_by_condition(WorkflowStoreRating, {"workflow_upload_name": existing_data.workflow_upload_name, "workflow_store_id": existing_data.id})
+        app_db.delete_by_condition(WorkflowStoreRating, {"workflow_upload_name": existing_data[0].workflow_upload_name, "workflow_store_id": existing_data[0].id})
 
         backend_log.success("Workflow deleted successfully",
                           metadata={"workflow_name": workflow_name,
@@ -419,7 +419,6 @@ async def rate_workflow(request: Request, workflow_name: str, workflow_upload_na
         existing_data = app_db.find_by_condition(
             WorkflowStoreMeta,
             search_conditions,
-            ignore_columns=['workflow_data'],
             limit=1
         )
 
@@ -460,6 +459,7 @@ async def rate_workflow(request: Request, workflow_name: str, workflow_upload_na
                 workflow_upload_name=existing_data.workflow_upload_name,
                 rating=rating
             )
+
             app_db.insert(new_rating)
             existing_data.rating_count += 1
             existing_data.rating_sum += rating
@@ -470,15 +470,15 @@ async def rate_workflow(request: Request, workflow_name: str, workflow_upload_na
                                         "workflow_store_id": existing_data.id,
                             })
 
-        backend_log.success("Workflow deleted successfully",
+        backend_log.success("Workflow rating updated successfully",
                           metadata={"workflow_name": workflow_name,
                                   "workflow_upload_name": workflow_upload_name,
                                   "current_version": current_version})
 
-        logger.info(f"Workflow deleted successfully: {workflow_name}")
+        logger.info(f"Workflow rating updated successfully: {workflow_name}")
         return JSONResponse(content={
             "success": True,
-            "message": f"Workflow '{workflow_name}' deleted successfully"
+            "message": f"Workflow '{workflow_name}' rating updated successfully"
         })
 
     except Exception as e:
