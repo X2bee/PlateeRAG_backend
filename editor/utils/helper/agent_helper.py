@@ -46,16 +46,20 @@ class XgenJsonOutputParser(JsonOutputParser):
         # 1. 마크다운 코드 블록 제거 후 시도 (먼저 시도)
         # ```json ... ``` 또는 ``` ... ``` 형태 처리
         code_block_patterns = [
-            r'```json\s*\n(.*?)\n```',  # ```json\n...\n```
-            r'```json\s+(.*?)```',  # ```json ... ```
-            r'```\s*\n(.*?)\n```',  # ```\n...\n```
-            r'```\s*(.*?)```',  # ``` ... ```
+            r'```json\s*\n(.*?)\n\s*```',  # ```json\n...\n```
+            r'```json\s+(.*?)\s*```',      # ```json ... ```
+            r'```\s*\n(.*?)\n\s*```',      # ```\n...\n``` (가장 흔한 케이스)
+            r'```\s+(.*?)\s+```',          # ``` ... ``` (공백 있음)
+            r'```(.*?)```',                # ```...``` (공백 없음, 최후 수단)
         ]
 
         for pattern in code_block_patterns:
             match = re.search(pattern, text.strip(), re.DOTALL | re.IGNORECASE)
             if match:
                 json_content = match.group(1).strip()
+                # 빈 문자열이면 건너뛰기
+                if not json_content:
+                    continue
                 try:
                     parsed = json.loads(json_content)
                     logger.info("[XGEN_JSON_PARSER] 코드 블록 제거 후 JSON 파싱 성공")
