@@ -16,7 +16,7 @@ available_admin_sections = [
     "users", "user-create", "group-permissions",
     # Workflow Management
     "workflow-management", "workflow-monitoring", "node-management",
-    "chat-monitoring", "user-token-dashboard", "prompt-store",
+    "chat-monitoring", "user-token-dashboard", "workflow-store", "prompt-store",
     # System Settings
     "system-config", "system-settings",
     # System Monitoring

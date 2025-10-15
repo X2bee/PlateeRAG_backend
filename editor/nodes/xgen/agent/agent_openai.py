@@ -3,9 +3,14 @@ from pydantic import BaseModel
 from typing import Dict, Any, Optional
 from editor.node_composer import Node
 from langchain.schema.output_parser import StrOutputParser
-from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.exceptions import OutputParserException
 from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
-from editor.utils.helper.agent_helper import NonStreamingAgentHandler, NonStreamingAgentHandlerWithToolOutput, use_guarder_for_text_moderation
+from editor.utils.helper.agent_helper import (
+    NonStreamingAgentHandler,
+    NonStreamingAgentHandlerWithToolOutput,
+    use_guarder_for_text_moderation,
+    XgenJsonOutputParser
+)
 from editor.utils.prefix_prompt import get_prefix_prompt
 from langchain.agents import create_tool_calling_agent
 from langchain.agents import AgentExecutor
@@ -111,16 +116,49 @@ class AgentOpenAINode(Node):
 
             else:
                 final_prompt = create_context_prompt(additional_rag_context, default_prompt, strict_citation, plan=plan)
+
+                # XgenJsonOutputParser 또는 StrOutputParser 사용
                 if args_schema:
-                    parser = JsonOutputParser()
+                    parser = XgenJsonOutputParser()
                 else:
                     parser = StrOutputParser()
+
                 chain = final_prompt | llm | parser
                 response = chain.invoke(inputs)
                 return response
 
+        except OutputParserException as e:
+            # XgenJsonOutputParser에서도 실패한 경우
+            logger.error(f"[AGENT_EXECUTE] OutputParser 예외 발생 (모든 파싱 시도 실패): {str(e)}")
+
+            # 구조화된 에러 응답 반환
+            if args_schema:
+                llm_output = getattr(e, 'llm_output', str(e))
+                return {
+                    "error": "JSON 파싱 실패",
+                    "raw_output": llm_output,
+                    "parse_error": str(e),
+                    "expected_schema": args_schema.__name__ if hasattr(args_schema, '__name__') else str(args_schema),
+                    "suggestion": "LLM이 올바른 JSON 형식으로 응답하지 않았습니다."
+                }
+            else:
+                # 문자열 출력이 예상되는 경우 원본 출력 반환
+                llm_output = getattr(e, 'llm_output', None)
+                if llm_output:
+                    return llm_output
+                raise
         except Exception as e:
             logger.error(f"[AGENT_EXECUTE] Chat Agent 실행 중 오류 발생: {str(e)}")
             logger.error(f"[AGENT_EXECUTE] 오류 타입: {type(e)}")
             logger.exception(f"[AGENT_EXECUTE] 상세 스택 트레이스:")
-            return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
+
+            # 구조화된 에러 응답 반환 (라우팅 가능하도록)
+            if args_schema:
+                return {
+                    "error": "Agent 실행 실패",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "user_message": f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
+                }
+            else:
+                return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"

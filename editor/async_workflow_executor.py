@@ -21,6 +21,7 @@ def extract_json_from_code_block(text: str) -> str:
     """
     마크다운 코드 블록에서 JSON 내용을 추출합니다.
     ```json...``` 또는 ```...``` 형태의 코드 블록을 처리합니다.
+    agent_helper.py의 강건한 로직을 적용합니다.
 
     Args:
         text: 처리할 텍스트
@@ -32,19 +33,78 @@ def extract_json_from_code_block(text: str) -> str:
 
     clean_data = text.strip()
 
-    # ```json으로 시작하고 ```로 끝나는 패턴 제거
-    json_pattern = r'^```(?:json)?\s*\n?(.*?)\n?\s*```$'
-    match = re.search(json_pattern, clean_data, re.DOTALL | re.IGNORECASE)
+    # 여러 패턴을 순차적으로 시도 (agent_helper.py와 동일)
+    code_block_patterns = [
+        r'```json\s*\n(.*?)\n```',  # ```json\n...\n```
+        r'```json\s+(.*?)```',      # ```json ... ```
+        r'```\s*\n(.*?)\n```',      # ```\n...\n```
+        r'```\s*(.*?)```',          # ``` ... ```
+    ]
 
-    if match:
-        return match.group(1).strip()
+    for pattern in code_block_patterns:
+        match = re.search(pattern, clean_data, re.DOTALL | re.IGNORECASE)
+        if match:
+            json_content = match.group(1).strip()
+            # 추출된 내용이 JSON처럼 보이는지 확인
+            if json_content.startswith(('{', '[')):
+                return json_content
 
     return clean_data
+
+def extract_embedded_json(text: str, logger=None) -> tuple[Any, bool]:
+    """
+    텍스트 내부에 임베디드된 JSON 객체를 찾아 추출합니다.
+    에러 메시지나 일반 텍스트 안에 포함된 JSON을 처리합니다.
+
+    Args:
+        text: JSON이 포함된 텍스트
+        logger: 로깅을 위한 logger 객체 (선택사항)
+
+    Returns:
+        (추출된 JSON 데이터, 성공 여부) 튜플
+    """
+    import re
+    import json
+
+    # 중괄호로 시작하는 JSON 객체 패턴 찾기
+    # 가장 긴 매칭을 찾기 위해 여러 패턴 시도
+    patterns = [
+        r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}',  # 중첩된 객체 포함
+        r'\{[^}]+\}',  # 간단한 객체
+    ]
+
+    for pattern in patterns:
+        matches = re.finditer(pattern, text, re.DOTALL)
+        for match in matches:
+            json_str = match.group(0)
+            try:
+                parsed = json.loads(json_str)
+                if logger:
+                    logger.info(f"임베디드 JSON 추출 성공: {parsed}")
+                return parsed, True
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+    # 대괄호로 시작하는 JSON 배열도 시도
+    array_pattern = r'\[[^\]]+\]'
+    matches = re.finditer(array_pattern, text, re.DOTALL)
+    for match in matches:
+        json_str = match.group(0)
+        try:
+            parsed = json.loads(json_str)
+            if logger:
+                logger.info(f"임베디드 JSON 배열 추출 성공: {parsed}")
+            return parsed, True
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    return text, False
 
 def parse_json_safely(text: str, logger=None) -> tuple[Any, bool]:
     """
     텍스트를 JSON으로 안전하게 파싱합니다.
     코드 블록으로 감싸진 JSON도 자동으로 처리합니다.
+    agent_helper.py의 XgenJsonOutputParser와 동일한 강건한 로직을 적용합니다.
 
     Args:
         text: 파싱할 텍스트
@@ -54,27 +114,53 @@ def parse_json_safely(text: str, logger=None) -> tuple[Any, bool]:
         (파싱된 데이터, 성공 여부) 튜플
     """
     import json
+    import re
 
-    try:
-        # 먼저 코드 블록에서 JSON 추출 시도
-        json_content = extract_json_from_code_block(text)
-
-        if json_content != text and logger:
-            logger.info(f"코드 블록에서 JSON 추출: {json_content}")
-
-        # JSON 파싱 시도
-        parsed_data = json.loads(json_content)
-
-        if logger:
-            logger.info(f"JSON 파싱 성공: {parsed_data}")
-
-        return parsed_data, True
-
-    except (json.JSONDecodeError, ValueError, AttributeError) as e:
-        if logger:
-            logger.info(f"JSON 파싱 실패 ({e}), 원본 텍스트 반환")
-
+    if not isinstance(text, str):
         return text, False
+
+    # 1. 마크다운 코드 블록 제거 후 시도 (먼저 시도)
+    code_block_patterns = [
+        r'```json\s*\n(.*?)\n```',  # ```json\n...\n```
+        r'```json\s+(.*?)```',      # ```json ... ```
+        r'```\s*\n(.*?)\n```',      # ```\n...\n```
+        r'```\s*(.*?)```',          # ``` ... ```
+    ]
+
+    for pattern in code_block_patterns:
+        match = re.search(pattern, text.strip(), re.DOTALL | re.IGNORECASE)
+        if match:
+            json_content = match.group(1).strip()
+            try:
+                parsed_data = json.loads(json_content)
+                if logger:
+                    logger.info(f"코드 블록 제거 후 JSON 파싱 성공: {parsed_data}")
+                return parsed_data, True
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+    # 2. 전체 텍스트를 직접 JSON으로 파싱 시도
+    try:
+        parsed_data = json.loads(text.strip())
+        if logger:
+            logger.info(f"직접 JSON 파싱 성공: {parsed_data}")
+        return parsed_data, True
+    except (json.JSONDecodeError, ValueError) as e:
+        if logger:
+            logger.debug(f"직접 파싱 실패: {e}")
+
+    # 3. 임베디드 JSON 추출 시도
+    if logger:
+        logger.info(f"임베디드 JSON 추출 시도 중...")
+
+    embedded_result, is_embedded = extract_embedded_json(text, logger)
+    if is_embedded:
+        return embedded_result, True
+
+    if logger:
+        logger.info(f"모든 JSON 파싱 시도 실패, 원본 텍스트 반환")
+
+    return text, False
 
 def collect_generator_data(generator, logger=None) -> tuple[str, int]:
     """
@@ -94,7 +180,27 @@ def collect_generator_data(generator, logger=None) -> tuple[str, int]:
 
     for chunk in generator:
         if chunk is not None:
-            chunks.append(str(chunk))
+            # 타입 안전성을 위해 명시적으로 문자열로 변환
+            try:
+                if isinstance(chunk, (str, bytes)):
+                    # bytes는 디코딩
+                    chunk_str = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
+                elif isinstance(chunk, (int, float, bool)):
+                    chunk_str = str(chunk)
+                elif isinstance(chunk, (dict, list)):
+                    # JSON 직렬화 가능한 객체는 JSON 문자열로
+                    try:
+                        chunk_str = json.dumps(chunk, ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        chunk_str = str(chunk)
+                else:
+                    chunk_str = str(chunk)
+
+                chunks.append(chunk_str)
+            except Exception as e:
+                if logger:
+                    logger.warning(f"청크 변환 중 오류 ({type(chunk)}): {e}, 빈 문자열로 대체")
+                chunks.append("")
 
     collected_data = ''.join(chunks) if chunks else ""
 
@@ -123,6 +229,18 @@ def process_generator_input(key: str, generator, logger=None) -> Any:
         # Generator에서 데이터 수집
         collected_data, chunk_count = collect_generator_data(generator, logger)
 
+        # 타입 안전성 검증
+        if not isinstance(collected_data, str):
+            if logger:
+                logger.warning(f"수집된 데이터가 문자열이 아님 ({type(collected_data)}), 문자열로 변환")
+            collected_data = str(collected_data) if collected_data is not None else ""
+
+        # 빈 문자열 처리
+        if not collected_data or collected_data.strip() == "":
+            if logger:
+                logger.info(f"Generator에서 빈 데이터 수집: {key}")
+            return ""
+
         # JSON 파싱 시도
         parsed_data, is_json = parse_json_safely(collected_data, logger)
 
@@ -130,13 +248,20 @@ def process_generator_input(key: str, generator, logger=None) -> Any:
             return parsed_data
         else:
             if logger:
-                logger.info(f"문자열로 처리: {key} = {collected_data[:100]}...")
+                preview = collected_data[:100] if len(collected_data) > 100 else collected_data
+                logger.info(f"문자열로 처리: {key} = {preview}...")
             return collected_data
 
     except (StopIteration, GeneratorExit, RuntimeError, ValueError) as e:
-        error_msg = f"Generator 수집 오류: {e}"
+        error_msg = f"Generator 수집 오류: {str(e)}"
         if logger:
             logger.error(f"Generator 수집 중 오류: {key}, {e}")
+        return error_msg
+    except Exception as e:
+        # 예상치 못한 오류에 대한 안전망
+        error_msg = f"예상치 못한 Generator 처리 오류: {str(e)}"
+        if logger:
+            logger.error(f"예상치 못한 오류 발생: {key}, {e}", exc_info=True)
         return error_msg
 
 def clean_router_input_text(text: str) -> str:
@@ -172,71 +297,108 @@ def get_route_key_from_data(data: Any, routing_criteria: str, logger_instance=No
     RouterNode의 데이터와 라우팅 기준을 바탕으로 라우팅 키를 결정합니다.
     Boolean과 String 값에 대해 강건한 처리를 제공합니다.
     문자열 데이터인 경우 JSON 파싱을 시도합니다.
+    에러 메시지 안에 포함된 JSON도 추출합니다.
     """
-    if not routing_criteria or routing_criteria.strip() == "":
-        return "default"
-
-    # 데이터가 문자열인 경우 JSON 파싱 시도
-    if isinstance(data, str):
-        if logger_instance:
-            logger_instance.info(" -> 라우팅 데이터가 문자열입니다. JSON 파싱 시도 중...")
-
-        parsed_data, is_json = parse_json_safely(data, logger_instance)
-        if is_json and isinstance(parsed_data, dict):
+    try:
+        if not routing_criteria or not isinstance(routing_criteria, str) or routing_criteria.strip() == "":
             if logger_instance:
-                logger_instance.info(" -> JSON 파싱 성공, Dict로 변환됨")
-            data = parsed_data
-        else:
-            if logger_instance:
-                logger_instance.warning(" -> JSON 파싱 실패 또는 Dict가 아님, 'default' 반환")
+                logger_instance.warning(" -> 라우팅 기준이 없거나 유효하지 않음, 'default' 반환")
             return "default"
 
-    if not isinstance(data, dict):
+        # 데이터가 None인 경우
+        if data is None:
+            if logger_instance:
+                logger_instance.warning(" -> 라우팅 데이터가 None, 'default' 반환")
+            return "default"
+
+        # 데이터가 문자열인 경우 JSON 파싱 시도
+        if isinstance(data, str):
+            if logger_instance:
+                logger_instance.info(" -> 라우팅 데이터가 문자열입니다. JSON 파싱 시도 중...")
+
+            # 빈 문자열 체크
+            if data.strip() == "":
+                if logger_instance:
+                    logger_instance.warning(" -> 빈 문자열 데이터, 'default' 반환")
+                return "default"
+
+            # JSON 파싱 시도 (코드 블록 및 임베디드 JSON 포함)
+            parsed_data, is_json = parse_json_safely(data, logger_instance)
+            if is_json and isinstance(parsed_data, dict):
+                if logger_instance:
+                    logger_instance.info(" -> JSON 파싱 성공, Dict로 변환됨")
+                data = parsed_data
+            else:
+                if logger_instance:
+                    logger_instance.warning(" -> JSON 파싱 실패 또는 Dict가 아님")
+                    # 에러 메시지인 경우 특별 처리
+                    if "오류" in data or "error" in data.lower() or "exception" in data.lower():
+                        logger_instance.warning(" -> 에러 메시지로 판단됨, 'error' 라우팅 키 반환")
+                        return "error"
+                    logger_instance.warning(" -> 'default' 반환")
+                return "default"
+
+        if not isinstance(data, dict):
+            if logger_instance:
+                logger_instance.warning(f" -> 데이터가 Dict가 아님 ({type(data)}), 'default' 반환")
+            return "default"
+
+        routing_key = routing_criteria.strip()
+        if routing_key not in data:
+            if logger_instance:
+                logger_instance.warning(f" -> 라우팅 키 '{routing_key}'가 데이터에 없음, 'default' 반환")
+            return "default"
+
+        route_value = data[routing_key]
+
+        # Boolean 값에 대한 강건한 처리 (실제 Python bool 타입만)
+        if isinstance(route_value, bool):
+            return "true" if route_value else "false"
+
+        # None 값 처리
+        if route_value is None:
+            return "null"
+
+        # 숫자 타입 처리 (int, float)
+        if isinstance(route_value, (int, float)):
+            return str(route_value)
+
+        # 문자열로 안전하게 변환
+        try:
+            str_value = str(route_value).strip()
+        except Exception as e:
+            if logger_instance:
+                logger_instance.error(f" -> 라우팅 값 문자열 변환 실패: {e}, 'default' 반환")
+            return "default"
+
+        # 빈 문자열 처리
+        if str_value == "":
+            return "default"
+
+        # Boolean-like 문자열들을 정규화 (대소문자 구분 없이)
+        # 단, 순수 숫자 문자열은 제외
+        str_lower = str_value.lower()
+
+        # 순수 숫자 문자열인지 확인
+        try:
+            float(str_value)
+            # 숫자 문자열이면 소문자로만 변환하여 반환
+            return str_lower
+        except ValueError:
+            # 숫자가 아닌 문자열에 대해서만 Boolean-like 변환 적용
+            if str_lower in ["true", "yes", "on", "enabled"]:
+                return "true"
+            elif str_lower in ["false", "no", "off", "disabled"]:
+                return "false"
+
+            # 일반 문자열은 소문자로 정규화하여 반환
+            return str_lower
+
+    except Exception as e:
+        # 예상치 못한 오류에 대한 최종 안전망
+        if logger_instance:
+            logger_instance.error(f" -> 라우팅 키 결정 중 예상치 못한 오류: {e}, 'default' 반환", exc_info=True)
         return "default"
-
-    routing_key = routing_criteria.strip()
-    if routing_key not in data:
-        return "default"
-
-    route_value = data[routing_key]
-
-    # Boolean 값에 대한 강건한 처리 (실제 Python bool 타입만)
-    if isinstance(route_value, bool):
-        return "true" if route_value else "false"
-
-    # None 값 처리
-    if route_value is None:
-        return "null"
-
-    # 숫자 타입 처리 (int, float)
-    if isinstance(route_value, (int, float)):
-        return str(route_value)
-
-    # 문자열로 변환 후 정규화
-    str_value = str(route_value).strip()
-
-    # 빈 문자열 처리
-    if str_value == "":
-        return "empty"
-
-    # Boolean-like 문자열들을 정규화 (대소문자 구분 없이)
-    # 단, 순수 숫자 문자열은 제외
-    str_lower = str_value.lower()
-
-    # 순수 숫자 문자열인지 확인
-    try:
-        float(str_value)
-        # 숫자 문자열이면 소문자로만 변환하여 반환
-        return str_lower
-    except ValueError:
-        # 숫자가 아닌 문자열에 대해서만 Boolean-like 변환 적용
-        if str_lower in ["true", "yes", "on", "enabled"]:
-            return "true"
-        elif str_lower in ["false", "no", "off", "disabled"]:
-            return "false"
-
-        # 일반 문자열은 소문자로 정규화하여 반환
-        return str_lower
 
 logger = logging.getLogger('Async-Workflow-Executor')
 
@@ -446,30 +608,62 @@ class AsyncWorkflowExecutor:
                     # 모든 입력 값에서 generator가 있는지 확인하고 수집
                     processed_kwargs = {}
                     for key, value in kwargs.items():
-                        if hasattr(value, '__iter__') and hasattr(value, '__next__'):
-                            # 헬퍼 함수를 사용하여 Generator 처리
-                            processed_value = process_generator_input(key, value, logger)
-                            # RouterNode 전용 텍스트 정리 (마지막 전처리)
-                            if isinstance(processed_value, str):
-                                processed_value = clean_router_input_text(processed_value)
-                                logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
-                            processed_kwargs[key] = processed_value
-                        else:
-                            # 일반 값도 문자열인 경우 정리 및 JSON 파싱 시도
-                            if isinstance(value, str):
-                                # 먼저 텍스트 정리
-                                cleaned_value = clean_router_input_text(value)
-                                logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
+                        try:
+                            if hasattr(value, '__iter__') and hasattr(value, '__next__'):
+                                # 헬퍼 함수를 사용하여 Generator 처리
+                                processed_value = process_generator_input(key, value, logger)
 
-                                # JSON 파싱 시도
-                                parsed_value, is_json = parse_json_safely(cleaned_value, logger)
-                                if is_json:
-                                    logger.info(f" -> RouterNode JSON 파싱 성공: {key}")
-                                    processed_kwargs[key] = parsed_value
-                                else:
-                                    processed_kwargs[key] = cleaned_value
+                                # 타입 안전성 재확인
+                                if processed_value is None:
+                                    logger.warning(f" -> Generator 처리 결과가 None: {key}, 빈 문자열로 대체")
+                                    processed_value = ""
+
+                                # RouterNode 전용 텍스트 정리 (마지막 전처리)
+                                if isinstance(processed_value, str):
+                                    processed_value = clean_router_input_text(processed_value)
+                                    logger.info(f" -> RouterNode 텍스트 정리 완료: {key}")
+
+                                processed_kwargs[key] = processed_value
                             else:
-                                processed_kwargs[key] = value
+                                # 일반 값 처리
+                                if value is None:
+                                    logger.warning(f" -> 입력 값이 None: {key}, 빈 문자열로 대체")
+                                    processed_kwargs[key] = ""
+                                elif isinstance(value, str):
+                                    # 먼저 텍스트 정리
+                                    cleaned_value = clean_router_input_text(value)
+
+                                    # JSON 형태로 보이는 경우에만 파싱 시도 (중괄호나 대괄호로 시작)
+                                    if cleaned_value.strip().startswith(('{', '[')):
+                                        logger.info(f" -> RouterNode JSON 형태 감지: {key}, 파싱 시도")
+                                        parsed_value, is_json = parse_json_safely(cleaned_value, logger)
+                                        if is_json:
+                                            logger.info(f" -> RouterNode JSON 파싱 성공: {key}")
+                                            processed_kwargs[key] = parsed_value
+                                        else:
+                                            processed_kwargs[key] = cleaned_value
+                                    else:
+                                        # 일반 문자열은 정리만 하고 그대로 전달
+                                        logger.info(f" -> RouterNode 일반 문자열: {key}")
+                                        processed_kwargs[key] = cleaned_value
+                                elif isinstance(value, (dict, list)):
+                                    # Dict나 List는 그대로 전달
+                                    processed_kwargs[key] = value
+                                elif isinstance(value, (int, float, bool)):
+                                    # 기본 타입은 그대로 전달
+                                    processed_kwargs[key] = value
+                                else:
+                                    # 기타 타입은 안전하게 문자열로 변환
+                                    try:
+                                        processed_kwargs[key] = str(value)
+                                        logger.info(f" -> 알 수 없는 타입을 문자열로 변환: {key} ({type(value)})")
+                                    except Exception as conv_err:
+                                        logger.error(f" -> 값 변환 실패: {key}, {conv_err}, 빈 문자열로 대체")
+                                        processed_kwargs[key] = ""
+
+                        except Exception as e:
+                            logger.error(f" -> RouterNode 전처리 중 오류 발생: {key}, {e}, 빈 문자열로 대체", exc_info=True)
+                            processed_kwargs[key] = ""
 
                     kwargs = processed_kwargs
                     logger.info(" -> RouterNode 전처리 완료")
