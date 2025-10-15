@@ -8,6 +8,7 @@ from datetime import datetime
 import logging
 import secrets
 import string
+from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request, require_admin_access
@@ -24,6 +25,89 @@ from service.database.logger_helper import create_logger
 logger = logging.getLogger("workflow-store-endpoints")
 router = APIRouter()
 
+
+def parse_json_field(value: Any, field_name: str = "field", workflow_id: Optional[int] = None) -> Any:
+    """
+    JSON 문자열 필드를 안전하게 파싱합니다.
+    한글 유니코드 이스케이프 시퀀스도 올바르게 처리합니다.
+
+    Args:
+        value: 파싱할 값 (문자열 또는 이미 파싱된 객체)
+        field_name: 필드 이름 (로깅용)
+        workflow_id: 워크플로우 ID (로깅용)
+
+    Returns:
+        파싱된 Python 객체 또는 원본 값
+    """
+    if not value:
+        return None
+
+    # 이미 dict나 list인 경우 그대로 반환
+    if isinstance(value, (dict, list)):
+        return value
+
+    # 문자열인 경우 JSON 파싱 시도
+    if isinstance(value, str):
+        try:
+            # json.loads는 자동으로 유니코드 이스케이프를 처리함
+            parsed = json.loads(value)
+            return parsed
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(
+                f"Failed to parse {field_name} for workflow {workflow_id}: {str(e)[:100]}"
+            )
+            return None
+
+    # 그 외의 타입은 원본 반환
+    return value
+
+
+def normalize_workflow_dict(workflow_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    워크플로우 딕셔너리의 JSON 필드들을 정규화합니다.
+
+    Args:
+        workflow_dict: 워크플로우 데이터 딕셔너리
+
+    Returns:
+        정규화된 딕셔너리
+    """
+    workflow_id = workflow_dict.get('id')
+
+    # workflow_data 파싱
+    if 'workflow_data' in workflow_dict:
+        workflow_dict['workflow_data'] = parse_json_field(
+            workflow_dict['workflow_data'],
+            'workflow_data',
+            workflow_id
+        )
+
+    # metadata 파싱
+    if 'metadata' in workflow_dict:
+        workflow_dict['metadata'] = parse_json_field(
+            workflow_dict['metadata'],
+            'metadata',
+            workflow_id
+        )
+
+    # tags 파싱
+    if 'tags' in workflow_dict:
+        workflow_dict['tags'] = parse_json_field(
+            workflow_dict['tags'],
+            'tags',
+            workflow_id
+        )
+
+    # 날짜 필드 ISO 형식으로 변환
+    for date_field in ['created_at', 'updated_at']:
+        if date_field in workflow_dict and workflow_dict[date_field]:
+            if hasattr(workflow_dict[date_field], 'isoformat'):
+                workflow_dict[date_field] = workflow_dict[date_field].isoformat()
+            elif not isinstance(workflow_dict[date_field], str):
+                workflow_dict[date_field] = str(workflow_dict[date_field])
+
+    return workflow_dict
+
 @router.get("/list")
 async def list_workflows(request: Request):
     user_id = extract_user_id_from_request(request)
@@ -34,13 +118,21 @@ async def list_workflows(request: Request):
     backend_log = create_logger(app_db, user_id, request)
 
     try:
-        workflow_data = app_db.find_all(WorkflowStoreMeta, limit= 100000, join_user=True, ignore_columns=['workflow_data'])
-        backend_log.success("Workflow list retrieved successfully",
-                          metadata={"workflow_count": len(workflow_data),
-                                  "workflow_files": [wf.workflow_name for wf in workflow_data[:10]]})  # 처음 10개만 로깅
+        workflow_data = app_db.find_all(WorkflowStoreMeta, limit= 100000, join_user=True)
 
-        logger.info(f"Found {len(workflow_data)} workflow files")
-        return {"workflows": workflow_data}
+        # workflow_data를 파싱하여 JSON으로 변환
+        parsed_workflows = []
+        for wf in workflow_data:
+            wf_dict = wf if isinstance(wf, dict) else wf.__dict__
+            normalized_wf = normalize_workflow_dict(wf_dict)
+            parsed_workflows.append(normalized_wf)
+
+        backend_log.success("Workflow list retrieved successfully",
+                          metadata={"workflow_count": len(parsed_workflows),
+                                  "workflow_files": [wf.get('workflow_name') for wf in parsed_workflows[:10]]})
+
+        logger.info(f"Found {len(parsed_workflows)} workflow files")
+        return {"workflows": parsed_workflows}
 
     except Exception as e:
         backend_log.error("Failed to list workflows", exception=e)
@@ -59,6 +151,12 @@ async def duplicate_workflow(request: Request, workflow_name: str, workflow_uplo
         app_db = get_db_manager(request)
         backend_log = create_logger(app_db, login_user_id, request)
 
+        # 입력 파라미터 정규화
+        if workflow_name:
+            workflow_name = workflow_name.strip()
+        if workflow_upload_name:
+            workflow_upload_name = workflow_upload_name.strip()
+
         search_condition = {
             "workflow_name": workflow_name,
             "workflow_upload_name": workflow_upload_name,
@@ -76,6 +174,7 @@ async def duplicate_workflow(request: Request, workflow_name: str, workflow_uplo
             raise HTTPException(status_code=404, detail="Workflow not found")
         store_workflow_data = store_workflow_data[0]
 
+        # 한글이 포함된 워크플로우명 안전하게 처리
         copy_workflow_name = f"{store_workflow_data.workflow_upload_name}_copy"
         existing_copy_data = app_db.find_by_condition(WorkflowMeta, {"user_id": login_user_id, "workflow_name": copy_workflow_name}, limit=1)
         if existing_copy_data:
@@ -277,100 +376,6 @@ async def delete_workflow(request: Request, workflow_name: str, workflow_upload_
         logger.error(f"Error deleting workflow: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete workflow: {str(e)}")
 
-@router.get("/list/detail")
-async def list_workflows_detail(request: Request):
-    """
-    downloads 폴더에 있는 모든 workflow 파일들의 상세 정보를 반환합니다.
-    각 워크플로우에 대해 파일명, workflow_id, 노드 수, 마지막 수정일자를 포함합니다.
-    """
-    user_id = extract_user_id_from_request(request)
-    if not user_id:
-        raise HTTPException(status_code=400, detail="User ID not found in request")
-
-    app_db = get_db_manager(request)
-    backend_log = create_logger(app_db, user_id, request)
-
-    try:
-        user = app_db.find_by_id(User, user_id)
-        groups = user.groups
-        user_name = user.username if user else "Unknown User"
-
-        backend_log.info("Starting detailed workflow list retrieval",
-                        metadata={"user_name": user_name, "groups": groups, "groups_count": len(groups) if groups else 0})
-
-        # 직접 SQL 쿼리로 워크플로우와 사용자 정보 조인
-        # 자신의 워크플로우
-        own_workflows_query = """
-            SELECT
-                wm.id, wm.created_at, wm.updated_at,
-                wm.user_id, wm.workflow_id, wm.workflow_name,
-                wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
-                wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                u.username, u.full_name,
-                dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
-            FROM workflow_meta wm
-            LEFT JOIN users u ON wm.user_id = u.id
-            LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id AND wm.workflow_name = dm.workflow_name AND wm.user_id = dm.user_id
-            WHERE wm.user_id = %s
-            ORDER BY wm.updated_at DESC
-            LIMIT 10000
-        """
-        existing_data = app_db.config_db_manager.execute_query(own_workflows_query, (user_id,))
-        own_workflow_count = len(existing_data) if existing_data else 0
-
-        # 그룹 공유 워크플로우 추가
-        shared_workflow_count = 0
-        if groups and groups != None and groups != [] and len(groups) > 0:
-            for group_name in groups:
-                shared_workflows_query = """
-                    SELECT
-                        wm.id, wm.created_at, wm.updated_at,
-                        wm.user_id, wm.workflow_id, wm.workflow_name,
-                        wm.node_count, wm.edge_count, wm.has_startnode, wm.has_endnode,
-                        wm.is_completed, wm.metadata, wm.is_shared, wm.share_group, wm.share_permissions,
-                        u.username, u.full_name,
-                        dm.is_deployed, dm.deploy_key, dm.is_accepted, dm.inquire_deploy
-                    FROM workflow_meta wm
-                    LEFT JOIN users u ON wm.user_id = u.id
-                    LEFT JOIN deploy_meta dm ON wm.workflow_id = dm.workflow_id AND wm.workflow_name = dm.workflow_name AND wm.user_id = dm.user_id
-                    WHERE wm.share_group = %s AND wm.is_shared = true
-                    ORDER BY wm.updated_at DESC
-                    LIMIT 10000
-                """
-                shared_data = app_db.config_db_manager.execute_query(shared_workflows_query, (group_name,))
-                if shared_data:
-                    existing_data.extend(shared_data)
-                    shared_workflow_count += len(shared_data)
-
-        seen_ids = set()
-        unique_data = []
-        for item in existing_data:
-            if item.get("id") not in seen_ids:
-                seen_ids.add(item.get("id"))
-                item_dict = dict(item)
-                if 'created_at' in item_dict and item_dict['created_at']:
-                    item_dict['created_at'] = item_dict['created_at'].isoformat() if hasattr(item_dict['created_at'], 'isoformat') else str(item_dict['created_at'])
-                if 'updated_at' in item_dict and item_dict['updated_at']:
-                    item_dict['updated_at'] = item_dict['updated_at'].isoformat() if hasattr(item_dict['updated_at'], 'isoformat') else str(item_dict['updated_at'])
-                unique_data.append(item_dict)
-
-        backend_log.success("Detailed workflow list retrieved successfully",
-                          metadata={"own_workflows": own_workflow_count,
-                                  "shared_workflows": shared_workflow_count,
-                                  "total_unique_workflows": len(unique_data),
-                                  "user_name": user_name,
-                                  "groups_count": len(groups) if groups else 0})
-
-        logger.info(f"Found {len(unique_data)} workflow files with detailed information")
-
-        return JSONResponse(content={"workflows": unique_data})
-
-    except Exception as e:
-        backend_log.error("Failed to retrieve detailed workflow list", exception=e,
-                         metadata={"user_name": user_name if 'user_name' in locals() else None})
-        logger.error(f"Error listing workflow details: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to list workflow details: {str(e)}")
-
 @router.post("/upload/{workflow_name}")
 async def upload_workflow(request: Request, workflow_name: str, workflow_upload_name: str, description: str = "", tags: list = []):
     user_id = extract_user_id_from_request(request)
@@ -407,6 +412,15 @@ async def upload_workflow(request: Request, workflow_name: str, workflow_upload_
         if not workflow_upload_name or workflow_upload_name.strip() == "":
             raise HTTPException(status_code=400, detail="업로드할 워크플로우 이름을 입력하세요.")
 
+        # 한글 및 특수문자 정규화 처리
+        workflow_upload_name = workflow_upload_name.strip()
+        if description:
+            description = description.strip()
+
+        # tags 리스트의 각 항목 정규화
+        if tags and isinstance(tags, list):
+            tags = [tag.strip() if isinstance(tag, str) else str(tag) for tag in tags if tag]
+
         existing_upload_data = app_db.find_by_condition(
             WorkflowStoreMeta,
             {
@@ -433,8 +447,8 @@ async def upload_workflow(request: Request, workflow_name: str, workflow_upload_
             current_version=existing_data.current_version,
             latest_version=existing_data.latest_version,
             is_template=False,
-            description=description,
-            tags=tags,
+            description=description if description else "",
+            tags=tags if tags else [],
             workflow_data=existing_data.workflow_data,
         )
 
@@ -443,6 +457,7 @@ async def upload_workflow(request: Request, workflow_name: str, workflow_upload_
                         metadata={"workflow_name": workflow_name,
                                   "workflow_upload_name": workflow_upload_name,
                                   "description": description,
+                                  "tags_count": len(tags) if tags else 0,
                         })
 
         return {

@@ -207,9 +207,15 @@ def load_workflow_templates(app_db, templates_dir: str):
 
         for json_file in json_files:
             try:
-                # JSON 파일 읽기
+                # JSON 파일 읽기 및 전처리
                 with open(json_file, 'r', encoding='utf-8') as f:
                     workflow_data = json.load(f)
+
+                # JSON을 다시 파싱하여 유니코드 이스케이프 문자 정리
+                # ensure_ascii=False로 한글 등이 제대로 저장되도록 함
+                workflow_data = json.loads(
+                    json.dumps(workflow_data, ensure_ascii=False)
+                )
 
                 # 필수 필드 확인
                 workflow_id = workflow_data.get('workflow_id')
