@@ -21,6 +21,7 @@ from service.database.models.user import User
 from service.database.models.workflow import WorkflowMeta, WorkflowStoreMeta, WorkflowVersion
 from service.database.models.deploy import DeployMeta
 from service.database.logger_helper import create_logger
+from controller.admin.adminBaseController import validate_superuser
 
 logger = logging.getLogger("workflow-store-endpoints")
 router = APIRouter()
@@ -320,7 +321,7 @@ async def update_workflow(request: Request, workflow_name: str, update_dict: dic
         raise HTTPException(status_code=500, detail=f"Failed to update workflow: {str(e)}")
 
 @router.delete("/delete/{workflow_name}")
-async def delete_workflow(request: Request, workflow_name: str, workflow_upload_name: str, current_version: float):
+async def delete_workflow(request: Request, workflow_name: str, workflow_upload_name: str, current_version: float, is_template: bool = False):
     """
     특정 workflow를 삭제합니다.
     """
@@ -331,18 +332,28 @@ async def delete_workflow(request: Request, workflow_name: str, workflow_upload_
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, user_id, request)
 
+    search_conditions = {
+        "user_id": user_id,
+        "workflow_name": workflow_name,
+        "workflow_upload_name": workflow_upload_name,
+        "current_version": current_version,
+    }
+
+    if is_template:
+        try:
+            val_super = validate_superuser(request)
+            if not val_super.get("superuser", False):
+                raise HTTPException(status_code=403, detail="Only superusers can delete template workflows")
+        except HTTPException as e:
+            raise HTTPException(status_code=403, detail="Only superusers can delete template workflows")
+
     try:
         backend_log.info("Starting workflow deletion",
                         metadata={"workflow_name": workflow_name})
 
         existing_data = app_db.find_by_condition(
             WorkflowStoreMeta,
-            {
-                "user_id": user_id,
-                "workflow_name": workflow_name,
-                "workflow_upload_name": workflow_upload_name,
-                "current_version": current_version,
-            },
+            search_conditions,
             ignore_columns=['workflow_data'],
             limit=1
         )
