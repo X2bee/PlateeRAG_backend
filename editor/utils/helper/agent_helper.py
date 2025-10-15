@@ -1,11 +1,166 @@
 import logging
 import re
 import json
+from typing import Any, Optional, Union, List, Dict
+from json import JSONDecodeError
 from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.exceptions import OutputParserException
+from langchain_core.outputs import Generation
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 
 logger = logging.getLogger(__name__)
+
+
+class XgenJsonOutputParser(JsonOutputParser):
+    """
+    LangChain의 JsonOutputParser를 래핑하여 강건한 JSON 파싱 기능을 제공하는 커스텀 파서.
+
+    주요 기능:
+    1. 표준 JSON 파싱 시도
+    2. 마크다운 코드 블록 제거 후 파싱
+    3. 임베디드 JSON 추출 (에러 메시지 내부 등)
+    4. OutputParserException 발생 시 자동 fallback
+    5. 상세한 로깅
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _extract_and_parse_json_robust(self, text: str) -> Union[Dict, List, str]:
+        """
+        텍스트에서 JSON을 추출하고 파싱하는 강건한 메서드.
+
+        Args:
+            text: JSON이 포함된 텍스트
+
+        Returns:
+            파싱된 JSON 객체 또는 원본 텍스트
+        """
+        if not isinstance(text, str):
+            return text
+
+        logger.info("[XGEN_JSON_PARSER] Robust JSON 파싱 시도 중...")
+
+        # 1. 마크다운 코드 블록 제거 후 시도 (먼저 시도)
+        # ```json ... ``` 또는 ``` ... ``` 형태 처리
+        code_block_patterns = [
+            r'```json\s*\n(.*?)\n```',  # ```json\n...\n```
+            r'```json\s+(.*?)```',  # ```json ... ```
+            r'```\s*\n(.*?)\n```',  # ```\n...\n```
+            r'```\s*(.*?)```',  # ``` ... ```
+        ]
+
+        for pattern in code_block_patterns:
+            match = re.search(pattern, text.strip(), re.DOTALL | re.IGNORECASE)
+            if match:
+                json_content = match.group(1).strip()
+                try:
+                    parsed = json.loads(json_content)
+                    logger.info("[XGEN_JSON_PARSER] 코드 블록 제거 후 JSON 파싱 성공")
+                    return parsed
+                except (JSONDecodeError, ValueError) as e:
+                    logger.debug(f"[XGEN_JSON_PARSER] 코드 블록 파싱 실패 (패턴: {pattern}): {e}")
+                    continue        # 2. 전체 텍스트를 JSON으로 파싱 시도
+        try:
+            cleaned_text = text.strip()
+            parsed = json.loads(cleaned_text)
+            logger.info("[XGEN_JSON_PARSER] 전체 텍스트 JSON 파싱 성공")
+            return parsed
+        except (JSONDecodeError, ValueError) as e:
+            logger.debug(f"[XGEN_JSON_PARSER] 직접 파싱 실패: {e}")
+
+        # 3. 텍스트 내부에서 JSON 객체 추출 시도 (중괄호로 감싸진 부분)
+        json_patterns = [
+            r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}',  # 중첩된 객체 포함
+            r'\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]',  # 중첩된 배열 포함
+        ]
+
+        for pattern in json_patterns:
+            matches = list(re.finditer(pattern, text, re.DOTALL))
+            # 가장 긴 매칭부터 시도 (더 완전한 JSON일 가능성이 높음)
+            matches.sort(key=lambda m: len(m.group(0)), reverse=True)
+
+            for match in matches:
+                json_str = match.group(0)
+                try:
+                    parsed = json.loads(json_str)
+                    logger.info(f"[XGEN_JSON_PARSER] 임베디드 JSON 추출 성공 (길이: {len(json_str)})")
+                    return parsed
+                except (JSONDecodeError, ValueError):
+                    continue
+
+        # 4. 모든 시도 실패 - 원본 텍스트 반환
+        logger.warning("[XGEN_JSON_PARSER] 모든 JSON 파싱 시도 실패, 원본 텍스트 반환")
+        return text
+
+    def parse_result(self, result: List[Generation], *, partial: bool = False) -> Any:
+        """
+        LLM 결과를 파싱하며, 실패 시 robust 파싱 시도.
+
+        Args:
+            result: LLM 생성 결과 리스트
+            partial: 부분 파싱 여부
+
+        Returns:
+            파싱된 JSON 객체
+
+        Raises:
+            OutputParserException: 모든 파싱 시도가 실패한 경우
+        """
+        text = result[0].text
+        text = text.strip()
+
+        # LangChain의 parse_json_markdown를 건너뛰고 직접 파싱 시도
+        try:
+            # 직접 JSON 파싱 시도
+            parsed = json.loads(text)
+            logger.info("[XGEN_JSON_PARSER] 직접 JSON 파싱 성공")
+            return parsed
+        except (JSONDecodeError, ValueError) as direct_error:
+            logger.debug(f"[XGEN_JSON_PARSER] 직접 파싱 실패: {direct_error}")
+
+        # 직접 파싱 실패 시 부모 클래스 시도
+        try:
+            return super().parse_result(result, partial=partial)
+        except OutputParserException as e:
+            logger.warning(f"[XGEN_JSON_PARSER] 표준 파싱 실패: {str(e)}")
+
+            # partial 모드에서는 None 반환
+            if partial:
+                return None
+
+            # robust 파싱 시도
+            logger.info("[XGEN_JSON_PARSER] Robust 파싱 시도 중...")
+            parsed_result = self._extract_and_parse_json_robust(text)
+
+            # 파싱 성공 시 반환
+            if isinstance(parsed_result, (dict, list)):
+                logger.info("[XGEN_JSON_PARSER] Robust 파싱 성공!")
+                return parsed_result
+
+            # 완전히 실패한 경우 원본 예외 재발생 (llm_output 포함)
+            logger.error("[XGEN_JSON_PARSER] 모든 파싱 시도 실패")
+            msg = f"Invalid json output: {text}"
+            raise OutputParserException(msg, llm_output=text) from e
+        except Exception as e:
+            # 예상치 못한 오류
+            logger.error(f"[XGEN_JSON_PARSER] 예상치 못한 오류: {str(e)}", exc_info=True)
+            raise
+
+    def parse(self, text: str) -> Any:
+        """
+        텍스트를 직접 파싱.
+
+        Args:
+            text: 파싱할 텍스트
+
+        Returns:
+            파싱된 JSON 객체
+        """
+        return self.parse_result([Generation(text=text)])
+
 
 def use_guarder_for_text_moderation(text: str) -> tuple[bool, str]:
     try:
