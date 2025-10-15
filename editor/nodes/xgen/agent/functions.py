@@ -14,6 +14,34 @@ def rag_context_builder(text, rag_context, strict_citation=True):
     rerank_flag = search_params.get('rerank', False)
     rerank_top_k = search_params.get('rerank_top_k', search_params.get('top_k', 10))
 
+    # text가 dict인 경우 텍스트 추출 시도
+    if isinstance(text, dict):
+        # 우선순위: user_input > input > text > query
+        extracted_text = None
+        for key in ['user_input', 'input', 'text', 'query']:
+            if key in text and text[key]:
+                extracted_text = text[key]
+                logger.info(f"[RAG_CONTEXT_BUILDER] Dict에서 텍스트 추출 성공: 키='{key}', 값='{extracted_text}'")
+                break
+
+        # 추출 실패 시 dict 전체를 JSON 문자열로 변환
+        if extracted_text is None:
+            try:
+                import json
+                extracted_text = json.dumps(text, ensure_ascii=False)
+                logger.warning(f"[RAG_CONTEXT_BUILDER] Dict에서 특정 키를 찾지 못함, JSON 문자열로 변환: {extracted_text[:100]}...")
+            except Exception as e:
+                # JSON 변환도 실패하면 str() 사용
+                extracted_text = str(text)
+                logger.warning(f"[RAG_CONTEXT_BUILDER] JSON 변환 실패, str() 사용: {extracted_text[:100]}...")
+
+        text = extracted_text
+
+    # text가 문자열이 아닌 다른 타입인 경우 문자열로 변환
+    if not isinstance(text, str):
+        text = str(text)
+        logger.warning(f"[RAG_CONTEXT_BUILDER] 텍스트가 문자열이 아님, str()로 변환: {type(text)} -> str")
+
     if search_params.get('use_model_prompt', False):
         query = search_params.get('embedding_model_prompt', '') + text
     else:
