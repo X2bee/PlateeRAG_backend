@@ -59,14 +59,17 @@ async def duplicate_workflow(request: Request, workflow_name: str, workflow_uplo
         app_db = get_db_manager(request)
         backend_log = create_logger(app_db, login_user_id, request)
 
+        search_condition = {
+            "workflow_name": workflow_name,
+            "workflow_upload_name": workflow_upload_name,
+            "current_version": current_version,
+        }
+        if user_id and user_id != "" and user_id != None:
+            search_condition["user_id"] = user_id
+
         store_workflow_data = app_db.find_by_condition(
             WorkflowStoreMeta,
-            {
-                "user_id": user_id,
-                "workflow_name": workflow_name,
-                "workflow_upload_name": workflow_upload_name,
-                "current_version": current_version,
-            },
+            search_condition,
             limit=1
         )
         if not store_workflow_data:

@@ -33,6 +33,7 @@ from editor.async_workflow_executor import execution_manager
 from config.config_composer import config_composer
 from service.database.models import APPLICATION_MODELS
 from service.database.models.prompts import Prompts
+from service.database.models.workflow import WorkflowStoreMeta
 
 from service.database import AppDatabaseManager
 from service.embedding.embedding_factory import EmbeddingFactory
@@ -125,25 +126,6 @@ def load_prompts_from_csv(app_db, csv_path: str):
                 language = data['Language'][i]
                 public_available = True
                 is_template = True
-                user_id = None
-                if 'User ID' in data and data['User ID'][i]:
-                    try:
-                        user_id_val = data['User ID'][i]
-                        if user_id_val and str(user_id_val).strip() and str(user_id_val).strip() != '0':
-                            user_id = int(user_id_val)
-                    except (ValueError, TypeError):
-                        user_id = None
-
-                # Metadata 파싱 (JSON 문자열)
-                metadata = {}
-                if 'Metadata' in data and data['Metadata'][i]:
-                    try:
-                        metadata_str = str(data['Metadata'][i]).strip()
-                        if metadata_str:
-                            metadata = json.loads(metadata_str)
-                    except json.JSONDecodeError:
-                        logger.warning(f"⚠️  Failed to parse metadata for row {i+1}, using empty dict")
-                        metadata = {}
 
                 # None 또는 빈 문자열 체크
                 if not prompt_uid or not title or not content or not language:
@@ -193,6 +175,135 @@ def load_prompts_from_csv(app_db, csv_path: str):
 
     except Exception as e:
         error_msg = f"Error loading prompts from CSV: {e}"
+        logger.error(f"❌ {error_msg}")
+        return {"success": False, "error": error_msg}
+
+def load_workflow_templates(app_db, templates_dir: str):
+    """
+    JSON 파일에서 워크플로우 스토어 템플릿을 로드하여 데이터베이스에 저장
+    """
+    try:
+        # 디렉토리 존재 확인
+        if not Path(templates_dir).exists():
+            logger.warning(f"⚠️  Workflow templates directory not found: {templates_dir}")
+            return {"success": False, "error": "Templates directory not found"}
+
+        # 이미 템플릿이 존재하는지 확인
+        existing_templates = app_db.find_by_condition(WorkflowStoreMeta, {"is_template": True}, limit=1)
+        if existing_templates and len(existing_templates) > 0:
+            logger.info(f"⚠️  Workflow templates already exist in database ({len(existing_templates)} records). Skipping template import.")
+            return {"success": True, "inserted_count": 0, "skipped": True, "message": "Templates already exist"}
+
+        # JSON 파일 목록 가져오기
+        json_files = list(Path(templates_dir).glob("*.json"))
+        if not json_files:
+            logger.warning(f"⚠️  No JSON files found in: {templates_dir}")
+            return {"success": False, "error": "No template files found"}
+
+        logger.info(f"📄 Found {len(json_files)} workflow template files")
+
+        inserted_count = 0
+        skipped_count = 0
+
+        for json_file in json_files:
+            try:
+                # JSON 파일 읽기
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    workflow_data = json.load(f)
+
+                # 필수 필드 확인
+                workflow_id = workflow_data.get('workflow_id')
+                workflow_name = workflow_data.get('workflow_name')
+
+                if not workflow_id or not workflow_name:
+                    logger.warning(f"⚠️  Skipping {json_file.name}: Missing workflow_id or workflow_name")
+                    skipped_count += 1
+                    continue
+
+                # description 추출 (없으면 workflow_name 사용)
+                description = workflow_data.get('description', workflow_name)
+
+                # nodes와 edges 개수 계산
+                nodes = workflow_data.get('nodes', [])
+                edges = workflow_data.get('edges', [])
+                node_count = len(nodes)
+                edge_count = len(edges)
+
+                # startnode와 endnode 존재 여부 확인
+                has_startnode = any(
+                    node.get('data', {}).get('functionId') == 'startnode'
+                    for node in nodes
+                )
+                has_endnode = any(
+                    node.get('data', {}).get('functionId') == 'endnode'
+                    for node in nodes
+                )
+
+                # is_completed 판단 (startnode와 endnode가 모두 있고, 최소 1개 이상의 edge가 있으면)
+                is_completed = has_startnode and has_endnode and edge_count > 0
+
+                # tags 추출 (metadata에 있을 수 있음)
+                tags = workflow_data.get('tags', [])
+                if isinstance(tags, str):
+                    tags = [tags]
+
+                # workflow_upload_name은 파일명에서 추출 (.json 제거)
+                workflow_upload_name = json_file.stem
+
+                # WorkflowStoreMeta 객체 생성
+                new_template = WorkflowStoreMeta(
+                    user_id=None,  # 템플릿이므로 None
+                    workflow_id=workflow_id,
+                    workflow_name=workflow_name,
+                    workflow_upload_name=workflow_upload_name,
+                    node_count=node_count,
+                    edge_count=edge_count,
+                    has_startnode=has_startnode,
+                    has_endnode=has_endnode,
+                    is_completed=is_completed,
+                    metadata={},  # 추가 메타데이터가 필요하면 여기에
+                    current_version=1.0,
+                    latest_version=1.0,
+                    is_template=True,
+                    description=description,
+                    tags=tags,
+                    workflow_data=workflow_data  # 전체 JSON 데이터
+                )
+
+                # 중복 체크 (workflow_id 기준)
+                existing = app_db.find_by_condition(
+                    WorkflowStoreMeta,
+                    {"workflow_id": workflow_id},
+                    limit=1
+                )
+
+                if not existing or len(existing) == 0:
+                    result = app_db.insert(new_template)
+                    if result and result.get("result") == "success":
+                        inserted_count += 1
+                        logger.debug(f"✅ Inserted workflow template: {workflow_name}")
+                    else:
+                        skipped_count += 1
+                        logger.warning(f"⚠️  Failed to insert template: {workflow_name}")
+                else:
+                    skipped_count += 1
+                    logger.debug(f"🔄 Skipped existing template: {workflow_name}")
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️  Failed to parse JSON file {json_file.name}: {e}")
+                skipped_count += 1
+                continue
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to process template {json_file.name}: {e}")
+                skipped_count += 1
+                continue
+
+        logger.info(f"✅ Successfully processed {inserted_count + skipped_count} workflow template files")
+        logger.info(f"📝 Inserted: {inserted_count}, Skipped: {skipped_count}")
+        return {"success": True, "inserted_count": inserted_count, "skipped_count": skipped_count}
+
+    except Exception as e:
+        error_msg = f"Error loading workflow templates: {e}"
         logger.error(f"❌ {error_msg}")
         return {"success": False, "error": error_msg}
 
@@ -454,6 +565,29 @@ async def lifespan(app: FastAPI):
                              f"Error: {load_result.get('error', 'Unknown error')}")
         except Exception as e:
             logger.error(f"❌ Step 11: Failed to load prompt templates: {e}")
+
+        # 12. 워크플로우 스토어 템플릿 로드
+        print_step_banner(12, "WORKFLOW STORE TEMPLATES", "Loading workflow store templates from JSON files")
+        logger.info("⚙️  Step 12: Workflow store templates loading starting...")
+
+        try:
+            constants_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "constants")
+            templates_dir = os.path.join(constants_dir, "workflow_store_template")
+            load_result = load_workflow_templates(app.state.app_db, templates_dir)
+
+            if load_result["success"]:
+                if load_result.get("skipped", False):
+                    logger.info(f"✅ Step 12: Workflow store templates already exist - skipped loading")
+                else:
+                    inserted = load_result.get("inserted_count", 0)
+                    skipped = load_result.get("skipped_count", 0)
+                    logger.info(f"✅ Step 12: Workflow store templates loaded successfully! "
+                               f"Inserted: {inserted}, Skipped: {skipped}")
+            else:
+                logger.warning(f"⚠️  Step 12: Workflow store templates loading completed with issues. "
+                             f"Error: {load_result.get('error', 'Unknown error')}")
+        except Exception as e:
+            logger.error(f"❌ Step 12: Failed to load workflow store templates: {e}")
 
         print_step_banner("FINAL", "XGEN STARTUP COMPLETE", "All systems operational! 🎉")
         logger.info("🎉 XGEN application startup complete! Ready to serve requests.")

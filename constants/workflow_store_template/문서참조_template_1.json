@@ -1,0 +1,389 @@
+{
+  "workflow_name": "문서 참조 Template",
+  "workflow_id": "workflow______template_1_1760490438110",
+  "description": "기본적인 문서 참조 기능 Template 입니다.",
+  "view": {
+    "x": -41286.51006601231,
+    "y": -21661.43780641519,
+    "scale": 0.8000421228117771
+  },
+  "nodes": [
+    {
+      "id": "agents/vllm_stream-1757488476161",
+      "data": {
+        "functionId": "agents",
+        "id": "agents/vllm_stream",
+        "nodeName": "Agent VLLM Stream",
+        "description": "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드",
+        "tags": [
+          "agent",
+          "chat",
+          "rag",
+          "vllm",
+          "stream"
+        ],
+        "inputs": [
+          {
+            "id": "text",
+            "name": "Text",
+            "type": "STR",
+            "multi": false,
+            "required": true
+          },
+          {
+            "id": "tools",
+            "name": "Tools",
+            "type": "TOOL",
+            "multi": true,
+            "required": false,
+            "value": []
+          },
+          {
+            "id": "memory",
+            "name": "Memory",
+            "type": "OBJECT",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DocsContext",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "args_schema",
+            "name": "ArgsSchema",
+            "type": "OutputSchema"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "stream",
+            "name": "Stream",
+            "type": "STREAM STR",
+            "stream": true
+          }
+        ],
+        "parameters": [
+          {
+            "id": "model",
+            "name": "Model",
+            "type": "STR",
+            "value": "",
+            "is_api": true,
+            "api_name": "api_vllm_model_name",
+            "required": true
+          },
+          {
+            "id": "temperature",
+            "name": "Temperature",
+            "type": "FLOAT",
+            "value": 0,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 2,
+            "step": 0.1
+          },
+          {
+            "id": "max_tokens",
+            "name": "Max Tokens",
+            "type": "INT",
+            "value": 8192,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 65536,
+            "step": 1
+          },
+          {
+            "id": "n_messages",
+            "name": "Max Memory",
+            "type": "INT",
+            "value": 3,
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "optional": true
+          },
+          {
+            "id": "base_url",
+            "name": "Base URL",
+            "type": "STR",
+            "value": "",
+            "is_api": true,
+            "api_name": "api_vllm_api_base_url",
+            "required": true
+          },
+          {
+            "id": "strict_citation",
+            "name": "Strict Citation",
+            "type": "BOOL",
+            "value": true,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "default_prompt",
+            "name": "Default Prompt",
+            "type": "STR",
+            "value": "당신은 도구를 사용하는 유능한 에이전트입니다.\n사용자 요청에 따라 적절하게 도구를 사용하여 정확한 답변을 생성하시오.",
+            "required": false,
+            "optional": true,
+            "expandable": true,
+            "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."
+          },
+          {
+            "id": "return_intermediate_steps",
+            "name": "Return Intermediate Steps",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true,
+            "description": "중간 단계를 반환할지 여부입니다."
+          }
+        ]
+      },
+      "position": {
+        "x": 52602.98229611833,
+        "y": 27395.96727475031
+      },
+      "isExpanded": true
+    },
+    {
+      "id": "input_string-1757488501113",
+      "data": {
+        "functionId": "startnode",
+        "id": "input_string",
+        "nodeName": "Input String",
+        "description": "사용자가 설정한 문자열 값을 출력하는 입력 노드입니다. 워크플로우에서 텍스트 데이터의 시작점으로 사용됩니다. ArgsSchema가 제공되면 입력값들을 스키마에 따라 검증합니다.",
+        "tags": [
+          "input",
+          "string",
+          "text",
+          "parameter",
+          "source",
+          "start_node",
+          "user_input"
+        ],
+        "inputs": [
+          {
+            "id": "args_schema",
+            "name": "ArgsSchema",
+            "type": "InputSchema",
+            "required": false
+          }
+        ],
+        "outputs": [
+          {
+            "id": "text",
+            "name": "Text",
+            "type": "STR"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "input_str",
+            "name": "INPUT",
+            "type": "STR",
+            "value": "안녕",
+            "required": false
+          },
+          {
+            "id": "use_stt",
+            "name": "Use STT",
+            "type": "BOOL",
+            "value": true,
+            "required": false,
+            "optional": true
+          }
+        ]
+      },
+      "position": {
+        "x": 51975.881429603076,
+        "y": 27375.22395663216
+      },
+      "isExpanded": true
+    },
+    {
+      "id": "tools/print_any_stream-1757488504911",
+      "data": {
+        "functionId": "endnode",
+        "id": "tools/print_any_stream",
+        "nodeName": "Print Any (Stream)",
+        "description": "임의의 스트리밍 데이터를 입력받아 그대로 반환하는 스트리밍 출력 노드입니다. 워크플로우의 스트리밍 결과를 확인하는데 사용됩니다.",
+        "tags": [
+          "output",
+          "print",
+          "display",
+          "debug",
+          "end_node",
+          "utility",
+          "stream",
+          "any_type"
+        ],
+        "inputs": [
+          {
+            "id": "stream",
+            "name": "Stream",
+            "type": "STREAM STR",
+            "multi": false,
+            "required": true,
+            "stream": true
+          }
+        ],
+        "outputs": [],
+        "parameters": []
+      },
+      "position": {
+        "x": 53159.1402053833,
+        "y": 27751.46920490265
+      },
+      "isExpanded": true
+    },
+    {
+      "id": "document_loaders/Qdrant-1757488523463",
+      "data": {
+        "functionId": "document_loaders",
+        "id": "document_loaders/Qdrant",
+        "nodeName": "Qdrant Search",
+        "description": "RAG 서비스와 검색 파라미터를 설정하여 다음 노드로 전달하는 노드",
+        "tags": [
+          "document_loader",
+          "qdrant",
+          "vector_db",
+          "rag",
+          "setup"
+        ],
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DocsContext"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "collection_name",
+            "name": "Collection Name",
+            "type": "STR",
+            "value": "소비자보호법_7041f99c-31b3-4335-9fba-9797f49ba840",
+            "required": true,
+            "is_api": true,
+            "api_name": "api_collection",
+            "options": []
+          },
+          {
+            "id": "use_model_prompt",
+            "name": "Use Model Prompt",
+            "type": "BOOL",
+            "value": true,
+            "optional": true,
+            "description": "임베딩 벡터 변환시 모델이 요구하는 프롬프트를 사용할지를 결정합니다."
+          },
+          {
+            "id": "top_k",
+            "name": "Top K Results",
+            "type": "INT",
+            "value": 4,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 10,
+            "step": 1
+          },
+          {
+            "id": "score_threshold",
+            "name": "Score Threshold",
+            "type": "FLOAT",
+            "value": 0.2,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 1,
+            "step": 0.1
+          },
+          {
+            "id": "rerank",
+            "name": "Enable Rerank",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "rerank_top_k",
+            "name": "Rerank Top K",
+            "type": "INT",
+            "value": 5,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 100,
+            "step": 1
+          },
+          {
+            "id": "enhance_prompt",
+            "name": "Enhance Prompt",
+            "type": "STR",
+            "value": "",
+            "required": false,
+            "optional": true,
+            "expandable": true,
+            "description": "RAG 컨텍스트를 사용하여 응답을 향상시키기 위한 프롬프트입니다."
+          }
+        ]
+      },
+      "position": {
+        "x": 51974.690270033505,
+        "y": 27729.014255400663
+      },
+      "isExpanded": true
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-input_string-1757488501113:text-agents/vllm_stream-1757488476161:text-1757488501113",
+      "source": {
+        "nodeId": "input_string-1757488501113",
+        "portId": "text",
+        "portType": "output"
+      },
+      "target": {
+        "nodeId": "agents/vllm_stream-1757488476161",
+        "portId": "text",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-agents/vllm_stream-1757488476161:stream-tools/print_any_stream-1757488504911:stream-1757488504911",
+      "source": {
+        "nodeId": "agents/vllm_stream-1757488476161",
+        "portId": "stream",
+        "portType": "output"
+      },
+      "target": {
+        "nodeId": "tools/print_any_stream-1757488504911",
+        "portId": "stream",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-document_loaders/Qdrant-1757488523463:rag_context-agents/vllm_stream-1757488476161:rag_context-1757488523463",
+      "source": {
+        "nodeId": "document_loaders/Qdrant-1757488523463",
+        "portId": "rag_context",
+        "portType": "output"
+      },
+      "target": {
+        "nodeId": "agents/vllm_stream-1757488476161",
+        "portId": "rag_context",
+        "portType": "input"
+      }
+    }
+  ],
+  "interaction_id": "default"
+}

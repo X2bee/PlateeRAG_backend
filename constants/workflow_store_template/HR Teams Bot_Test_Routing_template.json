@@ -1,0 +1,1105 @@
+{
+  "workflow_name": "HR Routing Template",
+  "workflow_id": "workflow_hr_teams_bot_test_routing_template_1760490469956",
+  "description": "HR 챗봇과 라우팅 기능을 이용한 템플릿입니다.",
+  "view": {
+    "x": -27462.988882449612,
+    "y": -14547.878896450648,
+    "scale": 0.6264973750845706
+  },
+  "nodes": [
+    {
+      "id": "tools/print_any-1758186624522",
+      "data": {
+        "functionId": "endnode",
+        "id": "tools/print_any",
+        "nodeName": "Print Any",
+        "description": "임의의 타입의 데이터를 입력받아 그대로 반환하는 출력 노드입니다. 워크플로우의 최종 결과를 확인하는데 사용됩니다.",
+        "tags": [
+          "output",
+          "print",
+          "display",
+          "debug",
+          "end_node",
+          "utility",
+          "any_type"
+        ],
+        "inputs": [
+          {
+            "id": "input_print",
+            "name": "Print",
+            "type": "ANY",
+            "multi": false,
+            "required": true
+          }
+        ],
+        "outputs": [],
+        "parameters": []
+      },
+      "position": {
+        "x": 46687.75897102338,
+        "y": 23847.079152604252
+      },
+      "isExpanded": true
+    },
+    {
+      "id": "input_string-1758186631128",
+      "data": {
+        "functionId": "startnode",
+        "id": "input_string",
+        "nodeName": "Input String",
+        "description": "사용자가 설정한 문자열 값을 출력하는 입력 노드입니다. 워크플로우에서 텍스트 데이터의 시작점으로 사용됩니다. ArgsSchema가 제공되면 입력값들을 스키마에 따라 검증합니다.",
+        "tags": [
+          "input",
+          "string",
+          "text",
+          "parameter",
+          "source",
+          "start_node",
+          "user_input"
+        ],
+        "inputs": [
+          {
+            "id": "args_schema",
+            "name": "ArgsSchema",
+            "type": "InputSchema",
+            "required": false
+          }
+        ],
+        "outputs": [
+          {
+            "id": "text",
+            "name": "Text",
+            "type": "STR"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "input_str",
+            "name": "INPUT",
+            "type": "STR",
+            "value": "안녕 오늘 점심 뭐야?",
+            "required": false
+          },
+          {
+            "id": "use_stt",
+            "name": "Use STT",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
+          }
+        ]
+      },
+      "position": {
+        "x": 44058.966152298555,
+        "y": 23702.800968251715
+      },
+      "isExpanded": true
+    },
+    {
+      "id": "document_loaders/Qdrant-1758241778201",
+      "data": {
+        "functionId": "document_loaders",
+        "id": "document_loaders/Qdrant",
+        "nodeName": "Qdrant Search",
+        "description": "RAG 서비스와 검색 파라미터를 설정하여 다음 노드로 전달하는 노드",
+        "tags": [
+          "document_loader",
+          "qdrant",
+          "vector_db",
+          "rag",
+          "setup"
+        ],
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DocsContext"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "collection_name",
+            "name": "Collection Name",
+            "type": "STR",
+            "value": "HR챗봇_16f90e06-f8ea-4c91-b439-18fae47c8212",
+            "required": true,
+            "is_api": true,
+            "api_name": "api_collection",
+            "options": []
+          },
+          {
+            "id": "use_model_prompt",
+            "name": "Use Model Prompt",
+            "type": "BOOL",
+            "value": true,
+            "optional": true,
+            "description": "임베딩 벡터 변환시 모델이 요구하는 프롬프트를 사용할지를 결정합니다."
+          },
+          {
+            "id": "top_k",
+            "name": "Top K Results",
+            "type": "INT",
+            "value": 10,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 10,
+            "step": 1
+          },
+          {
+            "id": "score_threshold",
+            "name": "Score Threshold",
+            "type": "FLOAT",
+            "value": 0.3,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 1,
+            "step": 0.1
+          },
+          {
+            "id": "rerank",
+            "name": "Enable Rerank",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "rerank_top_k",
+            "name": "Rerank Top K",
+            "type": "INT",
+            "value": 5,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 100,
+            "step": 1
+          },
+          {
+            "id": "enhance_prompt",
+            "name": "Enhance Prompt",
+            "type": "STR",
+            "value": "",
+            "required": false,
+            "optional": true,
+            "expandable": true,
+            "description": "RAG 컨텍스트를 사용하여 응답을 향상시키기 위한 프롬프트입니다."
+          }
+        ]
+      },
+      "position": {
+        "x": 45318.99974485918,
+        "y": 24046.353880493953
+      },
+      "isExpanded": false
+    },
+    {
+      "id": "agents/openai-1758250616915",
+      "data": {
+        "functionId": "agents",
+        "id": "agents/openai",
+        "nodeName": "Agent OpenAI",
+        "description": "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드",
+        "tags": [
+          "agent",
+          "chat",
+          "rag",
+          "openai"
+        ],
+        "inputs": [
+          {
+            "id": "text",
+            "name": "Text",
+            "type": "STR",
+            "multi": false,
+            "required": true
+          },
+          {
+            "id": "tools",
+            "name": "Tools",
+            "type": "TOOL",
+            "multi": true,
+            "required": false,
+            "value": []
+          },
+          {
+            "id": "memory",
+            "name": "Memory",
+            "type": "OBJECT",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DocsContext",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "args_schema",
+            "name": "ArgsSchema",
+            "type": "OutputSchema"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "result",
+            "name": "Result",
+            "type": "STR"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "model",
+            "name": "Model",
+            "type": "STR",
+            "value": "gpt-5-mini",
+            "required": true,
+            "options": [
+              {
+                "value": "gpt-oss-20b",
+                "label": "GPT-OSS-20B"
+              },
+              {
+                "value": "gpt-oss-120b",
+                "label": "GPT-OSS-120B"
+              },
+              {
+                "value": "gpt-3.5-turbo",
+                "label": "GPT-3.5 Turbo"
+              },
+              {
+                "value": "gpt-4",
+                "label": "GPT-4"
+              },
+              {
+                "value": "gpt-4o",
+                "label": "GPT-4o"
+              },
+              {
+                "value": "gpt-5",
+                "label": "GPT-5"
+              },
+              {
+                "value": "gpt-5-mini",
+                "label": "GPT-5 Mini"
+              }
+            ]
+          },
+          {
+            "id": "temperature",
+            "name": "Temperature",
+            "type": "FLOAT",
+            "value": 1,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 2,
+            "step": 0.1
+          },
+          {
+            "id": "max_tokens",
+            "name": "Max Tokens",
+            "type": "INT",
+            "value": 12000,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 65536,
+            "step": 1
+          },
+          {
+            "id": "base_url",
+            "name": "Base URL",
+            "type": "STR",
+            "value": "https://api.openai.com/v1",
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "strict_citation",
+            "name": "Strict Citation",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "return_intermediate_steps",
+            "name": "Return Intermediate Steps",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true,
+            "description": "Tool 사용시 해당 과정을 출력할지 여부를 결정합니다."
+          },
+          {
+            "id": "default_prompt",
+            "name": "Default Prompt",
+            "type": "STR",
+            "value": "## 역할\n당신은 (주)플래티어 직원들을 위한 HR 정책 안내 챗봇입니다.  \n회사 내부 규정을 기반으로 근무시간, 휴가, 휴직, 근로시간 단축, 출산 및 육아 관련 제도 등 다양한 인사 제도에 대해 정확하고 쉽게 설명하는 것이 목적입니다.  \n\n## 답변 시 유의사항\n0. 질문에 대한 답변은 검색된 문서를 기반으로 답변하며, 문서에서 확인된 내용임을 표시합니다.\n1. 질문의 내용이 문서와 관련이 없는 경우 일반적인 답변을 제공하되, 반드시 \"일반적인 답변이며, 담당 부서의 확인이 필요하다\"는 안내를 포함합니다.\n2. 문서 기반의 답변과 일반적인 답변을 **명확히 구분**해서 표현합니다.\n3. **회사 규정에 따른 처리 방식과 신청 방법**을 우선적으로 안내합니다.  \n4. 규정이나 조건이 복잡할 경우 **항목별·단계별로 나누어 보기 쉽게 정리**합니다.  \n5. **친절하고 공손한 말투**로 설명합니다.  \n6. 상황에 따라 고객사 지침, 팀장 승인 등 **예외사항이 있을 수 있음을 명시**합니다.  \n7. **법령 해석이 필요한 민감한 사안**은 HR실 문의를 권장합니다.  \n8. **답변은 반드시 질문에 대한 응답으로만 종료해야 하며, 불필요한 연결 멘트를 포함하지 않습니다.**  \n   - 금지 예시:  \n     - “추가로 도와드리겠습니다.”  \n     - “문구를 대신 작성해드리겠습니다.”  \n     - “혹시 더 궁금하신 점 있으신가요?”\n\n## 답변 예외 대상\n1. **규정에 포함되어 있지 않은 내용**  \n   → *“해당 내용은 현재 회사 규정에 명시되어 있지 않아 문서 기반으로 정확한 답변을 드리기 어렵습니다. 일반적인 정보로 참고하실 수 있으나, 반드시 담당 부서를 통해 최종 확인하시기 바랍니다.”*  \n2. **근태·근로시간, 휴가·휴직, 모성보호 규정 외의 질문**  \n   → *“말씀하신 주제는 현재 챗봇에서 제공되는 문서 기반 답변 범위에 포함되어 있지 않습니다. 일반적인 정보로 참고 가능하지만, 정확한 안내를 위해 담당 부서를 통해 최종 확인하시기 바랍니다.”*  \n3. **법령 해석이 직접적으로 필요한 민감한 사안**  \n   → *“말씀하신 부분은 법령 해석이 필요한 사항으로, 회사 내부에서 확정적인 답변을 드리기 어렵습니다. 관련 부서(HR실)에 문의해 주시면 정확한 안내를 받으실 수 있습니다.”*\n4. **HR 정책과 무관한 일반적·기술적·모델 관련 질문(예: AI 모델 종류, 시스템 구조, 개발 환경 등)**\n   → “말씀하신 질문은 HR 정책과 관련되지 않아 본 챗봇에서는 안내드리기 어렵습니다. 관련 부서나 공식 지원 채널을 통해 확인해 주시기 바랍니다.” ",
+            "required": false,
+            "optional": true,
+            "expandable": true,
+            "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."
+          }
+        ]
+      },
+      "position": {
+        "x": 46000.34433303115,
+        "y": 23689.51276989144
+      },
+      "isExpanded": true
+    },
+    {
+      "id": "memory/db_memory_v2-1759110850065",
+      "data": {
+        "functionId": "memory",
+        "id": "memory/db_memory_v2",
+        "nodeName": "DB Memory V2",
+        "description": "DB에서 대화 기록을 로드하여 ConversationBufferMemory로 반환하는 노드입니다.",
+        "tags": [
+          "memory",
+          "database",
+          "chat_history",
+          "xgen"
+        ],
+        "inputs": [
+          {
+            "id": "current_input",
+            "name": "Current Input",
+            "type": "STR",
+            "multi": false,
+            "required": false
+          }
+        ],
+        "outputs": [
+          {
+            "id": "memory",
+            "name": "Memory",
+            "type": "OBJECT"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "interaction_id",
+            "name": "Interaction ID",
+            "type": "STR",
+            "value": ""
+          },
+          {
+            "id": "include_thinking",
+            "name": "Include Thinking",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "top_n_messages",
+            "name": "Top N Messages",
+            "type": "INT",
+            "value": 3,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "min_tokens_for_similarity",
+            "name": "Min Tokens For Similarity",
+            "type": "INT",
+            "value": 0,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "enable_similarity_filter",
+            "name": "Enable Similarity Filter",
+            "type": "BOOL",
+            "value": true,
+            "required": false,
+            "optional": true
+          }
+        ],
+        "disable": false
+      },
+      "position": {
+        "x": 44714.569715037775,
+        "y": 24190.851505322662
+      },
+      "isExpanded": false
+    },
+    {
+      "id": "agents/openai-1760417472782",
+      "data": {
+        "functionId": "agents",
+        "id": "agents/openai",
+        "nodeName": "Agent OpenAI",
+        "description": "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드",
+        "tags": [
+          "agent",
+          "chat",
+          "rag",
+          "openai"
+        ],
+        "inputs": [
+          {
+            "id": "text",
+            "name": "Text",
+            "type": "STR",
+            "multi": false,
+            "required": true
+          },
+          {
+            "id": "tools",
+            "name": "Tools",
+            "type": "TOOL",
+            "multi": true,
+            "required": false,
+            "value": []
+          },
+          {
+            "id": "memory",
+            "name": "Memory",
+            "type": "OBJECT",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DocsContext",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "args_schema",
+            "name": "ArgsSchema",
+            "type": "OutputSchema"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "result",
+            "name": "Result",
+            "type": "STR"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "model",
+            "name": "Model",
+            "type": "STR",
+            "value": "gpt-4o",
+            "required": true,
+            "options": [
+              {
+                "value": "gpt-oss-20b",
+                "label": "GPT-OSS-20B"
+              },
+              {
+                "value": "gpt-oss-120b",
+                "label": "GPT-OSS-120B"
+              },
+              {
+                "value": "gpt-3.5-turbo",
+                "label": "GPT-3.5 Turbo"
+              },
+              {
+                "value": "gpt-4",
+                "label": "GPT-4"
+              },
+              {
+                "value": "gpt-4o",
+                "label": "GPT-4o"
+              },
+              {
+                "value": "gpt-5",
+                "label": "GPT-5"
+              },
+              {
+                "value": "gpt-5-mini",
+                "label": "GPT-5 Mini"
+              }
+            ]
+          },
+          {
+            "id": "temperature",
+            "name": "Temperature",
+            "type": "FLOAT",
+            "value": 1,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 2,
+            "step": 0.1
+          },
+          {
+            "id": "max_tokens",
+            "name": "Max Tokens",
+            "type": "INT",
+            "value": 5000,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 65536,
+            "step": 1
+          },
+          {
+            "id": "base_url",
+            "name": "Base URL",
+            "type": "STR",
+            "value": "https://api.openai.com/v1",
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "strict_citation",
+            "name": "Strict Citation",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "return_intermediate_steps",
+            "name": "Return Intermediate Steps",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true,
+            "description": "Tool 사용시 해당 과정을 출력할지 여부를 결정합니다."
+          },
+          {
+            "id": "default_prompt",
+            "name": "Default Prompt",
+            "type": "STR",
+            "value": "당신은 사용자의 요청을 정확하게 구분하는 역할을 수행합니다.\n\n사용자의 요청이 (주)플래티어 직원들을 위한 HR 정책 안내에 관련한 것인지 판단하시오.\n만약 요청이 회사 내부 규정을 기반으로 근무시간, 휴가, 휴직, 근로시간 단축, 출산 및 육아 관련 제도 등 다양한 인사 제도에 대해 묻고 있다면, hr_analysis를 True로, 아니면 False를 반환하시오.",
+            "required": false,
+            "optional": true,
+            "expandable": true,
+            "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."
+          }
+        ]
+      },
+      "position": {
+        "x": 44662.91104675148,
+        "y": 23769.080844971
+      },
+      "isExpanded": false
+    },
+    {
+      "id": "output_schema_provider-1760417539681",
+      "data": {
+        "functionId": "tools",
+        "id": "output_schema_provider",
+        "nodeName": "Schema Provider(Output)",
+        "description": "BaseModel을 사용하여 handle_id가 true인 파라미터들의 id를 키로, 입력된 값을 값으로 하는 JSON 딕셔너리를 출력하는 노드입니다. 이 노드는 출력 스키마를 생성합니다.",
+        "tags": [
+          "input",
+          "json",
+          "dict",
+          "parameter",
+          "source",
+          "user_input",
+          "key_value"
+        ],
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "args_schema",
+            "name": "ArgsSchema",
+            "type": "OutputSchema"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "user_input",
+            "name": "user_input",
+            "type": "STR",
+            "value": "str",
+            "handle_id": true,
+            "is_added": true,
+            "options": [
+              {
+                "value": "str",
+                "label": "STRING"
+              },
+              {
+                "value": "int",
+                "label": "INTEGER"
+              },
+              {
+                "value": "float",
+                "label": "FLOAT"
+              },
+              {
+                "value": "bool",
+                "label": "BOOLEAN"
+              }
+            ]
+          },
+          {
+            "id": "user_input_description",
+            "name": "user_input_description",
+            "type": "STR",
+            "value": "사용자의 입력을 그대로 반환합니다.",
+            "handle_id": false,
+            "is_added": true,
+            "expandable": true
+          },
+          {
+            "id": "hr_analysis",
+            "name": "hr_analysis",
+            "type": "STR",
+            "value": "bool",
+            "handle_id": true,
+            "is_added": true,
+            "options": [
+              {
+                "value": "str",
+                "label": "STRING"
+              },
+              {
+                "value": "int",
+                "label": "INTEGER"
+              },
+              {
+                "value": "float",
+                "label": "FLOAT"
+              },
+              {
+                "value": "bool",
+                "label": "BOOLEAN"
+              }
+            ]
+          },
+          {
+            "id": "hr_analysis_description",
+            "name": "hr_analysis_description",
+            "type": "STR",
+            "value": "사용자의 요청이 (주)플래티어 직원들을 위한 HR 정책 안내에 관련한 것인지 판단하시오.\n만약 요청이 회사 내부 규정을 기반으로 근무시간, 휴가, 휴직, 근로시간 단축, 출산 및 육아 관련 제도 등 다양한 인사 제도에 대해 묻고 있다면 True를, 아니면 False를 반환하시오.",
+            "handle_id": false,
+            "is_added": true,
+            "expandable": true
+          }
+        ],
+        "disable": false
+      },
+      "position": {
+        "x": 44063.21630723049,
+        "y": 24063.936288722514
+      },
+      "isExpanded": true
+    },
+    {
+      "id": "router/Router-1760417682852",
+      "data": {
+        "functionId": "router",
+        "id": "router/Router",
+        "nodeName": "Router",
+        "description": "주어진 Dict 입력에서 routing_criteria에 해당하는 키의 값에 따라 다양한 경로로 라우팅하는 노드입니다. 해당 값과 일치하는 output id로만 데이터를 전달합니다.",
+        "tags": [
+          "router",
+          "conditional",
+          "branching",
+          "flow-control"
+        ],
+        "inputs": [
+          {
+            "id": "agent_output",
+            "name": "Input Data",
+            "type": "ANY",
+            "multi": false,
+            "required": true
+          }
+        ],
+        "outputs": [
+          {
+            "id": "True",
+            "name": "True",
+            "type": "ANY",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "False",
+            "name": "False",
+            "type": "ANY",
+            "multi": false,
+            "required": false
+          }
+        ],
+        "parameters": [
+          {
+            "id": "routing_criteria",
+            "name": "Routing Criteria",
+            "type": "STR",
+            "value": "hr_analysis",
+            "required": true,
+            "description": "라우팅 기준이 되는 Dict의 키 이름을 설정합니다. 예: 'is_human'"
+          }
+        ],
+        "disable": false
+      },
+      "position": {
+        "x": 45319.40816008526,
+        "y": 23696.56785949534
+      },
+      "isExpanded": true
+    },
+    {
+      "id": "agents/openai-1760417755185",
+      "data": {
+        "functionId": "agents",
+        "id": "agents/openai",
+        "nodeName": "Agent OpenAI",
+        "description": "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드",
+        "tags": [
+          "agent",
+          "chat",
+          "rag",
+          "openai"
+        ],
+        "inputs": [
+          {
+            "id": "text",
+            "name": "Text",
+            "type": "STR",
+            "multi": false,
+            "required": true
+          },
+          {
+            "id": "tools",
+            "name": "Tools",
+            "type": "TOOL",
+            "multi": true,
+            "required": false,
+            "value": []
+          },
+          {
+            "id": "memory",
+            "name": "Memory",
+            "type": "OBJECT",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DocsContext",
+            "multi": false,
+            "required": false
+          },
+          {
+            "id": "args_schema",
+            "name": "ArgsSchema",
+            "type": "OutputSchema"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "result",
+            "name": "Result",
+            "type": "STR"
+          }
+        ],
+        "parameters": [
+          {
+            "id": "model",
+            "name": "Model",
+            "type": "STR",
+            "value": "gpt-5-mini",
+            "required": true,
+            "options": [
+              {
+                "value": "gpt-oss-20b",
+                "label": "GPT-OSS-20B"
+              },
+              {
+                "value": "gpt-oss-120b",
+                "label": "GPT-OSS-120B"
+              },
+              {
+                "value": "gpt-3.5-turbo",
+                "label": "GPT-3.5 Turbo"
+              },
+              {
+                "value": "gpt-4",
+                "label": "GPT-4"
+              },
+              {
+                "value": "gpt-4o",
+                "label": "GPT-4o"
+              },
+              {
+                "value": "gpt-5",
+                "label": "GPT-5"
+              },
+              {
+                "value": "gpt-5-mini",
+                "label": "GPT-5 Mini"
+              }
+            ]
+          },
+          {
+            "id": "temperature",
+            "name": "Temperature",
+            "type": "FLOAT",
+            "value": 1,
+            "required": false,
+            "optional": true,
+            "min": 0,
+            "max": 2,
+            "step": 0.1
+          },
+          {
+            "id": "max_tokens",
+            "name": "Max Tokens",
+            "type": "INT",
+            "value": 12000,
+            "required": false,
+            "optional": true,
+            "min": 1,
+            "max": 65536,
+            "step": 1
+          },
+          {
+            "id": "base_url",
+            "name": "Base URL",
+            "type": "STR",
+            "value": "https://api.openai.com/v1",
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "strict_citation",
+            "name": "Strict Citation",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true
+          },
+          {
+            "id": "return_intermediate_steps",
+            "name": "Return Intermediate Steps",
+            "type": "BOOL",
+            "value": false,
+            "required": false,
+            "optional": true,
+            "description": "Tool 사용시 해당 과정을 출력할지 여부를 결정합니다."
+          },
+          {
+            "id": "default_prompt",
+            "name": "Default Prompt",
+            "type": "STR",
+            "value": "## 현재 사용자 요청은 (주)플래티어의 HR 정책과 관련이 없는 요청으로 판단되었습니다.\n## 아래의 규정을 준수하여 일반적인 답변을 수행하십시오.\n\n## 답변 시 유의사항\n1. 최대한 정확한 답변을 제공하되, 반드시 \"일반적인 답변입니다\"는 안내를 포함합니다.\n2. **친절하고 공손한 말투**로 설명합니다.  \n3. 상황에 따라 고객사 지침, 팀장 승인 등 **예외사항이 있을 수 있음을 명시**합니다.  \n4. **법령 해석이 필요한 민감한 사안**은 HR실 문의를 권장합니다.  \n5. **답변은 반드시 질문에 대한 응답으로만 종료해야 하며, 불필요한 연결 멘트를 포함하지 않습니다.**  \n   - 금지 예시:  \n     - “추가로 도와드리겠습니다.”  \n     - “문구를 대신 작성해드리겠습니다.”  \n     - “혹시 더 궁금하신 점 있으신가요?”",
+            "required": false,
+            "optional": true,
+            "expandable": true,
+            "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."
+          }
+        ]
+      },
+      "position": {
+        "x": 45291.9486070702,
+        "y": 24236.903317040596
+      },
+      "isExpanded": false
+    },
+    {
+      "id": "tools/print_any-1760417777110",
+      "data": {
+        "functionId": "endnode",
+        "id": "tools/print_any",
+        "nodeName": "Print Any",
+        "description": "임의의 타입의 데이터를 입력받아 적절한 형태로 변환하여 반환하는 출력 노드입니다. 객체는 JSON 문자열로, 스트림은 자동으로 스트리밍 형태로 변환됩니다.",
+        "tags": [
+          "output",
+          "print",
+          "display",
+          "debug",
+          "end_node",
+          "utility",
+          "any_type",
+          "stream_compatible"
+        ],
+        "inputs": [
+          {
+            "id": "input_print",
+            "name": "Print",
+            "type": "ANY",
+            "multi": false,
+            "required": true
+          }
+        ],
+        "outputs": [],
+        "parameters": [],
+        "disable": false
+      },
+      "position": {
+        "x": 46690.59549978607,
+        "y": 24071.105949695564
+      },
+      "isExpanded": true
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-document_loaders/Qdrant-1758241778201:rag_context-agents/openai-1758250616915:rag_context-1758250620380",
+      "source": {
+        "nodeId": "document_loaders/Qdrant-1758241778201",
+        "portId": "rag_context",
+        "portType": "output",
+        "type": "DocsContext"
+      },
+      "target": {
+        "nodeId": "agents/openai-1758250616915",
+        "portId": "rag_context",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-agents/openai-1758250616915:result-tools/print_any-1758186624522:input_print-1758250632148",
+      "source": {
+        "nodeId": "agents/openai-1758250616915",
+        "portId": "result",
+        "portType": "output",
+        "type": "STR"
+      },
+      "target": {
+        "nodeId": "tools/print_any-1758186624522",
+        "portId": "input_print",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-memory/db_memory_v2-1759110850065:memory-agents/openai-1758250616915:memory-1759110852256",
+      "source": {
+        "nodeId": "memory/db_memory_v2-1759110850065",
+        "portId": "memory",
+        "portType": "output",
+        "type": "OBJECT"
+      },
+      "target": {
+        "nodeId": "agents/openai-1758250616915",
+        "portId": "memory",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-input_string-1758186631128:text-memory/db_memory_v2-1759110850065:current_input-1760417455911",
+      "source": {
+        "nodeId": "input_string-1758186631128",
+        "portId": "text",
+        "portType": "output",
+        "type": "STR"
+      },
+      "target": {
+        "nodeId": "memory/db_memory_v2-1759110850065",
+        "portId": "current_input",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-input_string-1758186631128:text-agents/openai-1760417472782:text-1760417479273",
+      "source": {
+        "nodeId": "input_string-1758186631128",
+        "portId": "text",
+        "portType": "output",
+        "type": "STR"
+      },
+      "target": {
+        "nodeId": "agents/openai-1760417472782",
+        "portId": "text",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-output_schema_provider-1760417539681:args_schema-agents/openai-1760417472782:args_schema-1760417539681",
+      "source": {
+        "nodeId": "output_schema_provider-1760417539681",
+        "portId": "args_schema",
+        "portType": "output"
+      },
+      "target": {
+        "nodeId": "agents/openai-1760417472782",
+        "portId": "args_schema",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-agents/openai-1760417472782:result-router/Router-1760417682852:agent_output-1760417682852",
+      "source": {
+        "nodeId": "agents/openai-1760417472782",
+        "portId": "result",
+        "portType": "output"
+      },
+      "target": {
+        "nodeId": "router/Router-1760417682852",
+        "portId": "agent_output",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-router/Router-1760417682852:True-agents/openai-1758250616915:text-1760417736877",
+      "source": {
+        "nodeId": "router/Router-1760417682852",
+        "portId": "True",
+        "portType": "output",
+        "type": "ANY"
+      },
+      "target": {
+        "nodeId": "agents/openai-1758250616915",
+        "portId": "text",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-router/Router-1760417682852:False-agents/openai-1760417755185:text-1760417760257",
+      "source": {
+        "nodeId": "router/Router-1760417682852",
+        "portId": "False",
+        "portType": "output",
+        "type": "ANY"
+      },
+      "target": {
+        "nodeId": "agents/openai-1760417755185",
+        "portId": "text",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-memory/db_memory_v2-1759110850065:memory-agents/openai-1760417755185:memory-1760417763744",
+      "source": {
+        "nodeId": "memory/db_memory_v2-1759110850065",
+        "portId": "memory",
+        "portType": "output",
+        "type": "OBJECT"
+      },
+      "target": {
+        "nodeId": "agents/openai-1760417755185",
+        "portId": "memory",
+        "portType": "input"
+      }
+    },
+    {
+      "id": "edge-agents/openai-1760417755185:result-tools/print_any-1760417777110:input_print-1760417777110",
+      "source": {
+        "nodeId": "agents/openai-1760417755185",
+        "portId": "result",
+        "portType": "output"
+      },
+      "target": {
+        "nodeId": "tools/print_any-1760417777110",
+        "portId": "input_print",
+        "portType": "input"
+      }
+    }
+  ],
+  "interaction_id": "default"
+}
