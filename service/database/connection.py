@@ -302,26 +302,46 @@ class AppDatabaseManager:
                             model_class.__name__, record_id, e)
             return None
 
-    def find_all(self, model_class: Type[BaseModel], limit: int = 500, offset: int = 0, select_columns: List[str] = None, ignore_columns: List[str] = None) -> List[BaseModel]:
+    def find_all(self, model_class: Type[BaseModel], limit: int = 500, offset: int = 0, select_columns: List[str] = None, ignore_columns: List[str] = None, join_user: bool = False) -> List[BaseModel]:
         """모든 레코드 조회 (페이징 지원)"""
         try:
             table_name = model_class().get_table_name()
             db_type = self.config_db_manager.db_type
 
-            # SELECT 컬럼 설정
-            if select_columns:
-                columns_str = ", ".join(select_columns)
-            elif ignore_columns:
-                all_columns = ['id', 'created_at', 'updated_at'] + list(model_class().get_schema().keys())
-                filtered_columns = [col for col in all_columns if col not in ignore_columns]
-                columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
+            # SELECT 컬럼 및 JOIN 설정
+            if join_user:
+                # users 테이블과 JOIN하는 경우
+                if select_columns:
+                    columns_str = ", ".join([f"{table_name}.{col}" for col in select_columns])
+                    columns_str += ", u.username, u.full_name"
+                elif ignore_columns:
+                    all_columns = ['id', 'created_at', 'updated_at'] + list(model_class().get_schema().keys())
+                    filtered_columns = [col for col in all_columns if col not in ignore_columns]
+                    columns_str = ", ".join([f"{table_name}.{col}" for col in filtered_columns]) if filtered_columns else f"{table_name}.*"
+                    columns_str += ", u.username, u.full_name"
+                else:
+                    columns_str = f"{table_name}.*, u.username, u.full_name"
+
+                from_clause = f"FROM {table_name} LEFT JOIN users u ON {table_name}.user_id = u.id"
+                orderby_field = f"{table_name}.id"
             else:
-                columns_str = "*"
+                # 일반적인 경우
+                if select_columns:
+                    columns_str = ", ".join(select_columns)
+                elif ignore_columns:
+                    all_columns = ['id', 'created_at', 'updated_at'] + list(model_class().get_schema().keys())
+                    filtered_columns = [col for col in all_columns if col not in ignore_columns]
+                    columns_str = ", ".join(filtered_columns) if filtered_columns else "*"
+                else:
+                    columns_str = "*"
+
+                from_clause = f"FROM {table_name}"
+                orderby_field = "id"
 
             if db_type == "postgresql":
-                query = f"SELECT {columns_str} FROM {table_name} ORDER BY id DESC LIMIT %s OFFSET %s"
+                query = f"SELECT {columns_str} {from_clause} ORDER BY {orderby_field} DESC LIMIT %s OFFSET %s"
             else:
-                query = f"SELECT {columns_str} FROM {table_name} ORDER BY id DESC LIMIT ? OFFSET ?"
+                query = f"SELECT {columns_str} {from_clause} ORDER BY {orderby_field} DESC LIMIT ? OFFSET ?"
 
             results = self.config_db_manager.execute_query(query, (limit, offset))
 

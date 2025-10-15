@@ -4,6 +4,7 @@ import uvicorn
 import logging
 import os
 import uuid
+import json
 import pyarrow.csv as pv
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -81,7 +82,10 @@ def generate_prompt_uid(act_text: str) -> str:
     return f"{base_uid}_{unique_suffix}"
 
 def load_prompts_from_csv(app_db, csv_path: str):
-    """CSV 파일에서 프롬프트 데이터를 로드하여 데이터베이스에 저장"""
+    """
+    CSV 파일에서 프롬프트 데이터를 로드하여 데이터베이스에 저장
+    표준 형식: ID, Prompt UID, Title, Content, Language, Public, Template, User ID, Username, Full Name, Metadata, Created At, Updated At
+    """
     try:
         # CSV 파일 존재 확인
         if not Path(csv_path).exists():
@@ -101,74 +105,86 @@ def load_prompts_from_csv(app_db, csv_path: str):
         # 데이터를 딕셔너리 리스트로 변환
         data = table.to_pydict()
 
-        # 필요한 컬럼 확인
-        required_columns = ['act', 'prompt', 'act_ko', 'prompt_ko']
+        # 표준 형식 컬럼 확인 (다운로드 형식)
+        required_columns = ['Prompt UID', 'Title', 'Content', 'Language', 'Public', 'Template']
         missing_columns = [col for col in required_columns if col not in data]
         if missing_columns:
-            error_msg = f"Missing required columns: {missing_columns}"
+            error_msg = f"Missing required columns: {missing_columns}. Expected standard format from download."
             logger.error(f"❌ {error_msg}")
             return {"success": False, "error": error_msg}
 
         inserted_count = 0
         skipped_count = 0
 
-        # 각 행에 대해 영어/한국어 데이터 쌍 생성
-        for i in range(len(data['act'])):
-            act = data['act'][i]
-            prompt = data['prompt'][i]
-            act_ko = data['act_ko'][i]
-            prompt_ko = data['prompt_ko'][i]
-
-            # prompt_uid 생성
-            prompt_uid_base = generate_prompt_uid(act)
-
-            # 영어 버전 저장
-            en_prompt = Prompts(
-                user_id=None,  # 기본 템플릿이므로 None
-                prompt_uid=f"{prompt_uid_base}_en",
-                prompt_title=act,
-                prompt_content=prompt,
-                public_available=True,
-                is_template=True,
-                language='en',
-                metadata={}
-            )
-
-            # 한국어 버전 저장
-            ko_prompt = Prompts(
-                user_id=None,  # 기본 템플릿이므로 None
-                prompt_uid=f"{prompt_uid_base}_ko",
-                prompt_title=act_ko,
-                prompt_content=prompt_ko,
-                public_available=True,
-                is_template=True,
-                language='ko',
-                metadata={}
-            )
-
+        # 각 행 처리
+        for i in range(len(data['Prompt UID'])):
             try:
-                # 영어 버전 중복 체크 및 저장
-                existing_en = app_db.find_by_condition(Prompts, {"prompt_uid": f"{prompt_uid_base}_en"}, limit=1)
-                if not existing_en or len(existing_en) == 0:
-                    result_en = app_db.insert(en_prompt)
-                    if result_en and result_en.get("result") == "success":
-                        inserted_count += 1
-                else:
-                    skipped_count += 1
-                    logger.debug(f"🔄 Skipped existing English prompt: {prompt_uid_base}_en")
+                prompt_uid = data['Prompt UID'][i]
+                title = data['Title'][i]
+                content = data['Content'][i]
+                language = data['Language'][i]
+                public_available = True
+                is_template = True
+                user_id = None
+                if 'User ID' in data and data['User ID'][i]:
+                    try:
+                        user_id_val = data['User ID'][i]
+                        if user_id_val and str(user_id_val).strip() and str(user_id_val).strip() != '0':
+                            user_id = int(user_id_val)
+                    except (ValueError, TypeError):
+                        user_id = None
 
-                # 한국어 버전 중복 체크 및 저장
-                existing_ko = app_db.find_by_condition(Prompts, {"prompt_uid": f"{prompt_uid_base}_ko"}, limit=1)
-                if not existing_ko or len(existing_ko) == 0:
-                    result_ko = app_db.insert(ko_prompt)
-                    if result_ko and result_ko.get("result") == "success":
+                # Metadata 파싱 (JSON 문자열)
+                metadata = {}
+                if 'Metadata' in data and data['Metadata'][i]:
+                    try:
+                        metadata_str = str(data['Metadata'][i]).strip()
+                        if metadata_str:
+                            metadata = json.loads(metadata_str)
+                    except json.JSONDecodeError:
+                        logger.warning(f"⚠️  Failed to parse metadata for row {i+1}, using empty dict")
+                        metadata = {}
+
+                # None 또는 빈 문자열 체크
+                if not prompt_uid or not title or not content or not language:
+                    logger.warning(f"⚠️  Skipping row {i+1}: Missing required data")
+                    skipped_count += 1
+                    continue
+
+                # Prompt 객체 생성
+                new_prompt = Prompts(
+                    user_id=None,
+                    prompt_uid=str(prompt_uid).strip(),
+                    prompt_title=str(title).strip(),
+                    prompt_content=str(content).strip(),
+                    public_available=public_available,
+                    is_template=is_template,
+                    language=str(language).strip(),
+                    metadata=None
+                )
+
+                # 중복 체크 (prompt_uid 기준)
+                existing = app_db.find_by_condition(
+                    Prompts,
+                        {"prompt_uid": new_prompt.prompt_uid},
+                    limit=1
+                )
+
+                if not existing or len(existing) == 0:
+                    result = app_db.insert(new_prompt)
+                    if result and result.get("result") == "success":
                         inserted_count += 1
+                        logger.debug(f"✅ Inserted prompt: {new_prompt.prompt_uid} ({new_prompt.language})")
+                    else:
+                        skipped_count += 1
+                        logger.warning(f"⚠️  Failed to insert prompt {i+1}: {new_prompt.prompt_uid}")
                 else:
                     skipped_count += 1
-                    logger.debug(f"🔄 Skipped existing Korean prompt: {prompt_uid_base}_ko")
+                    logger.debug(f"🔄 Skipped existing prompt: {new_prompt.prompt_uid}")
 
             except Exception as e:
-                logger.warning(f"⚠️  Failed to insert prompt pair {i+1}: {e}")
+                logger.warning(f"⚠️  Failed to process row {i+1}: {e}")
+                skipped_count += 1
                 continue
 
         logger.info(f"✅ Successfully processed {inserted_count + skipped_count} prompt records")

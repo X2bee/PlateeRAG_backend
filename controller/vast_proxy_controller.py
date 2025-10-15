@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, List
 from enum import Enum
 import os
 from controller.helper.controllerHelper import extract_user_id_from_request
-from controller.helper.singletonHelper import get_db_manager, get_vast_proxy_client
+from controller.helper.singletonHelper import get_config_composer, get_db_manager, get_vast_proxy_client
 from service.database.logger_helper import create_logger
 
 router = APIRouter(prefix="/api/vast", tags=["vastAI-proxy"])
@@ -270,16 +270,75 @@ async def vllm_down(request: Request, instance_id: str):
     return result
 
 
-@router.put("/set-vllm")
+@router.put("/set-vllm",
+    summary="VLLM 설정 업데이트",
+    description="VLLM API Base URL과 모델명을 업데이트합니다. 실행 중인 애플리케이션의 설정을 동적으로 변경할 수 있습니다.",
+    response_model=Dict[str, Any],
+    responses={
+        400: {"description": "잘못된 설정 값"},
+        404: {"description": "설정을 찾을 수 없음"},
+        500: {"description": "서버 오류"}
+    })
 async def set_vllm_config(request: Request, vllm_config: SetVLLMConfigRequest):
+    """VLLM API Base URL과 모델명 설정 업데이트"""
     user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, user_id, request)
 
-    client = get_vast_proxy_client(request)
-    result = await client.set_vllm_config(vllm_config.model_dump(), headers=_forward_auth_headers(request))
-    _log_proxy_success(backend_log, "Proxy VLLM config updated", {"model_name": vllm_config.model_name})
-    return result
+    try:
+        # appController의 update_persistent_config 함수를 import
+        from controller.appController import update_persistent_config, ConfigUpdateRequest
+
+        try:
+            config_composer = get_config_composer(request)
+            old_api_base_url = config_composer.get_config_by_name("VLLM_API_BASE_URL").value
+
+            api_base_url_request = ConfigUpdateRequest(value=vllm_config.api_base_url)
+            api_base_url_result = await update_persistent_config("VLLM_API_BASE_URL", api_base_url_request, request)
+
+            backend_log.info(f"VLLM_API_BASE_URL 업데이트: {old_api_base_url} -> {vllm_config.api_base_url}")
+        except KeyError:
+            backend_log.warning("VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
+            raise HTTPException(status_code=404, detail="VLLM_API_BASE_URL 설정을 찾을 수 없습니다")
+
+        try:
+            old_model_name = config_composer.get_config_by_name("VLLM_MODEL_NAME").value
+
+            model_name_request = ConfigUpdateRequest(value=vllm_config.model_name)
+            model_name_result = await update_persistent_config("VLLM_MODEL_NAME", model_name_request, request)
+
+            backend_log.info(f"VLLM_MODEL_NAME 업데이트: {old_model_name} -> {vllm_config.model_name}")
+
+        except KeyError:
+            backend_log.warning("VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
+            raise HTTPException(status_code=404, detail="VLLM_MODEL_NAME 설정을 찾을 수 없습니다")
+        try:
+            provider_request = ConfigUpdateRequest(value='vllm')
+            provider_response = await update_persistent_config("DEFAULT_LLM_PROVIDER", provider_request, request)
+
+            backend_log.info(f"DEFAULT_LLM_PROVIDER 업데이트: {provider_request.value}")
+
+        except KeyError:
+            backend_log.warning("DEFAULT_LLM_PROVIDER 설정을 찾을 수 없습니다")
+            raise HTTPException(status_code=404, detail="DEFAULT_LLM_PROVIDER 설정을 찾을 수 없습니다")
+
+        backend_log.info(f"VLLM 설정 업데이트", metadata={"api_base_url": api_base_url_result, "model_name": model_name_result})
+
+        return {
+            "success": True,
+            "message": "VLLM 설정이 성공적으로 업데이트되었습니다",
+            "api_base_url": vllm_config.api_base_url,
+            "model_name": vllm_config.model_name,
+            "method": "update_persistent_config"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        backend_log.error("VLLM 설정 업데이트 실패", metadata={"error": str(e)})
+        raise HTTPException(status_code=500, detail=f"VLLM 설정 업데이트 실패: {str(e)}")
 
 
 @router.post("/instances/vllm-health")

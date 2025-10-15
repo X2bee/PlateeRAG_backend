@@ -3,7 +3,7 @@
 각 기능별로 분리된 엔드포인트들을 통합 관리
 """
 from fastapi import APIRouter
-from controller.workflow.endpoints import basic_operations, deploy, execution, performance, tester
+from controller.workflow.endpoints import basic_operations, deploy, execution, performance, tester, store
 
 # 메인 워크플로우 라우터 생성
 router = APIRouter(prefix="", tags=["workflow"])
@@ -20,5 +20,8 @@ router.include_router(execution.router, prefix="/execute")
 # 성능 및 로그 관련 라우터 포함
 router.include_router(performance.router, prefix="/performance")
 
-# 테스터 관련 라우터 포함  
+# 테스터 관련 라우터 포함
 router.include_router(tester.router, prefix="/execute/tester")
+
+# 저장소 관련 라우터 포함
+router.include_router(store.router, prefix="/store")
