@@ -42,30 +42,34 @@ class XgenJsonOutputParser(JsonOutputParser):
             return text
 
         logger.info("[XGEN_JSON_PARSER] Robust JSON 파싱 시도 중...")
+        logger.info(f"[XGEN_JSON_PARSER] 입력 텍스트 (길이: {len(text)}): {repr(text[:200])}...")
 
         # 1. 마크다운 코드 블록 제거 후 시도 (먼저 시도)
-        # ```json ... ``` 또는 ``` ... ``` 형태 처리
+        # ```json ... ``` 또는 ``` ... ``` 형태 처리 (여러 줄 들여쓰기 포함)
         code_block_patterns = [
-            r'```json\s*\n(.*?)\n\s*```',  # ```json\n...\n```
-            r'```json\s+(.*?)\s*```',      # ```json ... ```
-            r'```\s*\n(.*?)\n\s*```',      # ```\n...\n``` (가장 흔한 케이스)
-            r'```\s+(.*?)\s+```',          # ``` ... ``` (공백 있음)
-            r'```(.*?)```',                # ```...``` (공백 없음, 최후 수단)
+            (r'```json\s*(.*?)\s*```', 'json block'),
+            (r'```\s*(.*?)\s*```', 'code block'),
         ]
 
-        for pattern in code_block_patterns:
+        for pattern, pattern_name in code_block_patterns:
             match = re.search(pattern, text.strip(), re.DOTALL | re.IGNORECASE)
             if match:
                 json_content = match.group(1).strip()
+                logger.info(f"[XGEN_JSON_PARSER] 패턴 '{pattern_name}' 매칭됨, 추출 길이: {len(json_content)}")
+                logger.info(f"[XGEN_JSON_PARSER] 추출된 내용: {repr(json_content[:150])}...")
+
                 # 빈 문자열이면 건너뛰기
                 if not json_content:
+                    logger.info(f"[XGEN_JSON_PARSER] 추출된 내용이 비어있음, 다음 패턴 시도")
                     continue
+
                 try:
                     parsed = json.loads(json_content)
-                    logger.info("[XGEN_JSON_PARSER] 코드 블록 제거 후 JSON 파싱 성공")
+                    logger.info(f"[XGEN_JSON_PARSER] 코드 블록 제거 후 JSON 파싱 성공 (패턴: {pattern_name})")
                     return parsed
                 except (JSONDecodeError, ValueError) as e:
-                    logger.debug(f"[XGEN_JSON_PARSER] 코드 블록 파싱 실패 (패턴: {pattern}): {e}")
+                    logger.info(f"[XGEN_JSON_PARSER] 코드 블록 파싱 실패 (패턴: {pattern_name}): {e}")
+                    logger.info(f"[XGEN_JSON_PARSER] 파싱 시도한 내용: {repr(json_content[:100])}...")
                     continue        # 2. 전체 텍스트를 JSON으로 파싱 시도
         try:
             cleaned_text = text.strip()
