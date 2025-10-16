@@ -151,6 +151,17 @@ async def rename_workflow(request: Request, old_name: str, new_name: str):
         workflow_data = workflow_data[0]
         workflow_data.workflow_name = new_name
 
+        # workflow_data가 JSON 문자열인 경우 파싱
+        workflow_data_dict = workflow_data.workflow_data
+        if isinstance(workflow_data_dict, str):
+            workflow_data_dict = json.loads(workflow_data_dict)
+
+        # workflow_name 업데이트
+        workflow_data_dict['workflow_name'] = new_name
+
+        # 다시 JSON 문자열로 변환하여 저장
+        workflow_data.workflow_data = workflow_data_dict
+
         update_response = app_db.update(workflow_data)
         if not update_response or update_response.get("result") != "success":
             raise HTTPException(status_code=500, detail="Failed to update workflow name")
