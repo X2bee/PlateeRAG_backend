@@ -17,6 +17,7 @@ from controller.rag.router import rag_router
 from controller.audio.router import audio_router
 from controller.data_manager.router import data_manager_router
 from controller.model.router import model_router
+from controller.tools.router import tool_router
 
 from controller.trainController import router as trainRouter
 from controller.llmController import router as llmRouter
@@ -681,6 +682,7 @@ app.include_router(rag_router)
 app.include_router(audio_router)
 app.include_router(data_manager_router)
 app.include_router(model_router)
+app.include_router(tool_router)
 
 app.include_router(authRouter)
 app.include_router(llmRouter)
