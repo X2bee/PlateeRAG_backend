@@ -34,21 +34,37 @@ async def list_tool_store(request: Request):
             ToolStoreMeta,
             {},
             limit=1000,
-            select_columns=["function_upload_id", "updated_at"],
-            orderby="updated_at"
+            orderby="updated_at",
+            join_user=True,
+            return_list=True
         )
 
-        tools_list = []
+        # Parse function_data if it's a JSON string
+        parsed_tools = []
         for tool in tools_data:
-            tools_list.append({
-                "function_upload_id": tool.function_upload_id
-            })
+            tool_dict = dict(tool)
+
+            # Parse function_data if it's a string
+            if 'function_data' in tool_dict and isinstance(tool_dict['function_data'], str):
+                try:
+                    tool_dict['function_data'] = json.loads(tool_dict['function_data'])
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse function_data for tool: {tool_dict.get('function_upload_id')}")
+
+            # Parse metadata if it's a string
+            if 'metadata' in tool_dict and isinstance(tool_dict['metadata'], str):
+                try:
+                    tool_dict['metadata'] = json.loads(tool_dict['metadata'])
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse metadata for tool: {tool_dict.get('function_upload_id')}")
+
+            parsed_tools.append(tool_dict)
 
         backend_log.success("Tool store list retrieved successfully",
-                          metadata={"tool_count": len(tools_list)})
+                          metadata={"tool_count": len(parsed_tools)})
 
-        logger.info(f"Found {len(tools_list)} tools in store")
-        return JSONResponse(content={"tools": tools_list})
+        logger.info(f"Found {len(parsed_tools)} tools in store")
+        return {"tools": parsed_tools}
 
     except Exception as e:
         backend_log.error("Failed to list tool store", exception=e)
@@ -101,7 +117,7 @@ async def list_tool_store_detail(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to list tool store details: {str(e)}")
 
 @router.post("/upload")
-async def upload_tool_store(request: Request, function_id: str, upload_request: UploadToolStoreRequest):
+async def upload_tool_store(request: Request, upload_request: UploadToolStoreRequest):
     """
     툴을 Tool Store에 업로드합니다.
     """
@@ -114,8 +130,8 @@ async def upload_tool_store(request: Request, function_id: str, upload_request: 
         existing_tool = app_db.find_by_condition(
             Tools,
             {
+                "id": upload_request.function_upload_id,
                 "user_id": user_id,
-                "function_id": function_id
             },
             limit=1
         )
@@ -139,7 +155,7 @@ async def upload_tool_store(request: Request, function_id: str, upload_request: 
             limit=1
         )
         if existing_upload_data:
-            raise HTTPException(status_code=400, detail="이미 동일한 ID로 업로드된 툴이 존재합니다. 다른 ID를 사용하세요.")
+            raise HTTPException(status_code=400, detail="이미 동일한 이름으로 업로드한 툴이 존재합니다. 다른 이름을 사용하세요.")
 
         # api_header와 api_body 파싱
         api_header = existing_tool.api_header
@@ -169,21 +185,11 @@ async def upload_tool_store(request: Request, function_id: str, upload_request: 
             "response_filter_field": existing_tool.response_filter_field,
             "status": existing_tool.status,
         }
-
-        # 업로드 메타데이터 구성
-        upload_metadata = upload_request.metadata if upload_request.metadata else {}
-        upload_metadata.update({
-            "description": upload_request.description,
-            "tags": upload_request.tags if upload_request.tags else [],
-            "original_function_id": function_id,
-        })
-
         # Tool Store에 저장
         tool_store_data = ToolStoreMeta(
             user_id=user_id,
             function_upload_id=upload_request.function_upload_id,
             function_data=function_data,
-            metadata=upload_metadata,
         )
 
         insert_result = app_db.insert(tool_store_data)
@@ -191,7 +197,6 @@ async def upload_tool_store(request: Request, function_id: str, upload_request: 
         if insert_result and insert_result.get("result") == "success":
             backend_log.success("Tool uploaded to store successfully",
                               metadata={
-                                  "function_id": function_id,
                                   "function_upload_id": upload_request.function_upload_id,
                                   "description": upload_request.description
                               })
@@ -217,70 +222,9 @@ async def upload_tool_store(request: Request, function_id: str, upload_request: 
         raise
     except Exception as e:
         backend_log.error("Tool upload to store failed", exception=e,
-                         metadata={"function_id": function_id})
+                         metadata={"function_upload_id": upload_request.function_upload_id})
         logger.error(f"Failed to upload tool to store: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload tool to store: {str(e)}")
-
-@router.get("/load/{function_upload_id}")
-async def load_tool_from_store(request: Request, function_upload_id: str):
-    """
-    Tool Store에서 특정 툴을 로드합니다.
-    """
-    login_user_id = extract_user_id_from_request(request)
-    if not login_user_id:
-        raise HTTPException(status_code=400, detail="User ID not found in request")
-
-    app_db = get_db_manager(request)
-    backend_log = create_logger(app_db, login_user_id, request)
-
-    try:
-        backend_log.info("Starting tool load from store operation",
-                        metadata={"function_upload_id": function_upload_id})
-
-        # Tool Store에서 툴 검색
-        tool_store_meta = app_db.find_by_condition(
-            ToolStoreMeta,
-            {"function_upload_id": function_upload_id},
-            limit=1
-        )
-
-        if not tool_store_meta or len(tool_store_meta) == 0:
-            backend_log.warn("Tool not found in store",
-                           metadata={"function_upload_id": function_upload_id})
-            raise HTTPException(status_code=404, detail=f"Tool '{function_upload_id}' not found in store")
-
-        tool_store = tool_store_meta[0]
-
-        # function_data 파싱
-        function_data = tool_store.function_data
-        if isinstance(function_data, str):
-            function_data = json.loads(function_data) if function_data else {}
-
-        # metadata 파싱
-        metadata = tool_store.metadata
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata) if metadata else {}
-
-        response_data = {
-            "function_upload_id": tool_store.function_upload_id,
-            "function_data": function_data,
-            "metadata": metadata,
-            "uploaded_by": tool_store.user_id,
-        }
-
-        backend_log.success("Tool loaded from store successfully",
-                          metadata={"function_upload_id": function_upload_id})
-
-        logger.info(f"Tool loaded from store successfully: {function_upload_id}")
-        return JSONResponse(content=response_data)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        backend_log.error("Tool load from store operation failed", exception=e,
-                         metadata={"function_upload_id": function_upload_id})
-        logger.error(f"Error loading tool from store: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to load tool from store: {str(e)}")
 
 @router.post("/update/{function_upload_id}")
 async def update_tool_store(request: Request, function_upload_id: str, update_dict: dict):
@@ -390,8 +334,8 @@ async def delete_tool_from_store(request: Request, function_upload_id: str):
         logger.error(f"Error deleting tool from store: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete tool from store: {str(e)}")
 
-@router.post("/download/{function_upload_id}")
-async def download_tool_from_store(request: Request, function_upload_id: str, new_function_name: str = None):
+@router.post("/download/{store_tool_id}")
+async def download_tool_from_store(request: Request, store_tool_id: str, function_upload_id: str):
     """
     Tool Store에서 툴을 다운로드하여 사용자의 툴 목록에 추가합니다.
     """
@@ -404,17 +348,20 @@ async def download_tool_from_store(request: Request, function_upload_id: str, ne
 
     try:
         backend_log.info("Starting tool download from store",
-                        metadata={"function_upload_id": function_upload_id})
+                        metadata={"id": store_tool_id})
 
         # Tool Store에서 툴 가져오기
         tool_store_meta = app_db.find_by_condition(
             ToolStoreMeta,
-            {"function_upload_id": function_upload_id},
+            {
+                "id": store_tool_id,
+                "function_upload_id": function_upload_id,
+            },
             limit=1
         )
 
         if not tool_store_meta or len(tool_store_meta) == 0:
-            raise HTTPException(status_code=404, detail=f"Tool '{function_upload_id}' not found in store")
+            raise HTTPException(status_code=404, detail=f"Tool '{store_tool_id}' not found in store")
 
         tool_store = tool_store_meta[0]
 
@@ -425,15 +372,12 @@ async def download_tool_from_store(request: Request, function_upload_id: str, ne
 
         # 새로운 function_id 생성 (중복 방지)
         import uuid
-        new_function_id = f"downloaded_{uuid.uuid4().hex[:16]}"
-
-        # 툴 이름 설정
-        function_name = new_function_name if new_function_name else function_data.get("function_name", "Downloaded Tool")
+        new_function_id = f"{function_data.get('function_id')}__{uuid.uuid4().hex[:8]}"
 
         # 사용자의 툴 목록에 추가
         new_tool = Tools(
             user_id=user_id,
-            function_name=function_name,
+            function_name=function_data.get("function_name", "Downloaded Tool"),
             function_id=new_function_id,
             description=function_data.get("description", ""),
             api_header=function_data.get("api_header", {}),
@@ -458,7 +402,6 @@ async def download_tool_from_store(request: Request, function_upload_id: str, ne
                               metadata={
                                   "function_upload_id": function_upload_id,
                                   "new_function_id": new_function_id,
-                                  "function_name": function_name
                               })
 
             logger.info(f"Tool downloaded from store successfully: {function_upload_id} -> {new_function_id}")
@@ -470,9 +413,9 @@ async def download_tool_from_store(request: Request, function_upload_id: str, ne
 
         return JSONResponse(content={
             "success": True,
-            "message": f"Tool '{function_name}' downloaded successfully",
+            "message": f"Tool '{function_data.get('function_name', 'Downloaded Tool')}' downloaded successfully",
             "function_id": new_function_id,
-            "function_name": function_name
+            "function_name": function_data.get('function_name', 'Downloaded Tool')
         })
 
     except HTTPException:

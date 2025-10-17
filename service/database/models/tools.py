@@ -54,6 +54,8 @@ class ToolStoreMeta(BaseModel):
         self.function_upload_id: str = kwargs.get('function_upload_id', '')
         self.function_data: Optional[Dict] = kwargs.get('function_data', {})
         self.metadata: Optional[Dict] = kwargs.get('metadata', {})
+        self.rating_count: int = kwargs.get('rating_count', 0)
+        self.rating_sum: int = kwargs.get('rating_sum', 0)
 
     def get_table_name(self) -> str:
         return "tool_store_meta"
@@ -63,5 +65,26 @@ class ToolStoreMeta(BaseModel):
             'user_id': 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
             'function_upload_id': 'VARCHAR(100) NOT NULL',
             'function_data': 'TEXT',
-            'metadata': 'TEXT'
+            'metadata': 'TEXT',
+            'rating_count': 'INTEGER DEFAULT 0',
+            'rating_sum': 'INTEGER DEFAULT 0',
+        }
+
+class ToolStoreRating(BaseModel):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.user_id: Optional[int] = kwargs.get('user_id')
+        self.tool_store_id: str = kwargs.get('tool_store_id', '')
+        self.function_upload_id: str = kwargs.get('function_upload_id', '')
+        self.rating: int = kwargs.get('rating', 1)  # 1 to 5
+
+    def get_table_name(self) -> str:
+        return "tool_store_rating"
+
+    def get_schema(self) -> Dict[str, str]:
+        return {
+            'user_id': 'INTEGER REFERENCES users(id) ON DELETE CASCADE',
+            'tool_store_id': 'INTEGER REFERENCES tool_store_meta(id) ON DELETE CASCADE',
+            'function_upload_id': 'VARCHAR(100) NOT NULL',
+            'rating': 'INTEGER CHECK (rating >= 1 AND rating <= 5)'
         }

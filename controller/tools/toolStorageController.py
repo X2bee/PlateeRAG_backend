@@ -18,6 +18,39 @@ from service.database.logger_helper import create_logger
 logger = logging.getLogger("tool-storage")
 router = APIRouter()
 
+@router.get("/simple-list")
+async def simple_list_tools(request: Request):
+    """
+    사용자의 모든 툴 목록을 반환합니다.
+    """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    try:
+        tools_data = app_db.find_by_condition(
+            Tools,
+            {"user_id": user_id},
+            limit=1000,
+            orderby="updated_at",
+            join_user=True,
+            return_list=True,
+        )
+
+        backend_log.success("Tool list retrieved successfully",
+                          metadata={"tool_count": len(tools_data)})
+
+        logger.info(f"Found {len(tools_data)} tools for user {user_id}")
+        return tools_data
+
+    except Exception as e:
+        backend_log.error("Failed to list tools", exception=e)
+        logger.error(f"Error listing tools: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list tools: {str(e)}")
+
 @router.get("/list")
 async def list_tools(request: Request):
     """
@@ -227,94 +260,10 @@ async def save_tool(request: Request, tool_request: SaveToolRequest):
         logger.error(f"Error saving tool: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to save tool: {str(e)}")
 
-@router.get("/load/{function_id}")
-async def load_tool(request: Request, function_id: str):
-    """
-    특정 툴을 로드합니다.
-    """
-    login_user_id = extract_user_id_from_request(request)
-    if not login_user_id:
-        raise HTTPException(status_code=400, detail="User ID not found in request")
-
-    app_db = get_db_manager(request)
-    backend_log = create_logger(app_db, login_user_id, request)
-
-    try:
-        backend_log.info("Starting tool load operation",
-                        metadata={"function_id": function_id})
-
-        # 자신의 툴 또는 공유된 툴 검색
-        tool_meta = app_db.find_by_condition(
-            Tools,
-            {"function_id": function_id},
-            limit=1
-        )
-
-        if not tool_meta or len(tool_meta) == 0:
-            backend_log.warn("Tool not found",
-                           metadata={"function_id": function_id})
-            raise HTTPException(status_code=404, detail=f"Tool '{function_id}' not found")
-
-        tool = tool_meta[0]
-
-        # 권한 확인 (자신의 툴이거나 공유된 툴인지)
-        user = app_db.find_by_id(User, login_user_id)
-        user_groups = user.groups if user else []
-
-        if tool.user_id != int(login_user_id):
-            if not tool.is_shared or (tool.share_group and tool.share_group not in user_groups):
-                backend_log.warn("Tool access denied",
-                               metadata={"function_id": function_id})
-                raise HTTPException(status_code=403, detail="Access denied to this tool")
-
-        # api_header와 api_body가 문자열이면 파싱
-        api_header = tool.api_header
-        if isinstance(api_header, str):
-            api_header = json.loads(api_header) if api_header else {}
-
-        api_body = tool.api_body
-        if isinstance(api_body, str):
-            api_body = json.loads(api_body) if api_body else {}
-
-        metadata = tool.metadata
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata) if metadata else {}
-
-        tool_data = {
-            "function_name": tool.function_name,
-            "function_id": tool.function_id,
-            "description": tool.description,
-            "api_header": api_header,
-            "api_body": api_body,
-            "api_url": tool.api_url,
-            "api_method": tool.api_method,
-            "api_timeout": tool.api_timeout,
-            "response_filter": tool.response_filter,
-            "response_filter_path": tool.response_filter_path,
-            "response_filter_field": tool.response_filter_field,
-            "status": tool.status,
-            "metadata": metadata,
-        }
-
-        backend_log.success("Tool loaded successfully",
-                          metadata={"function_id": function_id,
-                                  "function_name": tool.function_name})
-
-        logger.info(f"Tool loaded successfully: {function_id}")
-        return JSONResponse(content=tool_data)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        backend_log.error("Tool load operation failed", exception=e,
-                         metadata={"function_id": function_id})
-        logger.error(f"Error loading tool: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to load tool: {str(e)}")
-
 @router.post("/update/{function_id}")
-async def update_tool(request: Request, function_id: str, update_dict: dict):
+async def update_tool(request: Request, tool_id: int, function_id: str, update_dict: dict):
     """
-    툴 정보를 업데이트합니다. (이름, 공유 설정 등)
+    툴 정보를 업데이트합니다. (모든 필드 업데이트 가능)
     """
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
@@ -324,6 +273,7 @@ async def update_tool(request: Request, function_id: str, update_dict: dict):
         existing_data = app_db.find_by_condition(
             Tools,
             {
+                "id": tool_id,
                 "user_id": user_id,
                 "function_id": function_id
             },
@@ -335,15 +285,37 @@ async def update_tool(request: Request, function_id: str, update_dict: dict):
 
         tool = existing_data[0]
 
-        # 업데이트 가능한 필드들
+        # 업데이트 가능한 모든 필드들
         if "function_name" in update_dict:
             tool.function_name = update_dict["function_name"]
+        if "description" in update_dict:
+            tool.description = update_dict["description"]
+        if "api_header" in update_dict:
+            tool.api_header = update_dict["api_header"]
+        if "api_body" in update_dict:
+            tool.api_body = update_dict["api_body"]
+        if "api_url" in update_dict:
+            tool.api_url = update_dict["api_url"]
+        if "api_method" in update_dict:
+            tool.api_method = update_dict["api_method"]
+        if "api_timeout" in update_dict:
+            tool.api_timeout = update_dict["api_timeout"]
+        if "response_filter" in update_dict:
+            tool.response_filter = update_dict["response_filter"]
+        if "response_filter_path" in update_dict:
+            tool.response_filter_path = update_dict["response_filter_path"]
+        if "response_filter_field" in update_dict:
+            tool.response_filter_field = update_dict["response_filter_field"]
+        if "status" in update_dict:
+            tool.status = update_dict["status"]
         if "is_shared" in update_dict:
             tool.is_shared = update_dict["is_shared"]
         if "share_group" in update_dict:
             tool.share_group = update_dict["share_group"]
         if "share_permissions" in update_dict:
             tool.share_permissions = update_dict["share_permissions"]
+        if "metadata" in update_dict:
+            tool.metadata = update_dict["metadata"]
 
         app_db.update(tool)
 
@@ -580,3 +552,205 @@ async def test_api(request: Request, test_request: dict):
         backend_log.error("API test operation failed", exception=e)
         logger.error(f"Error testing API: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to test API: {str(e)}")
+
+@router.post("/tool-test")
+async def test_tool(request: Request, tool_id: int, function_id: str):
+    """
+    툴의 API 엔드포인트를 테스트하고 결과에 따라 status를 업데이트합니다.
+    성공 시 status를 'active'로, 실패 시 'inactive'로 변경합니다.
+    """
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    try:
+        # 툴 정보 조회
+        tool_data = app_db.find_by_condition(
+            Tools,
+            {
+                "id": tool_id,
+                "user_id": user_id,
+                "function_id": function_id
+            },
+            limit=1
+        )
+
+        if not tool_data or len(tool_data) == 0:
+            backend_log.warn("Tool not found for testing",
+                           metadata={"function_id": function_id})
+            raise HTTPException(status_code=404, detail=f"Tool '{function_id}' not found")
+
+        tool = tool_data[0]
+
+        # 툴의 API 정보 추출
+        api_url = tool.api_url
+        api_method = tool.api_method or 'GET'
+        api_timeout = tool.api_timeout or 30
+
+        # api_header와 api_body 파싱
+        api_headers = tool.api_header
+        if isinstance(api_headers, str):
+            api_headers = json.loads(api_headers) if api_headers else {}
+
+        api_body = tool.api_body
+        if isinstance(api_body, str):
+            api_body = json.loads(api_body) if api_body else {}
+
+        if not api_url or not api_url.strip():
+            backend_log.warn("Tool has no API URL",
+                           metadata={"function_id": function_id})
+            raise HTTPException(status_code=400, detail="Tool has no API URL configured")
+
+        backend_log.info("Testing tool API endpoint",
+                        metadata={
+                            "function_id": function_id,
+                            "api_url": api_url,
+                            "api_method": api_method,
+                            "has_headers": bool(api_headers),
+                            "has_body": bool(api_body)
+                        })
+
+        # httpx를 사용하여 요청 전송
+        test_success = False
+        error_message = None
+
+        async with httpx.AsyncClient(timeout=api_timeout, follow_redirects=True) as client:
+            try:
+                # 요청 옵션 구성
+                request_kwargs = {
+                    "headers": api_headers if api_headers else {},
+                }
+
+                # GET이 아니고 body가 있는 경우에만 추가
+                if api_method.upper() != 'GET' and api_body:
+                    # Content-Type이 명시되지 않은 경우 기본값 설정
+                    if 'content-type' not in {k.lower() for k in request_kwargs["headers"].keys()}:
+                        request_kwargs["headers"]["Content-Type"] = "application/json"
+                    request_kwargs["json"] = api_body
+
+                # 요청 전송
+                logger.info(f"Sending {api_method} request to {api_url}")
+                response = await client.request(
+                    method=api_method.upper(),
+                    url=api_url,
+                    **request_kwargs
+                )
+
+                # 응답 처리
+                content_type = response.headers.get('content-type', '').lower()
+
+                # 응답 데이터 파싱
+                response_data = None
+                try:
+                    if 'application/json' in content_type:
+                        response_data = response.json()
+                    else:
+                        # JSON이 아닌 경우 텍스트로 읽기
+                        text = response.text
+                        try:
+                            # JSON 파싱 시도
+                            response_data = json.loads(text)
+                        except json.JSONDecodeError:
+                            # JSON 파싱 실패시 텍스트 그대로
+                            response_data = text
+                except Exception as parse_error:
+                    logger.warning(f"Failed to parse response: {str(parse_error)}")
+                    response_data = response.text
+
+                # 응답 헤더 추출
+                response_headers = dict(response.headers)
+
+                # 성공 여부 판단
+                test_success = response.is_success
+
+                result = {
+                    "success": test_success,
+                    "data": {
+                        "status": response.status_code,
+                        "statusText": response.reason_phrase,
+                        "contentType": content_type or 'unknown',
+                        "headers": response_headers,
+                        "response": response_data
+                    }
+                }
+
+            except httpx.TimeoutException:
+                test_success = False
+                error_message = f"요청 시간 초과 ({api_timeout}초)"
+                result = {
+                    "success": False,
+                    "data": None,
+                    "error": error_message
+                }
+
+            except httpx.ConnectError as e:
+                test_success = False
+                error_message = f"연결 실패: {str(e)}"
+                result = {
+                    "success": False,
+                    "data": None,
+                    "error": error_message
+                }
+
+            except httpx.HTTPStatusError as e:
+                test_success = False
+                error_message = f"HTTP 오류: {e.response.status_code} {e.response.reason_phrase}"
+                result = {
+                    "success": False,
+                    "data": {
+                        "status": e.response.status_code,
+                        "statusText": e.response.reason_phrase,
+                        "response": e.response.text
+                    },
+                    "error": error_message
+                }
+
+            except Exception as e:
+                test_success = False
+                error_message = f"요청 실패: {str(e)}"
+                result = {
+                    "success": False,
+                    "data": None,
+                    "error": error_message
+                }
+
+        # 테스트 결과에 따라 status 업데이트
+        new_status = "active" if test_success else "inactive"
+        tool.status = new_status
+
+        update_response = app_db.update(tool)
+        if not update_response or update_response.get("result") != "success":
+            backend_log.error("Failed to update tool status",
+                            metadata={
+                                "function_id": function_id,
+                                "new_status": new_status
+                            })
+            raise HTTPException(status_code=500, detail="Failed to update tool status")
+
+        backend_log.success("Tool test completed and status updated",
+                          metadata={
+                              "function_id": function_id,
+                              "api_url": api_url,
+                              "test_success": test_success,
+                              "new_status": new_status
+                          })
+
+        logger.info(f"Tool test completed: {function_id} - Status: {new_status}")
+
+        # 결과에 status 정보 추가
+        result["tool_status"] = new_status
+        result["function_id"] = function_id
+        result["function_name"] = tool.function_name
+
+        return JSONResponse(content=result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        backend_log.error("Tool test operation failed", exception=e,
+                         metadata={"function_id": function_id})
+        logger.error(f"Error testing tool: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to test tool: {str(e)}")
