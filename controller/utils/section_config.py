@@ -1,6 +1,6 @@
 available_sections = [
     # Workflow
-    "canvas", "workflows", "documents", "tool-storage", "tool-store", "prompt-store", "workflow-store",
+    "canvas", "workflows", "documents", "tool-storage", "tool-store", "prompt-store",
     # Data Management
     "data-station", "data-storage",
     # LLM-Models
