@@ -1151,6 +1151,213 @@ class DataManager:
             logger.error("사용자 콜백 실행 실패: %s", e)
             raise RuntimeError(f"사용자 콜백 실행 실패: {str(e)}")
 
+
+    # /service/data_manager/data_manager.py에 추가
+
+    # ========== 데이터셋 로드 메서드 ========== 섹션에 추가
+
+    def db_load_dataset(self, 
+                       db_config: Dict[str, Any],
+                       query: str = None,
+                       table_name: str = None,
+                       chunk_size: int = None) -> Dict[str, Any]:
+        """
+        데이터베이스에서 데이터셋 로드
+        
+        Args:
+            db_config: 데이터베이스 연결 설정
+                {
+                    'db_type': 'postgresql' | 'mysql' | 'sqlite',
+                    'host': str,
+                    'port': int,
+                    'database': str,
+                    'username': str,
+                    'password': str
+                }
+            query: SQL 쿼리 (query 또는 table_name 중 하나 필수)
+            table_name: 테이블명 (query 또는 table_name 중 하나 필수)
+            chunk_size: 청크 크기 (대용량 데이터 처리용)
+            
+        Returns:
+            Dict[str, Any]: 로드 결과 정보
+        """
+        if not self.is_active:
+            raise RuntimeError("DataManager is not active")
+
+        if not query and not table_name:
+            raise RuntimeError("query 또는 table_name 중 하나는 필수입니다")
+
+        try:
+            import sqlalchemy
+            from sqlalchemy import create_engine, text
+            import pandas as pd
+            
+            logger.info("DB 데이터셋 로드 시작: db_type=%s, user=%s", 
+                       db_config.get('db_type'), self.user_id)
+            
+            # ========== 1. DB 연결 문자열 생성 ==========
+            db_type = db_config.get('db_type', 'postgresql').lower()
+            
+            if db_type == 'postgresql':
+                connection_string = (
+                    f"postgresql://{db_config['username']}:{db_config['password']}"
+                    f"@{db_config['host']}:{db_config.get('port', 5432)}"
+                    f"/{db_config['database']}"
+                )
+            elif db_type == 'mysql':
+                connection_string = (
+                    f"mysql+pymysql://{db_config['username']}:{db_config['password']}"
+                    f"@{db_config['host']}:{db_config.get('port', 3306)}"
+                    f"/{db_config['database']}"
+                )
+            elif db_type == 'sqlite':
+                connection_string = f"sqlite:///{db_config['database']}"
+            else:
+                raise RuntimeError(f"지원되지 않는 DB 타입: {db_type}")
+            
+            # ========== 2. DB 연결 및 데이터 로드 ==========
+            engine = create_engine(connection_string)
+            
+            # SQL 쿼리 결정
+            if query:
+                sql_query = query
+                logger.info(f"  └─ 사용자 정의 쿼리 실행")
+            else:
+                sql_query = f"SELECT * FROM {table_name}"
+                logger.info(f"  └─ 테이블 전체 조회: {table_name}")
+            
+            # 데이터 로드
+            if chunk_size:
+                # 청크 단위로 로드 (대용량 데이터)
+                logger.info(f"  └─ 청크 크기: {chunk_size}")
+                chunks = []
+                for chunk_df in pd.read_sql(sql_query, engine, chunksize=chunk_size):
+                    chunks.append(pa.Table.from_pandas(chunk_df))
+                combined_table = pa.concat_tables(chunks)
+                logger.info(f"  └─ {len(chunks)}개 청크 병합 완료")
+            else:
+                # 전체 로드
+                df = pd.read_sql(sql_query, engine)
+                combined_table = pa.Table.from_pandas(df)
+            
+            engine.dispose()
+            
+            logger.info("테이블 로드 완료: %d행, %d열", 
+                       combined_table.num_rows, combined_table.num_columns)
+            
+            # ========== 3. 데이터셋 설정 ==========
+            self.dataset = combined_table
+            
+            # load_count 증가
+            self.dataset_load_count += 1
+            is_first_load = (self.dataset_id is None)
+            
+            # ========== 4. Dataset ID 생성 및 Redis 등록 ==========
+            if is_first_load:
+                db_identifier = f"{db_type}_{db_config['database']}"
+                if table_name:
+                    db_identifier += f"_{table_name}"
+                unique_id = uuid.uuid4().hex[:8]
+                self.dataset_id = f"ds_db_{db_identifier}_{unique_id}"
+                logger.info(f"✨ 새 Dataset ID 생성: {self.dataset_id}")
+                
+                if self.redis_manager:
+                    try:
+                        dataset_metadata = {
+                            "source_type": "database",
+                            "db_type": db_type,
+                            "database": db_config['database'],
+                            "table_name": table_name,
+                            "query": query if query else f"SELECT * FROM {table_name}",
+                            "created_at": datetime.now().isoformat(),
+                            "created_by": self.user_id,
+                            "original_rows": combined_table.num_rows,
+                            "original_columns": combined_table.num_columns
+                        }
+                        self.redis_manager.register_dataset(
+                            self.dataset_id, self.user_id, dataset_metadata
+                        )
+                        self.redis_manager.link_manager_to_dataset(
+                            self.manager_id, self.dataset_id, self.user_id
+                        )
+                        logger.info("✅ Redis 데이터셋 등록 및 Manager-Dataset 링크 완료")
+                    except Exception as e:
+                        logger.warning(f"Redis 등록 실패: {e}")
+                
+                # MinIO 원본 저장
+                if self.minio_storage:
+                    try:
+                        metadata_for_minio = dataset_metadata if 'dataset_metadata' in locals() else {}
+                        self.minio_storage.save_original_dataset(
+                            self.user_id, self.dataset_id, self.dataset, metadata_for_minio
+                        )
+                        logger.info(f"✅ MinIO 원본 저장 완료: raw-datasets/{self.user_id}/{self.dataset_id}/original.parquet")
+                    except Exception as e:
+                        logger.warning(f"MinIO 원본 저장 실패(계속): {e}")
+            else:
+                logger.info(f"♻️ 기존 Dataset 재로드: {self.dataset_id} (로드 {self.dataset_load_count}회차)")
+            
+            # ========== 5. 소스 정보 생성 ==========
+            source_info = {
+                "type": "database",
+                "db_type": db_type,
+                "database": db_config['database'],
+                "table_name": table_name,
+                "query": query if query else f"SELECT * FROM {table_name}",
+                "loaded_at": datetime.now().isoformat(),
+                "checksum": self._calculate_checksum(self.dataset),
+                "num_rows": combined_table.num_rows,
+                "num_columns": combined_table.num_columns,
+                "columns": combined_table.column_names,
+                "load_count": self.dataset_load_count,
+                "is_reload": not is_first_load
+            }
+            
+            # Redis에 소스 정보 저장
+            if self.redis_manager:
+                try:
+                    self.redis_manager.save_source_info(self.dataset_id, source_info)
+                    logger.info("✅ Redis 소스 정보 저장")
+                except Exception as e:
+                    logger.warning(f"Redis 소스 정보 저장 실패: {e}")
+            
+            # ========== 6. 버전 저장 ==========
+            operation_name = "initial_load" if is_first_load else f"reload_{self.dataset_load_count}"
+            logger.info(f"💾 버전 저장: operation={operation_name}, load_count={self.dataset_load_count}")
+            
+            self._save_version(operation_name, source_info)
+            
+            # ========== 7. 결과 반환 ==========
+            result_info = {
+                "success": True,
+                "dataset_id": self.dataset_id,
+                "manager_id": self.manager_id,
+                "user_id": self.user_id,
+                "db_type": db_type,
+                "database": db_config['database'],
+                "table_name": table_name,
+                "query": query,
+                "num_rows": combined_table.num_rows,
+                "num_columns": combined_table.num_columns,
+                "columns": combined_table.column_names,
+                "loaded_at": datetime.now().isoformat(),
+                "is_new_dataset": is_first_load,
+                "current_version": self.current_version - 1,
+                "load_count": self.dataset_load_count,
+                "is_new_version": not is_first_load,
+                "source_info": source_info
+            }
+            
+            logger.info(f"✅ DB 데이터셋 로드 완료: dataset={self.dataset_id}, version={self.current_version - 1}")
+            return result_info
+            
+        except ImportError as e:
+            logger.error(f"필수 패키지 미설치: {e}")
+            raise RuntimeError(f"DB 연결에 필요한 패키지가 설치되지 않았습니다: {str(e)}")
+        except Exception as e:
+            logger.error(f"DB 데이터셋 로드 실패: {e}", exc_info=True)
+            raise RuntimeError(f"DB 데이터셋 로드 실패: {str(e)}")
+
     # ========== 정리 및 소멸자 ==========
 
     def cleanup(self):
