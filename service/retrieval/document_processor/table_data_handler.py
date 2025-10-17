@@ -52,14 +52,25 @@ async def extract_text_from_excel(file_path: str) -> str:
 
 async def extract_text_from_csv(file_path: str, encoding: str = "utf-8") -> str:
     text = ""
-    try:
-        async with aiofiles.open(file_path, mode="r", encoding=encoding) as f:
-            reader = csv.reader((await f.read()).splitlines())
-            for row in reader:
-                row_text = " | ".join(row)
-                if row_text.strip():
-                    text += row_text + "\n"
-        return clean_text(text)
-    except Exception as e:
-        logger.error(f"Error extracting text from CSV {file_path}: {e}")
-        raise
+    encodings_to_try = [encoding, "cp949", "euc-kr", "utf-8-sig", "latin-1"]
+    
+    for enc in encodings_to_try:
+        try:
+            async with aiofiles.open(file_path, mode="r", encoding=enc) as f:
+                content = await f.read()
+                reader = csv.reader(content.splitlines())
+                for row in reader:
+                    row_text = " | ".join(row)
+                    if row_text.strip():
+                        text += row_text + "\n"
+                logger.info(f"Successfully read CSV with encoding: {enc}")
+                return clean_text(text)
+        except UnicodeDecodeError:
+            logger.debug(f"Failed to decode with {enc}, trying next encoding...")
+            continue
+        except Exception as e:
+            logger.error(f"Error extracting text from CSV {file_path} with {enc}: {e}")
+            if enc == encodings_to_try[-1]:  # 마지막 시도였다면
+                raise
+    
+    raise Exception(f"Could not decode CSV file with any of the attempted encodings: {encodings_to_try}")
