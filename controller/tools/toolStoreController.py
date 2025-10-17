@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_db_manager
 from controller.tools.models.requests import UploadToolStoreRequest
-from service.database.models.tools import Tools, ToolStoreMeta
+from service.database.models.tools import Tools, ToolStoreMeta, ToolStoreRating
 from service.database.models.user import User
 from service.database.logger_helper import create_logger
 
@@ -425,3 +425,134 @@ async def download_tool_from_store(request: Request, store_tool_id: str, functio
                          metadata={"function_upload_id": function_upload_id})
         logger.error(f"Error downloading tool from store: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to download tool from store: {str(e)}")
+
+@router.post("/rating/{store_tool_id}")
+async def rate_tool(
+    request: Request,
+    store_tool_id: str,
+    user_id: int,
+    function_upload_id: str,
+    rating: int
+):
+    """
+    특정 tool에 대한 평가를 추가합니다.
+    """
+    login_user_id = extract_user_id_from_request(request)
+    if not login_user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    if rating < 1 or rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, login_user_id, request)
+
+    try:
+        backend_log.info(
+            "Starting tool rating",
+            metadata={
+                "store_tool_id": store_tool_id,
+                "function_upload_id": function_upload_id
+            }
+        )
+
+        existing_data = app_db.find_by_condition(
+            ToolStoreMeta,
+            {
+                "id": store_tool_id,
+                "user_id": user_id,
+                "function_upload_id": function_upload_id,
+            },
+            limit=1
+        )
+
+        if not existing_data:
+            backend_log.warn(
+                "Tool not found for rating",
+                metadata={
+                    "store_tool_id": store_tool_id,
+                    "function_upload_id": function_upload_id
+                }
+            )
+            raise HTTPException(status_code=404, detail=f"Tool '{function_upload_id}' not found")
+
+        existing_data = existing_data[0]
+
+        existing_rating = app_db.find_by_condition(
+            ToolStoreRating,
+            {
+                "user_id": login_user_id,
+                "tool_store_id": existing_data.id,
+            },
+            limit=1
+        )
+
+        if existing_rating:
+            # 기존 평가 업데이트
+            existing_rating = existing_rating[0]
+            existing_rating_score = existing_rating.rating
+            existing_rating.rating = rating
+            existing_data.rating_sum = existing_data.rating_sum - existing_rating_score + rating
+            app_db.update(existing_rating)
+            app_db.update(existing_data)
+            backend_log.info(
+                "Updated existing tool rating",
+                metadata={
+                    "store_tool_id": store_tool_id,
+                    "function_upload_id": function_upload_id,
+                    "rating": rating,
+                    "tool_store_id": existing_data.id,
+                }
+            )
+        else:
+            # 새로운 평가 추가
+            new_rating = ToolStoreRating(
+                user_id=login_user_id,
+                tool_store_id=existing_data.id,
+                function_upload_id=existing_data.function_upload_id,
+                rating=rating
+            )
+            app_db.insert(new_rating)
+            existing_data.rating_count += 1
+            existing_data.rating_sum += rating
+            app_db.update(existing_data)
+            backend_log.info(
+                "Inserted new tool rating",
+                metadata={
+                    "store_tool_id": store_tool_id,
+                    "function_upload_id": function_upload_id,
+                    "rating": rating,
+                    "tool_store_id": existing_data.id,
+                }
+            )
+
+        backend_log.success(
+            "Tool rating completed successfully",
+            metadata={
+                "store_tool_id": store_tool_id,
+                "function_upload_id": function_upload_id,
+                "rating": rating
+            }
+        )
+
+        logger.info(f"Tool rated successfully: {store_tool_id} / {function_upload_id}")
+        return {
+            "success": True,
+            "message": f"Tool '{function_upload_id}' rated successfully",
+            "rating": rating,
+            "average_rating": existing_data.rating_sum / existing_data.rating_count if existing_data.rating_count > 0 else 0
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        backend_log.error(
+            "Tool rating failed",
+            exception=e,
+            metadata={
+                "store_tool_id": store_tool_id,
+                "function_upload_id": function_upload_id
+            }
+        )
+        logger.error(f"Error rating tool: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to rate tool: {str(e)}")
