@@ -7,39 +7,35 @@ from editor.utils.helper.parse_helper import parse_param_value
 from langchain.agents import tool
 import json
 import re
+from editor.utils.helper.async_helper import sync_run_async
+from editor.utils.helper.service_helper import AppServiceManager
+from fastapi import Request
+from controller.tools.toolStorageController import simple_list_tools
+from service.database.models.tools import Tools
+
 logger = logging.getLogger(__name__)
 
 class APICallingTool(Node):
     categoryId = "xgen"
     functionId = "api_loader"
-    nodeId = "api_loader/APICallingTool"
-    nodeName = "API Calling Tool"
-    description = "API 호출을 위한 Tool을 전달"
+    nodeId = "api_loader/APIToolLoader"
+    nodeName = "API Tool Loader"
+    description = "API Tool Storage에서 API 호출 도구를 로드합니다. 외부 API를 호출하여 특정 데이터를 검색하거나 작업을 수행해야 할 때 이 도구를 사용하십시오."
     tags = ["api", "rag", "setup"]
 
     inputs = [
-        {"id": "args_schema", "name": "ArgsSchema", "type": "InputSchema"},
     ]
     outputs = [
         {"id": "tools", "name": "Tools", "type": "TOOL"},
     ]
 
     parameters = [
-        {"id": "tool_name", "name": "Tool Name", "type": "STR", "value": "api_calling_tool", "required": True},
-        {"id": "description", "name": "Description", "type": "STR", "value": "Use this tool when you need to call an external API to retrieve specific data or perform an operation. Call this tool when the user requests information that requires an API call to external services.", "required": True, "description": "이 도구를 언제 사용하여야 하는지 설명합니다. AI는 해당 설명을 통해, 해당 도구를 언제 호출해야할지 결정할 수 있습니다."},
-        {"id": "api_endpoint", "name": "API Endpoint", "type": "STR", "value": "", "required": True, "description": "해당 도구의 실행으로 호출할 API의 엔드포인트 URL입니다."},
-        {"id": "method", "name": "HTTP Method", "type": "STR", "value": "GET", "required": True, "options": [
-            {"value": "GET", "label": "GET"},
-            {"value": "POST", "label": "POST"},
-            {"value": "PUT", "label": "PUT"},
-            {"value": "DELETE", "label": "DELETE"},
-            {"value": "PATCH", "label": "PATCH"}
-        ]},
-        {"id": "timeout", "name": "Timeout (seconds)", "type": "INT", "value": 30, "min": 1, "max": 300},
-        {"id": "enable_response_filtering", "name": "Enable Response Filtering", "type": "BOOL", "value": False, "description": "JSON 응답에서 특정 데이터만 추출하여 반환할지 여부를 설정합니다."},
-        {"id": "response_filter_path", "name": "Response Filter Path", "type": "STR", "value": "", "description": "JSON 응답에서 추출할 데이터의 경로를 설정합니다. (예: 'payload.searchDataList')"},
-        {"id": "response_filter_fields", "name": "Response Filter Fields", "type": "STR", "value": "", "description": "각 객체에서 추출할 필드들을 콤마로 구분하여 입력합니다. (예: 'goodsNm,salePrc')"},
+        {"id": "tool_id", "name": "API Tool ID", "type": "STR", "value": "Select Tool", "required": True, "is_api": True, "api_name": "api_collection", "options": []},
     ]
+
+    def api_collection(self, request: Request) -> Dict[str, Any]:
+        tools = sync_run_async(simple_list_tools(request))
+        return [{"value": tool.get("id"), "label": f"{tool.get("function_name")}({tool.get("username", "unknown")})"} for tool in tools]
 
     @staticmethod
     def get_nested_value(data, path):
@@ -99,28 +95,101 @@ class APICallingTool(Node):
         # 배열도 객체도 아닌 경우 그대로 반환
         return extracted_data
 
-    def execute(self, tool_name, description, api_endpoint, method="GET", timeout=30,
-                enable_response_filtering=False, response_filter_path="", response_filter_fields="",
-                args_schema: BaseModel=None, *args, **kwargs):
-        description = description + "\n명시적인 요청이 없다면, return_dict를 False로 하여 STR 형태의 응답을 받으려고 시도하십시오."
-        additional_params = kwargs.get("additional_params", {})
-        def create_api_tool():
-            if args_schema is None:
-                # OpenAI API 호환을 위한 기본 스키마 생성
-                from pydantic import BaseModel
+    def execute(self, tool_id, *args, **kwargs):
+        app_db = AppServiceManager.get_db_manager()
+        tool_data = app_db.find_by_id(Tools, tool_id)
+        if not tool_data:
+            logger.error(f"Tool with ID {tool_id} not found")
+            return {"error": "Tool not found"}, 404
+
+        description = tool_data.description + "\n명시적인 요청이 없다면, return_dict를 False로 하여 STR 형태의 응답을 받으려고 시도하십시오."
+
+        # API 정보 추출
+        tool_name = tool_data.function_id
+        api_endpoint = tool_data.api_url
+        method = tool_data.api_method or 'GET'
+        timeout = tool_data.api_timeout or 30
+
+        # api_header와 api_body 파싱
+        api_headers = tool_data.api_header
+        if isinstance(api_headers, str):
+            api_headers = json.loads(api_headers) if api_headers else {}
+
+        # response filter 정보
+        enable_response_filtering = tool_data.response_filter or False
+        response_filter_path = tool_data.response_filter_path or ""
+        response_filter_fields = tool_data.response_filter_field or ""
+
+        # api_body를 기반으로 ArgsSchema 동적 생성
+        api_body_schema = tool_data.api_body
+        if isinstance(api_body_schema, str):
+            api_body_schema = json.loads(api_body_schema) if api_body_schema else {}
+
+        args_schema = None
+        if api_body_schema and isinstance(api_body_schema, dict) and 'properties' in api_body_schema:
+            properties = api_body_schema.get('properties', {})
+
+            # properties가 비어있으면 기본 스키마 사용
+            if not properties:
                 class DefaultSchema(BaseModel):
                     return_dict: bool = Field(default=False, description="Whether to return the response as a dictionary or string")
-                actual_args_schema = DefaultSchema
+                args_schema = DefaultSchema
             else:
-                actual_args_schema = args_schema
+                # JSON Schema에서 Pydantic 모델 생성
+                fields = {}
+                required_fields = api_body_schema.get('required', [])
+
+                for field_name, field_info in properties.items():
+                    field_type = field_info.get('type', 'string')
+                    field_description = field_info.get('description', '')
+                    field_enum = field_info.get('enum', None)
+
+                    # 타입 매핑
+                    type_mapping = {
+                        'string': str,
+                        'integer': int,
+                        'number': float,
+                        'boolean': bool,
+                        'array': list,
+                        'object': dict
+                    }
+                    python_type = type_mapping.get(field_type, str)
+
+                    # Field 생성
+                    field_kwargs = {'description': field_description}
+
+                    # enum이 있으면 추가
+                    if field_enum:
+                        from typing import Literal
+                        # Literal 타입으로 enum 제약 추가
+                        if python_type == str:
+                            python_type = Literal[tuple(field_enum)]
+
+                    # required 체크
+                    if field_name in required_fields:
+                        fields[field_name] = (python_type, Field(**field_kwargs))
+                    else:
+                        fields[field_name] = (python_type, Field(default=None, **field_kwargs))
+
+                # Pydantic 모델 생성
+                args_schema = create_model('DynamicAPISchema', **fields)
+        else:
+            class DefaultSchema(BaseModel):
+                return_dict: bool = Field(default=False, description="Whether to return the response as a dictionary or string")
+            args_schema = DefaultSchema
+
+        additional_params = kwargs.get("additional_params", {})
+
+        def create_api_tool():
+            actual_args_schema = args_schema
 
             @tool(tool_name, description=description, args_schema=actual_args_schema)
-            def api_tool(return_dict: bool = False, **kwargs) -> str:
+            def api_tool(return_dict: bool = False, **tool_kwargs) -> str:
                 logger.info(f"Creating API tool with name: {tool_name}, endpoint: {api_endpoint}, method: {method}, timeout: {timeout}")
 
-                if not kwargs:
-                    kwargs = {}
-                request_data = kwargs if kwargs else {}
+                if not tool_kwargs:
+                    tool_kwargs = {}
+                request_data = tool_kwargs if tool_kwargs else {}
 
                 if additional_params and additional_params != {}:
                     parsed_additional_params = {}
@@ -142,11 +211,13 @@ class APICallingTool(Node):
                     # HTTP 메서드에 따라 요청 방식 결정
                     method_upper = method.upper()
 
-                    # 공통 헤더 설정
+                    # 공통 헤더 설정 (api_headers와 병합)
                     headers = {
                         'Content-Type': 'application/json',
                         'User-Agent': 'PlateeRAG-APICallingTool/1.0'
                     }
+                    if api_headers:
+                        headers.update(api_headers)
 
                     # API 호출
                     if method_upper == "GET":
@@ -158,7 +229,7 @@ class APICallingTool(Node):
                             headers=headers,
                             timeout=timeout
                         )
-                        logger.info(f"GET request to {endpoint} completed with status code: {response}")
+                        logger.info(f"GET request to {endpoint} completed with status code: {response.status_code}")
                     elif method_upper in ["POST", "PUT", "PATCH"]:
                         json_data = request_data if request_data else None
                         logger.info(f"Making {method_upper} request to {endpoint} with data: {json_data}")

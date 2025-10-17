@@ -1,3 +1,4 @@
+#/controller/data_manager/dataManagerProcessingController.py
 from fastapi import APIRouter, HTTPException, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -11,6 +12,7 @@ import collections
 import collections.abc
 if not hasattr(collections, 'Callable'):
     collections.Callable = collections.abc.Callable
+import mlflow
 
 router = APIRouter(prefix="/processing", tags=["data-manager"])
 logger = logging.getLogger("data-manager-controller")
@@ -132,7 +134,7 @@ def get_manager_with_auth(registry, manager_id: str, user_id: str):
     description="Huggingface 리포지토리에서 데이터셋을 다운로드하고 pyarrow로 적재합니다.",
     response_model=Dict[str, Any])
 async def hf_download_dataset(request: Request, download_request: DownloadDatasetRequest) -> Dict[str, Any]:
-    """데이터셋 다운로드 및 적재"""
+    """데이터셋 다운로드 및 적재 (버전 정보 포함)"""
     try:
         user_id = extract_user_id_from_request(request)
         if not user_id:
@@ -148,13 +150,22 @@ async def hf_download_dataset(request: Request, download_request: DownloadDatase
             split=download_request.split
         )
 
-        logger.info(f"Dataset downloaded and loaded for manager {download_request.manager_id} from {download_request.repo_id}")
+        # 버전 정보가 포함된 로그
+        if result.get("is_new_version"):
+            logger.info(f"Dataset re-loaded (v{result['load_count']}): {download_request.manager_id} from {download_request.repo_id}")
+        else:
+            logger.info(f"Dataset loaded (initial): {download_request.manager_id} from {download_request.repo_id}")
 
         return {
             "success": True,
             "manager_id": download_request.manager_id,
-            "message": "데이터셋이 성공적으로 다운로드되고 적재되었습니다",
-            "download_info": result
+            "message": f"데이터셋이 성공적으로 다운로드되고 적재되었습니다 (v{result['load_count']})",
+            "download_info": result,
+            "version_info": {
+                "dataset_id": result.get("dataset_id"),
+                "load_count": result.get("load_count"),
+                "is_new_version": result.get("is_new_version", False)
+            }
         }
 
     except HTTPException:
@@ -167,16 +178,17 @@ async def hf_download_dataset(request: Request, download_request: DownloadDatase
         raise HTTPException(status_code=500, detail="데이터셋 다운로드 중 오류가 발생했습니다")
 
 
+
 @router.post("/local/upload-dataset",
     summary="로컬 파일 업로드 및 자동 적재",
     description="로컬 파일들을 업로드하고 즉시 적재. 다중 파일 지원.",
     response_model=Dict[str, Any])
 async def local_upload_dataset(
     request: Request,
-    files: List[UploadFile] = File(..., description="업로드할 데이터셋 파일들 (parquet 또는 csv)"),
-    manager_id: str = Form(..., description="매니저 ID")
+    files: List[UploadFile] = File(...),
+    manager_id: str = Form(...)
 ) -> Dict[str, Any]:
-    """로컬 파일 업로드 및 자동 적재"""
+    """로컬 파일 업로드 (버전 정보 포함)"""
     try:
         user_id = extract_user_id_from_request(request)
         if not user_id:
@@ -185,7 +197,7 @@ async def local_upload_dataset(
         registry = get_data_manager_registry(request)
         manager = get_manager_with_auth(registry, manager_id, user_id)
 
-        # 파일 형식 검증 - 모든 파일이 같은 형식이어야 함
+        # 파일 형식 검증
         file_extensions = [file.filename.split('.')[-1].lower() for file in files]
         unique_extensions = set(file_extensions)
 
@@ -199,23 +211,31 @@ async def local_upload_dataset(
         if file_type not in ['parquet', 'csv']:
             raise HTTPException(
                 status_code=400,
-                detail=f"지원되지 않는 파일 형식입니다. parquet 또는 csv 파일만 지원됩니다. (업로드된 형식: {file_type})"
+                detail=f"지원되지 않는 파일 형식입니다. (업로드된 형식: {file_type})"
             )
 
-        # 파일들과 이름들 준비
         uploaded_files = [file.file for file in files]
         filenames = [file.filename for file in files]
 
         # 업로드 및 자동 적재
         result = manager.local_upload_and_load_dataset(uploaded_files, filenames)
 
-        logger.info("로컬 데이터셋 업로드 완료: 매니저 %s, 파일 %d개", manager_id, len(files))
+        # 버전 정보가 포함된 로그
+        if result.get("is_new_version"):
+            logger.info(f"로컬 데이터셋 재업로드 (v{result['load_count']}): {manager_id}, {len(files)}개 파일")
+        else:
+            logger.info(f"로컬 데이터셋 초기 업로드: {manager_id}, {len(files)}개 파일")
 
         return {
             "success": True,
             "manager_id": manager_id,
-            "message": f"{len(files)}개 파일이 성공적으로 업로드되고 적재되었습니다",
-            "dataset_info": result
+            "message": f"{len(files)}개 파일이 성공적으로 업로드되고 적재되었습니다 (v{result['load_count']})",
+            "dataset_info": result,
+            "version_info": {
+                "dataset_id": result.get("dataset_id"),
+                "load_count": result.get("load_count"),
+                "is_new_version": result.get("is_new_version", False)
+            }
         }
 
     except HTTPException:
@@ -1184,3 +1204,177 @@ async def get_mlflow_dataset_columns(request: Request, columns_request: GetMLflo
     except Exception as e:
         logger.error("MLflow 데이터셋 컬럼 조회 실패: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"컬럼 조회 실패: {str(e)}")
+
+
+# /controller/data_manager/dataManagerProcessingController.py (수정)
+
+@router.post("/upload-to-mlflow")
+async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlflowRequest):
+    """MLflow 업로드 (계보 정보 포함)"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        registry = get_data_manager_registry(request)
+        manager = get_manager_with_auth(registry, upload_request.manager_id, user_id)
+        
+        # MinIO/Redis 설정
+        os.environ['AWS_ACCESS_KEY_ID'] = 'minioadmin'
+        os.environ['AWS_SECRET_ACCESS_KEY'] = 'minioadmin123'
+        os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'https://minio.x2bee.com'
+        
+        # MLflow 설정
+        tracking_uri = upload_request.mlflow_tracking_uri or "https://polar-mlflow-git.x2bee.com"
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(upload_request.experiment_name)
+        
+        with mlflow.start_run() as run:
+            # 1. 데이터셋 파일 생성 및 업로드
+            if upload_request.format == "parquet":
+                file_path = manager.download_dataset_as_parquet()
+            else:
+                file_path = manager.download_dataset_as_csv()
+            
+            mlflow.log_artifact(file_path, artifact_path=upload_request.artifact_path)
+            
+            # 2. 버전 이력 가져오기
+            version_history = manager.get_version_history()
+            source_info = manager.redis_manager.get_source_info(manager.manager_id) if manager.redis_manager else {}
+            
+            # 3. 계보(Lineage) 정보 생성
+            lineage_info = {
+                "manager_id": upload_request.manager_id,
+                "dataset_id": manager.dataset_id,
+                "original_source": source_info,
+                "current_version": manager.current_version - 1,
+                "total_operations": len(version_history),
+                "version_history": version_history,
+                "transformations": [v["operation"] for v in version_history],
+                "final_checksum": manager._calculate_checksum(manager.dataset),
+                "uploaded_at": datetime.now().isoformat(),
+                "uploaded_by": user_id
+            }
+            
+            # 4. Lineage를 JSON으로 저장 및 업로드
+            with tempfile.NamedTemporaryFile(mode='w', suffix='_lineage.json', delete=False) as f:
+                json.dump(lineage_info, f, indent=2, default=str)
+                lineage_path = f.name
+            
+            mlflow.log_artifact(lineage_path, artifact_path=upload_request.artifact_path)
+            
+            # 5. 통계 정보 업로드
+            statistics = manager.get_dataset_statistics()
+            with tempfile.NamedTemporaryFile(mode='w', suffix='_stats.json', delete=False) as f:
+                json.dump(statistics, f, indent=2, default=str)
+                stats_path = f.name
+            
+            mlflow.log_artifact(stats_path, artifact_path=upload_request.artifact_path)
+            
+            # 6. 메트릭 로깅
+            if isinstance(statistics.get('statistics'), dict):
+                dataset_info = statistics['statistics'].get('dataset_info', {})
+                mlflow.log_metric("dataset_rows", dataset_info.get('total_rows', 0))
+                mlflow.log_metric("dataset_columns", dataset_info.get('total_columns', 0))
+                mlflow.log_metric("total_versions", len(version_history))
+            
+            # 7. 파라미터 로깅
+            mlflow.log_param("dataset_name", upload_request.dataset_name)
+            mlflow.log_param("format", upload_request.format)
+            mlflow.log_param("manager_id", upload_request.manager_id)
+            mlflow.log_param("dataset_id", manager.dataset_id)
+            mlflow.log_param("current_version", manager.current_version - 1)
+            
+            if source_info:
+                mlflow.log_param("source_type", source_info.get("type"))
+                if source_info.get("type") == "huggingface":
+                    mlflow.log_param("source_repo", source_info.get("repo_id"))
+                mlflow.log_param("original_checksum", source_info.get("checksum"))
+            
+            # 8. 태그 설정
+            default_tags = {
+                "dataset_name": upload_request.dataset_name,
+                "format": upload_request.format,
+                "user_id": user_id,
+                "manager_id": upload_request.manager_id,
+                "dataset_id": manager.dataset_id,
+                "final_checksum": lineage_info["final_checksum"],
+                "source_type": source_info.get("type") if source_info else "unknown"
+            }
+            
+            if upload_request.tags:
+                default_tags.update(upload_request.tags)
+            
+            mlflow.set_tags(default_tags)
+            
+            # 9. Redis에 MLflow Run 정보 저장
+            if manager.redis_manager:
+                manager.redis_manager.add_mlflow_run(
+                    upload_request.manager_id,
+                    run.info.run_id,
+                    {
+                        "experiment_name": upload_request.experiment_name,
+                        "dataset_name": upload_request.dataset_name,
+                        "artifact_uri": run.info.artifact_uri,
+                        "version_at_upload": manager.current_version - 1
+                    }
+                )
+            
+            # 10. MinIO의 processed-datasets에도 저장
+            if manager.minio_storage:
+                try:
+                    # Parquet 파일 복사
+                    buffer = io.BytesIO()
+                    pq.write_table(manager.dataset, buffer)
+                    buffer.seek(0)
+                    
+                    processed_path = f"{upload_request.experiment_name}/{run.info.run_id}/dataset.parquet"
+                    manager.minio_storage.client.put_object(
+                        "processed-datasets",
+                        processed_path,
+                        buffer,
+                        length=buffer.getbuffer().nbytes,
+                        content_type="application/octet-stream"
+                    )
+                    
+                    # Lineage 정보도 저장
+                    lineage_buffer = io.BytesIO(json.dumps(lineage_info, indent=2, default=str).encode())
+                    lineage_minio_path = f"{upload_request.experiment_name}/{run.info.run_id}/lineage.json"
+                    manager.minio_storage.client.put_object(
+                        "processed-datasets",
+                        lineage_minio_path,
+                        lineage_buffer,
+                        length=lineage_buffer.getbuffer().nbytes,
+                        content_type="application/json"
+                    )
+                    
+                    logger.info(f"MLflow 데이터셋이 MinIO에도 저장됨: {processed_path}")
+                    
+                except Exception as e:
+                    logger.warning(f"MinIO 저장 실패 (MLflow 업로드는 성공): {e}")
+            
+            # 임시 파일 정리
+            try:
+                os.unlink(file_path)
+                os.unlink(lineage_path)
+                os.unlink(stats_path)
+            except Exception as e:
+                logger.warning(f"임시 파일 정리 실패: {e}")
+        
+        logger.info(f"MLflow 업로드 완료: run_id={run.info.run_id}, manager={upload_request.manager_id}")
+        
+        return {
+            "success": True,
+            "manager_id": upload_request.manager_id,
+            "message": f"데이터셋이 버전 정보와 함께 MLflow에 업로드되었습니다",
+            "mlflow_info": {
+                "run_id": run.info.run_id,
+                "experiment_name": upload_request.experiment_name,
+                "dataset_name": upload_request.dataset_name,
+                "artifact_uri": run.info.artifact_uri,
+                "version": manager.current_version - 1,
+                "total_operations": len(version_history),
+                "lineage_saved": True
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"MLflow 업로드 실패: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"MLflow 업로드 실패: {str(e)}")

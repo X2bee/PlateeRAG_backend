@@ -17,6 +17,7 @@ from controller.rag.router import rag_router
 from controller.audio.router import audio_router
 from controller.data_manager.router import data_manager_router
 from controller.model.router import model_router
+from controller.tools.router import tool_router
 
 from controller.trainController import router as trainRouter
 from controller.llmController import router as llmRouter
@@ -314,6 +315,12 @@ def load_workflow_templates(app_db, templates_dir: str):
 async def lifespan(app: FastAPI):
     """애플리케이션 라이프사이클 관리"""
     try:
+        try:
+            from fix_existing_managers import recover_all_managers
+            recover_all_managers()
+        except Exception as e:
+            logger.error(f"⚠️ 매니저 자동 복구 실패: {e}")
+            
         print_xgen_logo()
         logger.info("🌟 Starting XGEN application lifespan...")
 
@@ -448,13 +455,123 @@ async def lifespan(app: FastAPI):
         app.state.execution_manager = execution_manager
         logger.info("✅ Step 7: Workflow execution manager initialized successfully!")
 
-        # 7.5. Data Manager Registry 초기화
         print_step_banner(7.5, "DATA MANAGER REGISTRY SETUP", "Setting up data manager registry")
         logger.info("⚙️  Step 7.5: Data manager registry initialization starting...")
         app.state.data_manager_registry = DataManagerRegistry()
         logger.info("✅ Step 7.5: Data manager registry initialized successfully!")
 
-        # 7.7. MLflow artifact service initialization
+        # ⭐ 7.6. 저장된 매니저 자동 로드 추가
+        print_step_banner(7.6, "AUTO-LOAD STORED MANAGERS", "Loading managers from storage to memory")
+        logger.info("⚙️  Step 7.6: Auto-loading stored managers...")
+
+        try:
+            import io
+            import pandas as pd
+            from service.data_manager.data_manager import DataManager
+            
+            registry = app.state.data_manager_registry
+            loaded_count = 0
+            failed_count = 0
+            
+            # Redis에서 모든 매니저 조회
+            cursor = 0
+            all_manager_ids = set()
+            
+            while True:
+                cursor, keys = registry.redis_manager.redis_client.scan(
+                    cursor=cursor,
+                    match="manager:*:owner",
+                    count=100
+                )
+                
+                for key in keys:
+                    if isinstance(key, bytes):
+                        key = key.decode('utf-8')
+                    
+                    parts = key.split(':')
+                    if len(parts) >= 3:
+                        manager_id = parts[1]
+                        all_manager_ids.add(manager_id)
+                
+                if cursor == 0:
+                    break
+            
+            logger.info(f"  └─ 발견된 매니저: {len(all_manager_ids)}개")
+            
+            # 각 매니저를 메모리에 로드
+            for manager_id in all_manager_ids:
+                try:
+                    # 소유자 조회
+                    owner = registry.redis_manager.redis_client.get(f"manager:{manager_id}:owner")
+                    if not owner:
+                        continue
+                    
+                    # 현재 버전 조회
+                    current_version = registry.redis_manager.get_current_version(manager_id)
+                    if current_version == 0:
+                        logger.debug(f"  ⏭️  스킵: {manager_id} (버전 없음)")
+                        continue
+                    
+                    # 버전 메타데이터 조회
+                    version_info = registry.redis_manager.get_version_metadata(
+                        manager_id, current_version - 1
+                    )
+                    
+                    if not version_info or version_info.get('num_rows', 0) == 0:
+                        logger.debug(f"  ⏭️  스킵: {manager_id} (데이터 없음)")
+                        continue
+                    
+                    # MinIO에서 Parquet 로드
+                    try:
+                        # versions 버킷 시도
+                        version_key = f"{manager_id}/version_{current_version - 1}.parquet"
+                        response = registry.minio_storage.client.get_object(
+                            registry.minio_storage.versions_bucket,
+                            version_key
+                        )
+                        
+                        buffer = io.BytesIO(response.read())
+                        response.close()
+                        response.release_conn()
+                        
+                        df = pd.read_parquet(buffer)
+                        
+                    except Exception as e:
+                        # raw-datasets 버킷 시도
+                        try:
+                            original_key = f"{owner}/{manager_id}/original.parquet"
+                            response = registry.minio_storage.client.get_object(
+                                registry.minio_storage.raw_datasets_bucket,
+                                original_key
+                            )
+                            
+                            buffer = io.BytesIO(response.read())
+                            response.close()
+                            response.release_conn()
+                            
+                            df = pd.read_parquet(buffer)
+                            
+                        except Exception as e2:
+                            logger.warning(f"  ⚠️  실패: {manager_id} - {e2}")
+                            failed_count += 1
+                            continue
+                    
+                    # 메모리에 DataManager 생성 및 등록
+                    new_manager = DataManager(manager_id, df)
+                    registry.register_manager(manager_id, new_manager, owner)
+                    
+                    loaded_count += 1
+                    logger.debug(f"  ✅ 로드: {manager_id} ({len(df)} rows)")
+                    
+                except Exception as e:
+                    logger.error(f"  ❌ 오류: {manager_id} - {e}")
+                    failed_count += 1
+            
+            logger.info(f"✅ Step 7.6: 자동 로드 완료! 성공: {loaded_count}개, 실패: {failed_count}개")
+            
+        except Exception as e:
+            logger.error(f"❌ Step 7.6: 자동 로드 실패: {e}", exc_info=True)
+                # 7.7. MLflow artifact service initialization
         print_step_banner(7.7, "MLFLOW ARTIFACT SERVICE", "Integrating MLflow tracking and artifacts")
         mlflow_tracking_uri = os.getenv("MLFLOW_URL", "").strip()
         mlflow_default_experiment_id = os.getenv("MLFLOW_DEFAULT_EXPERIMENT_ID")
@@ -681,6 +798,7 @@ app.include_router(rag_router)
 app.include_router(audio_router)
 app.include_router(data_manager_router)
 app.include_router(model_router)
+app.include_router(tool_router)
 
 app.include_router(authRouter)
 app.include_router(llmRouter)
@@ -707,4 +825,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.warning(f"Failed to load config for uvicorn: {e}")
         logger.info("Using default values for uvicorn")
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+        uvicorn.run("main:app", host="0.0.0.0", port=10, reload=False)
