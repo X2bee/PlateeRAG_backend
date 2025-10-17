@@ -35,22 +35,16 @@ async def list_tools(request: Request):
             Tools,
             {"user_id": user_id},
             limit=1000,
-            select_columns=["function_name", "function_id", "updated_at"],
-            orderby="updated_at"
+            orderby="updated_at",
+            join_user=True,
+            return_list=True
         )
 
-        tools_list = []
-        for tool in tools_data:
-            tools_list.append({
-                "function_name": tool.function_name,
-                "function_id": tool.function_id
-            })
-
         backend_log.success("Tool list retrieved successfully",
-                          metadata={"tool_count": len(tools_list)})
+                          metadata={"tool_count": len(tools_data)})
 
-        logger.info(f"Found {len(tools_list)} tools for user {user_id}")
-        return JSONResponse(content={"tools": tools_list})
+        logger.info(f"Found {len(tools_data)} tools for user {user_id}")
+        return {"tools": tools_data}
 
     except Exception as e:
         backend_log.error("Failed to list tools", exception=e)

@@ -63,19 +63,32 @@ class APICallingTool(Node):
     @staticmethod
     def filter_response_data(response_data, filter_path, filter_fields):
         """응답 데이터에서 지정된 경로와 필드만 추출합니다."""
-        if not filter_path or not filter_fields:
-            return response_data
-
-        # 필터 경로로 데이터 추출
-        extracted_data = APICallingTool.get_nested_value(response_data, filter_path)
-        if extracted_data is None:
-            logger.warning(f"Filter path '{filter_path}' not found in response")
+        # 필터 필드가 없으면 원본 반환
+        if not filter_fields:
+            # 경로만 있는 경우 해당 경로의 데이터 추출
+            if filter_path:
+                extracted_data = APICallingTool.get_nested_value(response_data, filter_path)
+                return extracted_data if extracted_data is not None else response_data
             return response_data
 
         # 필터 필드 파싱 (콤마로 구분)
         fields = [field.strip() for field in filter_fields.split(',') if field.strip()]
         if not fields:
-            return extracted_data
+            # 경로만 있는 경우 해당 경로의 데이터 추출
+            if filter_path:
+                extracted_data = APICallingTool.get_nested_value(response_data, filter_path)
+                return extracted_data if extracted_data is not None else response_data
+            return response_data
+
+        # 필터 경로로 데이터 추출
+        if filter_path:
+            extracted_data = APICallingTool.get_nested_value(response_data, filter_path)
+            if extracted_data is None:
+                logger.warning(f"Filter path '{filter_path}' not found in response")
+                return response_data
+        else:
+            # 경로가 비어있으면 최상위 데이터 사용
+            extracted_data = response_data
 
         # 배열인 경우 각 객체에서 지정된 필드만 추출
         if isinstance(extracted_data, list):
