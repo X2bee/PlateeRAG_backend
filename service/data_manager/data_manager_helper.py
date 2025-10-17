@@ -1,7 +1,7 @@
 """
 Data Manager Helper Functions - 심플 버전
 """
-
+#service/data_manager/data_manager_helper.py
 import os
 import shutil
 import logging
@@ -707,13 +707,12 @@ def copy_column(table: pa.Table, source_column: str, new_column: str) -> Tuple[p
 
     except Exception as e:
         logger.error("컬럼 복사 실패: %s", e)
-        raise RuntimeError(f"컬럼 복사 중 오류 발생: {str(e)}")
+        raise RuntimeError(f"컬럼 복사 중 오류 발생_: {str(e)}")
 
 
 def rename_column(table: pa.Table, old_name: str, new_name: str) -> Tuple[pa.Table, Dict[str, Any]]:
     """
     특정 컬럼의 이름을 변경
-
     Args:
         table (pa.Table): 원본 테이블
         old_name (str): 기존 컬럼명

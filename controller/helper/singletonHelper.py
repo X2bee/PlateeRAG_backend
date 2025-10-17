@@ -3,6 +3,8 @@ from service.database import AppDatabaseManager
 from config.config_composer import ConfigComposer
 from service.vast.vast_service import VastService
 from service.vast.proxy_client import VastProxyClient
+from service.storage.minio_client import MinioDataStorage
+from service.storage.redis_version_manager import RedisVersionManager
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -129,3 +131,25 @@ def get_mlflow_service(request: Request) -> 'MLflowArtifactService':
     if hasattr(request.app.state, 'mlflow_service') and request.app.state.mlflow_service:
         return request.app.state.mlflow_service
     raise HTTPException(status_code=500, detail="MLflow service not available")
+
+def get_minio_storage(request: Request) -> MinioDataStorage:
+    """MinIO 스토리지 싱글톤"""
+    if not hasattr(request.app.state, "minio_storage"):
+        request.app.state.minio_storage = MinioDataStorage(
+            endpoint="minio.x2bee.com",
+            access_key="minioadmin",
+            secret_key="minioadmin123",
+            secure=True
+        )
+    return request.app.state.minio_storage
+
+def get_redis_version_manager(request: Request) -> RedisVersionManager:
+    """Redis 버전 관리자 싱글톤"""
+    if not hasattr(request.app.state, "redis_version_manager"):
+        request.app.state.redis_version_manager = RedisVersionManager(
+            host="192.168.2.242",
+            port=6379,
+            password='redis_secure_password123!',
+            db=0
+        )
+    return request.app.state.redis_version_manager
