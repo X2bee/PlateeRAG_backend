@@ -83,57 +83,15 @@ def validate_user_authentication(request: Request) -> Dict[str, Any]:
 
 
 def extract_user_id_from_request(request: Request) -> str:
-    """
-    요청에서 사용자 ID를 추출합니다.
-    먼저 토큰을 검증한 후 사용자 ID를 반환합니다.
-
-    Args:
-        request: FastAPI Request 객체
-
-    Returns:
-        str: 검증된 사용자 ID
-
-    Raises:
-        HTTPException: 인증 실패 시 발생
-    """
     user_session = validate_user_authentication(request)
-
     return user_session['user_id']
 
 def extract_token_from_request(request: Request) -> str:
-    """
-    요청에서 토큰을 추출하고 검증합니다.
-
-    Args:
-        request: FastAPI Request 객체
-
-    Returns:
-        str: 검증된 토큰
-
-    Raises:
-        HTTPException: 인증 실패 시 발생
-    """
-    # 토큰 검증을 수행하여 유효성 확인
     validate_user_authentication(request)
-
-    # 검증이 성공하면 토큰 반환
     authorization = request.headers.get("Authorization")
     return authorization.replace("Bearer ", "").strip()
 
 def require_admin_access(request: Request) -> Dict[str, Any]:
-    """
-    관리자 권한이 필요한 API에서 사용하는 함수입니다.
-    토큰을 검증하고 관리자 권한을 확인합니다.
-
-    Args:
-        request: FastAPI Request 객체
-
-    Returns:
-        Dict[str, Any]: 검증된 관리자 사용자 정보
-
-    Raises:
-        HTTPException: 인증 실패 또는 권한 부족 시 발생
-    """
     app_db = get_db_manager(request)
     user_session = validate_user_authentication(request)
     existing_data = app_db.find_by_condition(
@@ -149,22 +107,10 @@ def require_admin_access(request: Request) -> Dict[str, Any]:
             status_code=403,
             detail="Admin access required"
         )
-
-    logger.info("Admin access granted: %s (ID: %s)", user_session['username'], user_session['user_id'])
     return user_session
 
 
 def get_optional_user_info(request: Request) -> Optional[Dict[str, Any]]:
-    """
-    선택적으로 사용자 정보를 가져옵니다.
-    토큰이 없거나 유효하지 않아도 예외를 발생시키지 않습니다.
-
-    Args:
-        request: FastAPI Request 객체
-
-    Returns:
-        Optional[Dict[str, Any]]: 사용자 정보 (없으면 None)
-    """
     try:
         return validate_user_authentication(request)
     except HTTPException:
