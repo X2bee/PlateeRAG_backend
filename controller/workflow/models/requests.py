@@ -78,3 +78,28 @@ class DeployToggleRequest(BaseModel):
 class DeployStatusRequest(BaseModel):
     """배포 상태 요청 모델"""
     user_id: Optional[str] = Field(description="사용자 ID")
+
+# Workflow Auto-Generation related models
+class WorkflowGenerationRequest(BaseModel):
+    """워크플로우 자동생성 요청 모델"""
+    agent_node_id: str = Field(description="선택된 Agent 노드 ID")
+    user_requirements: str = Field(description="사용자 요구사항")
+    workflow_name: Optional[str] = Field(default=None, description="생성될 워크플로우 이름 (선택사항)")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="추가 컨텍스트 정보")
+    selected_model: Optional[str] = Field(default=None, description="사용자가 선택한 모델")
+    user_id: Optional[int | str] = None
+
+class AgentNodeInfoRequest(BaseModel):
+    """Agent 노드 정보 조회 요청 모델"""
+    agent_node_id: str = Field(description="Agent 노드 ID")
+    user_id: Optional[int | str] = None
+
+class WorkflowGenerationResponse(BaseModel):
+    """워크플로우 자동생성 응답 모델"""
+    success: bool
+    message: str
+    workflow_data: Optional[Dict[str, Any]] = None
+    workflow_id: Optional[str] = None
+    workflow_name: Optional[str] = None
+    generated_nodes_count: Optional[int] = None
+    generated_edges_count: Optional[int] = None
