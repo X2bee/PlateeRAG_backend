@@ -572,7 +572,7 @@ async def lifespan(app: FastAPI):
             
         except Exception as e:
             logger.error(f"❌ Step 7.6: 자동 로드 실패: {e}", exc_info=True)
-                # 7.7. MLflow artifact service initialization
+        # 7.7. MLflow artifact service initialization
         print_step_banner(7.7, "MLFLOW ARTIFACT SERVICE", "Integrating MLflow tracking and artifacts")
         mlflow_tracking_uri = os.getenv("MLFLOW_URL", "").strip()
         mlflow_default_experiment_id = os.getenv("MLFLOW_DEFAULT_EXPERIMENT_ID")
@@ -600,6 +600,25 @@ async def lifespan(app: FastAPI):
         else:
             app.state.mlflow_service = None
             logger.warning("⚠️  MLflow tracking URI not configured. MLflow integration is disabled.")
+
+        # 7.8. DB Sync Scheduler 초기화
+        print_step_banner(7.8, "DB SYNC SCHEDULER SETUP", "Setting up database synchronization scheduler")
+        logger.info("⚙️  Step 7.8: DB Sync Scheduler initialization starting...")
+        
+        try:
+            from controller.helper.singletonHelper import initialize_db_sync_scheduler
+            
+            # 스케줄러 초기화
+            db_sync_scheduler = initialize_db_sync_scheduler(app.state)
+            
+            logger.info(f"✅ Step 7.8: DB Sync Scheduler initialized successfully!")
+            logger.info(f"  └─ Scheduler running: {db_sync_scheduler.scheduler.running}")
+            logger.info(f"  └─ Loaded sync configs: {len(db_sync_scheduler.sync_configs)}")
+            
+        except Exception as e:
+            logger.error(f"❌ Step 7.8: Failed to initialize DB Sync Scheduler: {e}", exc_info=True)
+            app.state.db_sync_scheduler = None
+            logger.warning("⚠️  DB Sync Scheduler is disabled. Sync endpoints will not be available.")
 
         print_step_banner(8, "SYSTEM VALIDATION", "Validating configurations and directories")
         logger.info("⚙️  Step 8: System validation starting...")
@@ -727,6 +746,11 @@ async def lifespan(app: FastAPI):
     └─────────────────────────────────────────────────────┘
     """)
     try:
+        if hasattr(app.state, 'db_sync_scheduler') and app.state.db_sync_scheduler:
+            logger.info("🔄 Shutting down DB Sync Scheduler...")
+            from controller.helper.singletonHelper import shutdown_db_sync_scheduler
+            shutdown_db_sync_scheduler(app.state)
+            logger.info("✅ DB Sync Scheduler shutdown complete")
         # Data Manager Registry 정리
         if hasattr(app.state, 'data_manager_registry') and app.state.data_manager_registry:
             logger.info("🔄 Cleaning up data manager registry...")
