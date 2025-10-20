@@ -29,9 +29,9 @@ WORKDIR /app
 COPY pyproject.toml ./
 # If you later commit uv.lock, add: COPY uv.lock ./
 
-# Create venv & install deps into it via wheelhouse
+# Create venv & install deps into it via wheelhouse (generate lock if absent)
 RUN python -m venv ${VENV_PATH} \
- && ${UV_BIN} lock \                                           # <-- generate lock if absent
+ && ${UV_BIN} lock \
  && ${UV_BIN} export --format=requirements-txt --locked > /tmp/requirements.txt \
  && ${VENV_PATH}/bin/pip install --upgrade pip wheel \
  && ${VENV_PATH}/bin/pip wheel --no-cache-dir --wheel-dir /wheelhouse -r /tmp/requirements.txt \
