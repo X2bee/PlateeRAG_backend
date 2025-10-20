@@ -160,15 +160,93 @@ class APICallingTool(Node):
                         )
                         logger.info(f"GET request to {endpoint} completed with status code: {response}")
                     elif method_upper in ["POST", "PUT", "PATCH"]:
-                        json_data = request_data if request_data else None
-                        logger.info(f"Making {method_upper} request to {endpoint} with data: {json_data}")
-                        response = requests.request(
-                            method_upper,
-                            endpoint,
-                            json=json_data,
-                            headers=headers,
-                            timeout=timeout
-                        )
+                        # HTTP body handling:
+                        # - If kwargs contains 'body' (dict or JSON string) or keys ending with '_body',
+                        #   they will be used as the request body.
+                        # - If kwargs contains '__form__' or 'as_form' truthy value, send as x-www-form-urlencoded.
+                        send_as_form = False
+                        if isinstance(request_data, dict):
+                            # support explicit override via __form__ kwarg
+                            if request_data.pop('__form__', None):
+                                send_as_form = True
+                            # or if Schema Provider passed body_type=FORM
+                            elif 'body_type' in request_data and str(request_data.get('body_type')).upper() == 'FORM':
+                                send_as_form = True
+                            # remove control key so it is not sent as payload
+                            request_data.pop('body_type', None)
+
+                        # Extract explicit body fields
+                        body = None
+                        if isinstance(request_data, dict):
+                            if 'body' in request_data:
+                                body = request_data.pop('body')
+                                # try to parse JSON string
+                                if isinstance(body, str):
+                                    try:
+                                        body = json.loads(body)
+                                    except Exception:
+                                        pass
+                            else:
+                                # collect keys that end with '_body' and merge into a single body dict
+                                body_keys = [k for k in list(request_data.keys()) if k.endswith('_body')]
+                                if body_keys:
+                                    body = {}
+                                    for k in body_keys:
+                                        v = request_data.pop(k)
+                                        key_name = k[:-5] if len(k) > 5 else k
+                                        if isinstance(v, str):
+                                            try:
+                                                parsed_v = json.loads(v)
+                                                v = parsed_v
+                                            except Exception:
+                                                pass
+                                        body[key_name] = v
+
+                        if send_as_form:
+                            # form-encoding: application/x-www-form-urlencoded
+                            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                            if body is not None:
+                                # flatten body values for form encoding (serialize nested structures)
+                                form_data = {}
+                                for bk, bv in (body.items() if isinstance(body, dict) else []):
+                                    if isinstance(bv, (dict, list)):
+                                        form_data[bk] = json.dumps(bv, ensure_ascii=False)
+                                    else:
+                                        form_data[bk] = '' if bv is None else str(bv)
+                                # include any remaining params as form fields
+                                for rk, rv in request_data.items():
+                                    if isinstance(rv, (dict, list)):
+                                        form_data[rk] = json.dumps(rv, ensure_ascii=False)
+                                    else:
+                                        form_data[rk] = '' if rv is None else str(rv)
+                                logger.info(f"Making {method_upper} request to {endpoint} with form-encoded data: {form_data}")
+                                response = requests.request(
+                                    method_upper,
+                                    endpoint,
+                                    data=form_data,
+                                    headers=headers,
+                                    timeout=timeout
+                                )
+                            else:
+                                logger.info(f"Making {method_upper} request to {endpoint} with form-encoded data: {request_data}")
+                                response = requests.request(
+                                    method_upper,
+                                    endpoint,
+                                    data=request_data if request_data else None,
+                                    headers=headers,
+                                    timeout=timeout
+                                )
+                        else:
+                            # JSON body sending
+                            json_payload = body if body is not None else (request_data if request_data else None)
+                            logger.info(f"Making {method_upper} request to {endpoint} with JSON body: {json_payload}")
+                            response = requests.request(
+                                method_upper,
+                                endpoint,
+                                json=json_payload,
+                                headers=headers,
+                                timeout=timeout
+                            )
                     elif method_upper == "DELETE":
                         params = request_data if request_data else None
                         logger.info(f"Making DELETE request to {endpoint} with params: {params}")
