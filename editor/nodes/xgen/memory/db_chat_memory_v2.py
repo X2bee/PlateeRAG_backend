@@ -1,8 +1,14 @@
+"""
+DB Memory Node V2 - LangChain 1.0.0
+
+DB에서 대화 기록을 로드하여 LangChain 1.0.0 메시지 리스트로 반환합니다.
+"""
+
 from editor.node_composer import Node
 import logging
 import json
 from typing import List, Optional, Dict, Any
-from langchain.messages import SystemMessage, HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
 from editor.utils.helper.service_helper import AppServiceManager
 import re
 from collections import Counter
@@ -16,8 +22,8 @@ class DBMemoryNode(Node):
     functionId = "memory"
     nodeId = "memory/db_memory_v2"
     nodeName = "DB Memory V2"
-    description = "DB에서 대화 기록을 로드하여 ConversationBufferMemory로 반환하는 노드입니다."
-    tags = ["memory", "database", "chat_history", "xgen"]
+    description = "DB에서 대화 기록을 로드하여 메시지 리스트로 반환 (LangChain 1.0.0)"
+    tags = ["memory", "database", "chat_history", "xgen", "langchain_1.0"]
 
     inputs = [
         {"id": "current_input", "name": "Current Input", "type": "STR", "multi": False, "required": False},
@@ -244,20 +250,20 @@ class DBMemoryNode(Node):
     def _resolve_embedding_function(self):
         """AppServiceManager에서 임베딩 서비스를 가져와 callable 형태로 반환"""
         try:
-            get_service = getattr(AppServiceManager, "get_embedding_service", None)
+            get_service = getattr(AppServiceManager, "get_rag_service", None)
             if not callable(get_service):
                 return None
 
-            embedding_service = get_service()
-            if not embedding_service:
+            rag_service = get_service()
+            if not rag_service:
                 return None
 
-            if hasattr(embedding_service, "get_embedding"):
+            if hasattr(rag_service, "generate_embeddings"):
                 def _embed(text: str):
                     if not text:
                         return None
                     try:
-                        vector = embedding_service.get_embedding(text)
+                        vector = rag_service.generate_embeddings(text)
                         if vector is None:
                             return None
                         return list(vector)
@@ -531,40 +537,34 @@ class DBMemoryNode(Node):
             simple_summary = self._simple_message_summary(meaningful_messages)
             return simple_summary
 
-    def load_memory_from_db(self, db_messages: List[Dict[str, str]]):
+    def convert_to_langchain_messages(self, db_messages: List[Dict[str, str]]) -> List[BaseMessage]:
         """
-        DB에서 로드한 메시지 리스트를 기반으로 LangChain 메모리 객체를 생성합니다.
+        DB에서 로드한 메시지 리스트를 LangChain 1.0.0 메시지 객체로 변환합니다.
 
         Args:
             db_messages: {'role': 'user' | 'ai', 'content': '...'} 형태의 딕셔너리 리스트
 
         Returns:
-            대화 기록이 채워진 ConversationBufferMemory 객체
+            LangChain BaseMessage 객체 리스트 (HumanMessage, AIMessage)
         """
         try:
-            from langchain.memory import ConversationBufferMemory
-            from langchain_community.chat_message_histories import ChatMessageHistory
-
-            chat_history = ChatMessageHistory()
+            messages: List[BaseMessage] = []
             for msg in db_messages:
-                if msg.get("role") == "user":
-                    chat_history.add_user_message(msg.get("content"))
-                elif msg.get("role") == "ai":
-                    chat_history.add_ai_message(msg.get("content"))
+                role = msg.get("role")
+                content = msg.get("content", "")
 
-            memory = ConversationBufferMemory(
-                chat_memory=chat_history,
-                memory_key="chat_history",
-                return_messages=True
-            )
-            return memory
+                if role == "user":
+                    messages.append(HumanMessage(content=content))
+                elif role == "ai":
+                    messages.append(AIMessage(content=content))
+                else:
+                    logger.warning(f"Unknown message role: {role}. Skipping message.")
 
-        except ImportError as e:
-            logger.error(f"LangChain import error: {e}")
-            return None
+            return messages
+
         except Exception as e:
-            logger.error(f"Error creating memory object: {e}")
-            return None
+            logger.error(f"Error converting to LangChain messages: {e}")
+            return []
 
     def _filter_messages_by_similarity(
         self,
@@ -759,7 +759,7 @@ class DBMemoryNode(Node):
         current_input: str = "",
     ):
         """
-        DB에서 대화 기록을 로드하여 ConversationBufferMemory 객체를 반환합니다.
+        DB에서 대화 기록을 로드하여 LangChain 1.0.0 메시지 리스트를 반환합니다.
 
         Args:
             interaction_id: 상호작용 ID
@@ -770,7 +770,7 @@ class DBMemoryNode(Node):
             current_input: 현재 사용자 입력 (유사도 계산 기준)
 
         Returns:
-            ConversationBufferMemory 객체 또는 오류 메시지
+            List[BaseMessage]: LangChain 1.0.0 메시지 리스트
         """
         try:
             # DB에서 메시지 로드
@@ -778,8 +778,7 @@ class DBMemoryNode(Node):
 
             if not db_messages:
                 logger.info(f"No chat history found for interaction_id: {interaction_id}")
-                # 빈 메모리 객체 반환
-                return self.load_memory_from_db([])
+                return []
 
             # 입력 타입을 안정적으로 처리
             if isinstance(current_input, list):
@@ -808,14 +807,13 @@ class DBMemoryNode(Node):
             elif enable_similarity_filter and not current_input:
                 logger.info("Similarity filtering enabled but current_input was empty; skipping filter")
 
-            memory = self.load_memory_from_db(db_messages)
+            # LangChain 1.0.0 메시지 객체로 변환
+            messages = self.convert_to_langchain_messages(db_messages)
 
-            if memory is None:
-                return None
+            logger.info(f"Successfully loaded {len(messages)} messages for interaction_id: {interaction_id}")
 
-            logger.info(f"Successfully loaded {len(db_messages)} messages for interaction_id: {interaction_id}")
-            return memory
+            return messages
 
         except Exception as e:
             logger.error(f"Error in execute: {e}")
-            return None
+            return []

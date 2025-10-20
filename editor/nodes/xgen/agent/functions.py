@@ -230,40 +230,34 @@ def prepare_chat_history(
     current_input: Optional[str] = None,
     llm: Optional[Any] = None,
 ):
-    """최적화된 chat_history 생성 - 기존 inputs 구조와 호환"""
+    """
+    LangChain 1.0.0 메모리 형식 처리 - List[BaseMessage] 직접 반환
+
+    Args:
+        memory: List[BaseMessage] 또는 None
+        current_input: 현재 사용자 입력
+        llm: LLM 객체 (요약 생성용, 선택사항)
+
+    Returns:
+        List[BaseMessage]: 대화 기록 메시지 리스트
+    """
     if not memory:
         return []
-    try:
-        # 메모리에서 모든 대화 기록 추출
-        memory_vars = memory.load_memory_variables({})
-        full_chat_history = memory_vars.get("chat_history", [])
 
-        if not full_chat_history:
+    try:
+        # LangChain 1.0.0: memory는 이미 List[BaseMessage] 형태
+        if isinstance(memory, list):
+            chat_history = memory
+        else:
+            # 혹시 다른 형태가 올 경우 빈 리스트 반환
+            logger.warning(f"Unexpected memory type: {type(memory)}. Expected List[BaseMessage]")
             return []
 
-        summary_message = None
+        if not chat_history:
+            return []
+
+        # LLM이 제공되고 현재 입력이 있으면 요약 메시지 추가
         if llm and current_input:
-            try:
-                summary_message = _summarize_chat_history_with_llm(
-                    full_chat_history,
-                    current_input,
-                    llm,
-                )
-            except Exception as summarize_error:
-                logger.warning(f"Failed to summarize chat history: {summarize_error}")
-
-        if summary_message:
-            # Append summary as system message while preserving original order
-            return list(full_chat_history) + [summary_message]
-
-        return full_chat_history
-
-    except Exception as e:
-        logger.error(f"Error in prepare_chat_history: {e}")
-        # 오류 발생 시 기존 방식으로 fallback
-        memory_vars = memory.load_memory_variables({})
-        chat_history = memory_vars.get("chat_history", [])
-        if chat_history and llm and current_input:
             try:
                 summary_message = _summarize_chat_history_with_llm(
                     chat_history,
@@ -273,9 +267,13 @@ def prepare_chat_history(
                 if summary_message:
                     return list(chat_history) + [summary_message]
             except Exception as summarize_error:
-                logger.warning(f"Failed to summarize chat history after fallback: {summarize_error}")
+                logger.warning(f"Failed to summarize chat history: {summarize_error}")
 
-        return chat_history if memory else []
+        return chat_history
+
+    except Exception as e:
+        logger.error(f"Error in prepare_chat_history: {e}")
+        return []
 
 def _message_role_and_content(message) -> Optional[tuple]:
     role = None
