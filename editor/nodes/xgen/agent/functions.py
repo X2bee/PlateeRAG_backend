@@ -146,6 +146,7 @@ def _flatten_tools_list(tools_list):
 def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, n_messages=None, streaming=True, plan=None):
     from langchain_openai import ChatOpenAI
     from langchain_anthropic import ChatAnthropic
+    from langchain_google_genai import ChatGoogleGenerativeAI
     from editor.utils.helper.service_helper import AppServiceManager
 
     config_composer = AppServiceManager.get_config_composer()
@@ -154,6 +155,7 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
 
     # Anthropic 모델 감지 - 모든 Claude 모델은 "claude-"로 시작
     is_anthropic_model = model.startswith('claude-')
+    is_google_model = model.startswith('gemini-')
 
     if is_anthropic_model:
         # Anthropic 모델 사용
@@ -163,6 +165,15 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
             raise ValueError("Anthropic API Key is not set.")
 
         llm = ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming, anthropic_api_key=api_key)
+
+    elif is_google_model:
+        # Google Gemini 모델 사용
+        api_key = config_composer.get_config_by_name("GEMINI_API_KEY").value
+        if not api_key:
+            logger.error(f"Google Generative AI API Key is not set")
+            raise ValueError("Google Generative AI API Key is not set.")
+
+        llm = ChatGoogleGenerativeAI(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming, google_api_key=api_key)
     else:
         # OpenAI 또는 다른 모델 사용
         llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value

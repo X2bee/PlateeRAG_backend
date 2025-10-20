@@ -347,7 +347,11 @@ def execute_agent_streaming(
                     break
                 elif msg_type == 'error':
                     if exception_container[0]:
-                        raise exception_container[0]
+                        error = exception_container[0]
+                        if error is not None:
+                            raise error
+                        else:
+                            raise RuntimeError("Unknown error occurred during agent execution")
                     elif value:
                         raise value
                     else:
@@ -361,7 +365,11 @@ def execute_agent_streaming(
                         break
                     # 스레드가 비정상 종료된 경우
                     elif not thread.is_alive() and exception_container[0]:
-                        raise exception_container[0]
+                        error = exception_container[0]
+                        if error is not None:
+                            raise error
+                        else:
+                            raise RuntimeError("Thread terminated unexpectedly without error")
                     elif not thread.is_alive():
                         break
                 continue

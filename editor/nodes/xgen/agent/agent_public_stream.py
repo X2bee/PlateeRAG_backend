@@ -22,14 +22,13 @@ logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
 
-
-class AgentOpenAIStreamNode(Node):
+class AgentPublicStreamNode(Node):
     categoryId = "xgen"
     functionId = "agents"
-    nodeId = "agents/openai_stream"
-    nodeName = "Agent OpenAI Stream"
-    description = "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드"
-    tags = ["agent", "chat", "rag", "openai", "stream"]
+    nodeId = "agents/public_stream"
+    nodeName = "Agent Public Stream"
+    description = "도구, 메모리 및 RAG 컨텍스트 등을 활용하여 채팅 응답을 스트리밍으로 생성하는 Agent"
+    tags = ["agent", "chat", "rag", "public_model", "stream"]
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
@@ -64,7 +63,7 @@ class AgentOpenAIStreamNode(Node):
             "id": "model",
             "name": "Model",
             "type": "STR",
-            "value": "gpt-5",
+            "value": "gpt-4.1",
             "required": True,
             "options": [
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
@@ -155,7 +154,7 @@ class AgentOpenAIStreamNode(Node):
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
         plan: Optional[Dict[str, Any]] = None,
-        model: str = "gpt-5",
+        model: str = "gpt-4.1",
         temperature: float = 1,
         max_tokens: int = 8192,
         strict_citation: bool = True,
