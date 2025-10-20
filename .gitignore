@@ -214,3 +214,4 @@ docs/
 docker-compose.yaml
 
 mlruns/
+Dockerfile
