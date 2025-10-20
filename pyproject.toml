@@ -1,3 +1,10 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["config*", "constants*", "controller*", "editor*", "service*"]
+
 [project]
 name = "plateerag-backend"
 version = "0.1.0"

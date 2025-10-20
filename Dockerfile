@@ -35,9 +35,8 @@ COPY . .
 ENV VENV_PATH=/opt/venv
 RUN python -m venv ${VENV_PATH}
 
-# Activate venv and install dependencies
-RUN . ${VENV_PATH}/bin/activate && \
-    ${UV_BIN} pip install --python ${VENV_PATH}/bin/python -e .
+# Install dependencies from pyproject.toml (non-editable)
+RUN ${UV_BIN} pip install --python ${VENV_PATH}/bin/python .
 
 # Verify installation
 RUN ${VENV_PATH}/bin/python -c "import fastapi; print('FastAPI installed successfully')"
