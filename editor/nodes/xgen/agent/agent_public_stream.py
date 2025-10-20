@@ -1,4 +1,5 @@
 from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
 from typing import Dict, Any, Optional, Generator
 from pydantic import BaseModel
 import logging
@@ -21,6 +22,7 @@ from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
 logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
+
 
 class AgentPublicStreamNode(Node):
     categoryId = "xgen"
@@ -187,82 +189,75 @@ class AgentPublicStreamNode(Node):
                     text, rag_context, strict_citation
                 )
 
-            inputs = {
-                "input": text,
-                "chat_history": chat_history,
-                "additional_rag_context": additional_rag_context if rag_context else "",
-            }
-
             if args_schema:
                 default_prompt = create_json_output_prompt(args_schema, default_prompt)
 
-            if tools_list:
-                final_prompt = create_tool_context_prompt(
-                    additional_rag_context, default_prompt, plan=plan
-                )
 
-                # LangChain 1.0.0의 create_agent는 system_prompt로 문자열만 받습니다
-                # ChatPromptTemplate에서 system message 추출
-                system_prompt_text = default_prompt
-                if hasattr(final_prompt, "messages") and len(final_prompt.messages) > 0:
-                    first_msg = final_prompt.messages[0]
-                    if hasattr(first_msg, "prompt") and hasattr(
-                        first_msg.prompt, "template"
-                    ):
-                        system_prompt_text = first_msg.prompt.template
+            final_prompt = create_tool_context_prompt(
+                additional_rag_context, default_prompt, plan=plan
+            )
 
-                # create_agent는 이제 CompiledStateGraph를 반환합니다
-                agent_graph = create_agent(
-                    model=llm, tools=tools_list, system_prompt=system_prompt_text
-                )
+            system_prompt_text = default_prompt
+            if hasattr(final_prompt, "messages") and len(final_prompt.messages) > 0:
+                first_msg = final_prompt.messages[0]
+                if hasattr(first_msg, "prompt") and hasattr(
+                    first_msg.prompt, "template"
+                ):
+                    system_prompt_text = first_msg.prompt.template
 
-                if return_intermediate_steps:
-                    handler = EnhancedAgentStreamingHandlerWithToolOutput()
-                else:
-                    handler = EnhancedAgentStreamingHandler()
+            is_anthropic_model = model.startswith('claude-')
+            is_google_model = model.startswith('gemini-')
 
-                # LangGraph의 새로운 입력 형식: messages 리스트 사용
-                from langchain_core.messages import HumanMessage
-
-                graph_inputs = {"messages": chat_history + [HumanMessage(content=text)]}
-                if additional_rag_context:
-                    graph_inputs["additional_rag_context"] = additional_rag_context
-
-                # LangGraph 기반 agent 실행을 위한 async executor
-                async_executor = lambda: agent_graph.ainvoke(
-                    graph_inputs, {"callbacks": [handler]}
-                )
-
-                try:
-                    for token in execute_agent_streaming(async_executor, handler):
-                        yield token
-                except Exception as e:
-                    logger.error(f"Agent streaming error: {str(e)}", exc_info=True)
-                    yield f"\nStreaming Error: {str(e)}\n"
+            if is_anthropic_model:
+                agent_summarization_model = f"anthropic:{model}"
+            elif is_google_model:
+                agent_summarization_model = f"google_genai:{model}"
             else:
-                final_prompt = create_context_prompt(
-                    additional_rag_context, default_prompt, strict_citation, plan=plan
-                )
-                chain = final_prompt | llm
-                for chunk in chain.stream(inputs):
-                    # Claude와 OpenAI 모두 지원하도록 content 처리
-                    content = chunk.content
+                agent_summarization_model = f"openai:{model}"
 
-                    # Claude의 경우 content가 리스트 형태일 수 있음
-                    if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, dict):
-                                # text 타입의 청크만 추출
-                                if item.get("type") == "text" and "text" in item:
-                                    yield item["text"]
-                            elif isinstance(item, str):
-                                yield item
-                    # OpenAI나 일반 문자열의 경우
-                    elif isinstance(content, str):
-                        yield content
-                    # 기타 형태의 content 처리
-                    elif content:
-                        yield str(content)
+            agent_summarization_middleware = SummarizationMiddleware(
+                model=agent_summarization_model,
+                max_tokens_before_summary=4000,
+                messages_to_keep=10,
+            )
+
+            if tools_list:
+                agent_graph = create_agent(
+                    model=llm,
+                    tools=tools_list,
+                    system_prompt=system_prompt_text,
+                    middleware=[agent_summarization_middleware],
+                )
+            else:
+                agent_graph = create_agent(
+                    model=llm,
+                    system_prompt=system_prompt_text,
+                    middleware=[agent_summarization_middleware],
+                )
+
+            if return_intermediate_steps:
+                handler = EnhancedAgentStreamingHandlerWithToolOutput()
+            else:
+                handler = EnhancedAgentStreamingHandler()
+
+            # LangGraph의 새로운 입력 형식: messages 리스트 사용
+            from langchain_core.messages import HumanMessage
+
+            graph_inputs = {"messages": chat_history + [HumanMessage(content=text)]}
+            if additional_rag_context:
+                graph_inputs["additional_rag_context"] = additional_rag_context
+
+            # LangGraph 기반 agent 실행을 위한 async executor
+            async_executor = lambda: agent_graph.ainvoke(
+                graph_inputs, {"callbacks": [handler]}
+            )
+
+            try:
+                for token in execute_agent_streaming(async_executor, handler):
+                    yield token
+            except Exception as e:
+                logger.error(f"Agent streaming error: {str(e)}", exc_info=True)
+                yield f"\nStreaming Error: {str(e)}\n"
 
         except Exception as e:
             logger.error(

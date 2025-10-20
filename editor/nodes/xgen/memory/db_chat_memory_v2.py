@@ -24,6 +24,7 @@ class DBMemoryNode(Node):
     nodeName = "DB Memory V2"
     description = "DB에서 대화 기록을 로드하여 메시지 리스트로 반환 (LangChain 1.0.0)"
     tags = ["memory", "database", "chat_history", "xgen", "langchain_1.0"]
+    disable = True
 
     inputs = [
         {"id": "current_input", "name": "Current Input", "type": "STR", "multi": False, "required": False},
