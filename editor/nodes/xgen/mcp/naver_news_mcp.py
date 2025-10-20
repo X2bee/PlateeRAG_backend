@@ -3,7 +3,7 @@ import os
 import requests
 from typing import Optional
 from editor.node_composer import Node
-from langchain.agents import tool
+from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 

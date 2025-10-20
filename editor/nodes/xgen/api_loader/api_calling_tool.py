@@ -1,10 +1,10 @@
 import logging
 import requests
+from langchain_core.tools import tool
 from typing import Any, Dict
 from pydantic import BaseModel, create_model, Field
 from editor.node_composer import Node
 from editor.utils.helper.parse_helper import parse_param_value
-from langchain.agents import tool
 import json
 import re
 logger = logging.getLogger(__name__)

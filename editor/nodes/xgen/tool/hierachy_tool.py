@@ -2,8 +2,7 @@ import logging
 import inspect
 from typing import Any, Dict, List, Optional
 from editor.node_composer import Node
-from langchain.agents import tool
-from langchain_core.tools import BaseTool
+from langchain_core.tools import tool, BaseTool
 import json
 
 logger = logging.getLogger(__name__)

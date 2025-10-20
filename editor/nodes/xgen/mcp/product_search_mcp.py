@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Optional
 from editor.node_composer import Node
-from langchain.agents import tool
+from langchain_core.tools import tool
 import requests
 import json
 from pydantic import BaseModel, Field

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from editor.node_composer import Node
 from editor.utils.helper.service_helper import AppServiceManager
-from langchain.agents import tool
+from langchain_core.tools import tool
 from pydantic import BaseModel, Field, ValidationError, create_model
 from fastapi import Request
 

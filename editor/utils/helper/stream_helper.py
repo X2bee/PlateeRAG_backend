@@ -3,7 +3,7 @@ import logging
 import queue
 import threading
 from typing import Any, Generator, Callable, Awaitable
-from langchain.callbacks.base import AsyncCallbackHandler
+from langchain_core.callbacks import AsyncCallbackHandler
 import re
 import json
 
@@ -95,6 +95,19 @@ class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
     async def on_agent_finish(self, finish, **kwargs) -> None:
         pass
 
+    # LangGraph 지원을 위한 추가 메서드
+    async def on_chain_start(self, serialized, inputs, **kwargs) -> None:
+        """Chain 시작 시 호출 (LangGraph 노드 실행 시작)"""
+        pass
+
+    async def on_chain_end(self, outputs, **kwargs) -> None:
+        """Chain 종료 시 호출 (LangGraph 노드 실행 완료)"""
+        pass
+
+    async def on_chain_error(self, error, **kwargs) -> None:
+        """Chain 오류 시 호출"""
+        self.put_error(error)
+
 class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
     def __init__(self):
         self.token_queue = queue.Queue()
@@ -178,15 +191,29 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
     async def on_agent_finish(self, finish, **kwargs) -> None:
         pass
 
+    # LangGraph 지원을 위한 추가 메서드
+    async def on_chain_start(self, serialized, inputs, **kwargs) -> None:
+        """Chain 시작 시 호출 (LangGraph 노드 실행 시작)"""
+        pass
+
+    async def on_chain_end(self, outputs, **kwargs) -> None:
+        """Chain 종료 시 호출 (LangGraph 노드 실행 완료)"""
+        pass
+
+    async def on_chain_error(self, error, **kwargs) -> None:
+        """Chain 오류 시 호출"""
+        self.put_error(error)
+
 def execute_agent_streaming(
     async_executor_func: Callable[[], Awaitable[Any]],
     handler: EnhancedAgentStreamingHandler
 ) -> Generator[str, None, None]:
     """
     Agent 실행을 스트리밍으로 처리하는 범용 함수
+    LangGraph 1.0.0+ CompiledStateGraph 지원
 
     Args:
-        async_executor_func: 실행할 비동기 함수 (예: lambda: agent_executor.ainvoke(inputs, {"callbacks": [handler]}))
+        async_executor_func: 실행할 비동기 함수 (예: lambda: agent_graph.ainvoke(inputs, {"callbacks": [handler]}))
         handler: 스트리밍 핸들러
 
     Yields:
@@ -211,12 +238,19 @@ def execute_agent_streaming(
                     return result
                 except Exception as e:
                     logger.error(f"Agent 실행 중 오류: {str(e)}", exc_info=True)
-                    # OpenAI API validation error에 대한 추가 정보 제공
-                    if "validation error" in str(e).lower() and "function.arguments" in str(e):
-                        logger.error("OpenAI Tool Calling validation error detected. This may be caused by:")
-                        logger.error("1. Tool with empty or None args_schema")
-                        logger.error("2. Tool function returning invalid argument format")
-                        logger.error("3. Pydantic schema validation failure")
+
+                    # LangGraph 관련 오류에 대한 추가 정보 제공
+                    if "validation error" in str(e).lower():
+                        if "function.arguments" in str(e):
+                            logger.error("OpenAI Tool Calling validation error detected. This may be caused by:")
+                            logger.error("1. Tool with empty or None args_schema")
+                            logger.error("2. Tool function returning invalid argument format")
+                            logger.error("3. Pydantic schema validation failure")
+                        elif "messages" in str(e).lower():
+                            logger.error("LangGraph state validation error. Check that:")
+                            logger.error("1. Input format matches AgentState schema (must contain 'messages' key)")
+                            logger.error("2. Messages are proper langchain_core.messages objects")
+
                     handler.put_error(e)
                     execution_finished[0] = True
                     raise e

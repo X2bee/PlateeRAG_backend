@@ -1,19 +1,27 @@
+from langchain.agents import create_agent
 from typing import Dict, Any, Optional, Generator
 from pydantic import BaseModel
 import logging
 from editor.node_composer import Node
-from editor.utils.helper.async_helper import sync_run_async
-from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
-from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
+from editor.nodes.xgen.agent.functions import (
+    prepare_llm_components,
+    rag_context_builder,
+    create_json_output_prompt,
+    create_tool_context_prompt,
+    create_context_prompt,
+)
+from editor.utils.helper.stream_helper import (
+    EnhancedAgentStreamingHandler,
+    EnhancedAgentStreamingHandlerWithToolOutput,
+    execute_agent_streaming,
+)
 from editor.utils.prefix_prompt import get_prefix_prompt
-from langchain.agents import create_tool_calling_agent
-from langchain.agents import AgentExecutor
-from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
 
 logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
+
 
 class AgentOpenAIStreamNode(Node):
     categoryId = "xgen"
@@ -25,18 +33,39 @@ class AgentOpenAIStreamNode(Node):
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
-        {"id": "tools", "name": "Tools", "type": "TOOL", "multi": True, "required": False, "value": []},
-        {"id": "memory", "name": "Memory", "type": "OBJECT", "multi": False, "required": False},
-        {"id": "rag_context", "name": "RAG Context", "type": "DocsContext", "multi": False, "required": False},
+        {
+            "id": "tools",
+            "name": "Tools",
+            "type": "TOOL",
+            "multi": True,
+            "required": False,
+            "value": [],
+        },
+        {
+            "id": "memory",
+            "name": "Memory",
+            "type": "OBJECT",
+            "multi": False,
+            "required": False,
+        },
+        {
+            "id": "rag_context",
+            "name": "RAG Context",
+            "type": "DocsContext",
+            "multi": False,
+            "required": False,
+        },
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
         {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
     ]
-    outputs = [
-        {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}
-    ]
+    outputs = [{"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}]
     parameters = [
         {
-            "id": "model", "name": "Model", "type": "STR", "value": "gpt-5", "required": True,
+            "id": "model",
+            "name": "Model",
+            "type": "STR",
+            "value": "gpt-5",
+            "required": True,
             "options": [
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
                 {"value": "gpt-4", "label": "GPT-4"},
@@ -46,16 +75,74 @@ class AgentOpenAIStreamNode(Node):
                 {"value": "gpt-4.1-mini", "label": "GPT-4.1 Mini"},
                 {"value": "gpt-5", "label": "GPT-5"},
                 {"value": "gpt-5-mini", "label": "GPT-5 Mini"},
-                {"value": "gpt-5-nano", "label": "GPT-5 Nano"}
-            ]
+                {"value": "gpt-5-nano", "label": "GPT-5 Nano"},
+                {"value": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
+                {"value": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5"},
+                {"value": "claude-opus-4-1-20250805", "label": "Claude Opus 4.1"},
+                {"value": "claude-opus-4-20250514", "label": "Claude Opus 4"},
+                {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4"},
+                {"value": "claude-3-7-sonnet-20250219", "label": "Claude Sonnet 3.7"},
+                {"value": "claude-3-5-sonnet-20241022", "label": "Claude Sonnet 3.5 (New)"},
+                {"value": "claude-3-5-haiku-20241022", "label": "Claude Haiku 3.5"},
+                {"value": "claude-3-5-sonnet-20240620", "label": "Claude Sonnet 3.5 (Old)"},
+                {"value": "claude-3-haiku-20240307", "label": "Claude Haiku 3"},
+                {"value": "claude-3-opus-20240229", "label": "Claude Opus 3"},
+            ],
         },
-        {"id": "temperature", "name": "Temperature", "type": "FLOAT", "value": 1, "min": 0.0, "max": 2.0, "step": 0.1},
-        {"id": "max_tokens", "name": "Max Tokens", "type": "INT", "value": 8192, "min": 1, "max": 65536, "step": 1},
-        {"id": "base_url", "name": "Base URL", "type": "STR", "value": "https://api.openai.com/v1", "optional": True},
-        {"id": "strict_citation", "name": "Strict Citation", "type": "BOOL", "value": True, "required": False, "optional": True},
-        {"id": "default_prompt", "name": "Default Prompt", "type": "STR", "value": default_prompt, "required": False, "optional": True, "expandable": True, "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다."},
-        {"id": "return_intermediate_steps", "name": "Return Intermediate Steps", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "중간 단계를 반환할지 여부입니다."},
-        {"id": "use_guarder", "name": "Use Guarder Service", "type": "BOOL", "value": False, "required": False, "optional": True, "description": "Guarder 서비스를 사용할지 여부입니다."},
+        {
+            "id": "temperature",
+            "name": "Temperature",
+            "type": "FLOAT",
+            "value": 1,
+            "min": 0.0,
+            "max": 2.0,
+            "step": 0.1,
+        },
+        {
+            "id": "max_tokens",
+            "name": "Max Tokens",
+            "type": "INT",
+            "value": 8192,
+            "min": 1,
+            "max": 65536,
+            "step": 1,
+        },
+        {
+            "id": "strict_citation",
+            "name": "Strict Citation",
+            "type": "BOOL",
+            "value": True,
+            "required": False,
+            "optional": True,
+        },
+        {
+            "id": "default_prompt",
+            "name": "Default Prompt",
+            "type": "STR",
+            "value": default_prompt,
+            "required": False,
+            "optional": True,
+            "expandable": True,
+            "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다.",
+        },
+        {
+            "id": "return_intermediate_steps",
+            "name": "Return Intermediate Steps",
+            "type": "BOOL",
+            "value": False,
+            "required": False,
+            "optional": True,
+            "description": "중간 단계를 반환할지 여부입니다.",
+        },
+        {
+            "id": "use_guarder",
+            "name": "Use Guarder Service",
+            "type": "BOOL",
+            "value": False,
+            "required": False,
+            "optional": True,
+            "description": "Guarder 서비스를 사용할지 여부입니다.",
+        },
     ]
 
     def execute(
@@ -69,7 +156,6 @@ class AgentOpenAIStreamNode(Node):
         model: str = "gpt-5",
         temperature: float = 1,
         max_tokens: int = 8192,
-        base_url: str = "https://api.openai.com/v1",
         strict_citation: bool = True,
         default_prompt: str = default_prompt,
         return_intermediate_steps: bool = False,
@@ -83,45 +169,78 @@ class AgentOpenAIStreamNode(Node):
                     yield moderation_message
                     return
 
-            default_prompt= get_prefix_prompt()+default_prompt
-            llm, tools_list, chat_history = prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, streaming=True, plan=plan)
+            default_prompt = get_prefix_prompt() + default_prompt
+            llm, tools_list, chat_history = prepare_llm_components(
+                text,
+                tools,
+                memory,
+                model,
+                temperature,
+                max_tokens,
+                streaming=True,
+                plan=plan,
+            )
             additional_rag_context = ""
             if rag_context:
-                additional_rag_context = rag_context_builder(text, rag_context, strict_citation)
+                additional_rag_context = rag_context_builder(
+                    text, rag_context, strict_citation
+                )
 
-            inputs = {"input": text, "chat_history": chat_history, "additional_rag_context": additional_rag_context if rag_context else ""}
+            inputs = {
+                "input": text,
+                "chat_history": chat_history,
+                "additional_rag_context": additional_rag_context if rag_context else "",
+            }
 
             if args_schema:
                 default_prompt = create_json_output_prompt(args_schema, default_prompt)
 
             if tools_list:
-                final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt, plan=plan)
-                agent = create_tool_calling_agent(llm, tools_list, final_prompt)
-                agent_executor = AgentExecutor(
-                    agent=agent,
-                    tools=tools_list,
-                    verbose=True,
-                    handle_parsing_errors=True,
-                    max_iterations=10,
-                    max_execution_time=300,
+                final_prompt = create_tool_context_prompt(
+                    additional_rag_context, default_prompt, plan=plan
                 )
+                # create_agent는 이제 CompiledStateGraph를 반환합니다
+                agent_graph = create_agent(
+                    model=llm,
+                    tools=tools_list,
+                    system_prompt=final_prompt
+                )
+
                 if return_intermediate_steps:
                     handler = EnhancedAgentStreamingHandlerWithToolOutput()
                 else:
                     handler = EnhancedAgentStreamingHandler()
 
-                async_executor = lambda: agent_executor.ainvoke(inputs, {"callbacks": [handler]})
+                # LangGraph의 새로운 입력 형식: messages 리스트 사용
+                from langchain_core.messages import HumanMessage
+
+                graph_inputs = {"messages": chat_history + [HumanMessage(content=text)]}
+                if additional_rag_context:
+                    graph_inputs["additional_rag_context"] = additional_rag_context
+
+                # LangGraph 기반 agent 실행을 위한 async executor
+                async_executor = lambda: agent_graph.ainvoke(
+                    graph_inputs,
+                    {"callbacks": [handler]}
+                )
+
                 try:
                     for token in execute_agent_streaming(async_executor, handler):
                         yield token
                 except Exception as e:
+                    logger.error(f"Agent streaming error: {str(e)}", exc_info=True)
                     yield f"\nStreaming Error: {str(e)}\n"
             else:
-                final_prompt = create_context_prompt(additional_rag_context, default_prompt, strict_citation, plan=plan)
+                final_prompt = create_context_prompt(
+                    additional_rag_context, default_prompt, strict_citation, plan=plan
+                )
                 chain = final_prompt | llm
                 for chunk in chain.stream(inputs):
                     yield chunk.content
 
         except Exception as e:
-            logger.error(f"[AGENT_STREAM_EXECUTE] 스트리밍 Agent 실행 중 오류 발생: {str(e)}", exc_info=True)
+            logger.error(
+                f"[AGENT_STREAM_EXECUTE] 스트리밍 Agent 실행 중 오류 발생: {str(e)}",
+                exc_info=True,
+            )
             yield f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"

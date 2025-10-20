@@ -143,35 +143,56 @@ def _flatten_tools_list(tools_list):
     logger.info(f"Tools flattened: {len(tools_list)} items -> {len(flattened)} items")
     return flattened
 
-def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages=None, streaming=True, plan=None):
+def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, n_messages=None, streaming=True, plan=None):
     from langchain_openai import ChatOpenAI
+    from langchain_anthropic import ChatAnthropic
     from editor.utils.helper.service_helper import AppServiceManager
 
     config_composer = AppServiceManager.get_config_composer()
     if not config_composer:
         raise ValueError("No Config Composer set.")
 
-    llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
-    if llm_provider == "openai":
-        api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
-        print(api_key)
+    # Anthropic 모델 감지 - 모든 Claude 모델 시리즈 포함
+    anthropic_models = [
+        'claude-haiku',      # Claude Haiku 시리즈 (3, 3.5, 4.5 등)
+        'claude-sonnet',     # Claude Sonnet 시리즈 (3, 3.5, 3.7, 4, 4.5 등)
+        'claude-opus',       # Claude Opus 시리즈 (3, 4, 4.1 등)
+        'claude-2',          # Claude 2 시리즈
+        'claude-instant'     # Claude Instant 시리즈
+    ]
+    is_anthropic_model = any(model.startswith(am) for am in anthropic_models)
+
+    if is_anthropic_model:
+        # Anthropic 모델 사용
+        api_key = config_composer.get_config_by_name("ANTHROPIC_API_KEY").value
         if not api_key:
-            logger.error(f"OpenAI API Key is not set")
-            raise ValueError("OpenAI API Key is not set.")
+            logger.error(f"Anthropic API Key is not set")
+            raise ValueError("Anthropic API Key is not set.")
 
-    elif llm_provider == "vllm":
-        api_key = None
-        logger.info(f"vLLM API Key is set to None [currently not used]")
-
-        # TODO: vLLM API 키 설정 로직 추가
-        # api_key = config_composer.get_config_by_name("VLLM_API_KEY").value
-        # if not api_key:
-        #     return "vLLM API Key is not set."
+        llm = ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming, anthropic_api_key=api_key)
     else:
-        logger.error(f"Unsupported LLM Provider: {llm_provider}")
-        raise ValueError(f"Unsupported LLM Provider: {llm_provider}")
+        # OpenAI 또는 다른 모델 사용
+        llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
+        if llm_provider == "openai":
+            api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
+            print(api_key)
+            if not api_key:
+                logger.error(f"OpenAI API Key is not set")
+                raise ValueError("OpenAI API Key is not set.")
 
-    llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, base_url=base_url, streaming=streaming)
+        elif llm_provider == "vllm":
+            api_key = None
+            logger.info(f"vLLM API Key is set to None [currently not used]")
+
+            # TODO: vLLM API 키 설정 로직 추가
+            # api_key = config_composer.get_config_by_name("VLLM_API_KEY").value
+            # if not api_key:
+            #     return "vLLM API Key is not set."
+        else:
+            logger.error(f"Unsupported LLM Provider: {llm_provider}")
+            raise ValueError(f"Unsupported LLM Provider: {llm_provider}")
+
+        llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming)
 
     tools_list = []
     if tools:
