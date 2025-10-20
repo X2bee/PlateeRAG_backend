@@ -19,7 +19,7 @@ class DataManagerRegistry:
     - API 재시작 시 자동 복원 (Lazy Loading)
     """
 
-    def __init__(self):
+    def __init__(self, app_db_manager=None):
         self.managers: Dict[str, DataManager] = {}
         self._lock = threading.Lock()
         
@@ -48,7 +48,10 @@ class DataManagerRegistry:
         
         # ========== ✨ DB 동기화 스케줄러 초기화 ==========
         try:
-            self.db_sync_scheduler = DBSyncScheduler(self)
+            self.db_sync_scheduler = DBSyncScheduler(
+                    data_manager_registry=self,
+                    app_db_manager=app_db_manager  # ✅ 전달!
+                )
             self.db_sync_scheduler.start()
             logger.info("✅ DB 동기화 스케줄러 초기화 완료")
         except Exception as e:

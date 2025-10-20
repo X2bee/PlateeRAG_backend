@@ -458,7 +458,7 @@ async def lifespan(app: FastAPI):
 
         print_step_banner(7.5, "DATA MANAGER REGISTRY SETUP", "Setting up data manager registry")
         logger.info("⚙️  Step 7.5: Data manager registry initialization starting...")
-        app.state.data_manager_registry = DataManagerRegistry()
+        app.state.data_manager_registry = DataManagerRegistry(app_db_manager=app.state.app_db)
         logger.info("✅ Step 7.5: Data manager registry initialized successfully!")
 
         # ⭐ 7.6. 저장된 매니저 자동 로드 추가
