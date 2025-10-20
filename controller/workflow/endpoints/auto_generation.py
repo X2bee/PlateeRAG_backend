@@ -1084,7 +1084,6 @@ async def get_agent_node_info(request: Request, agent_node_id: str):
         
         backend_log.info("Agent 노드 정보 조회 완료", 
                         metadata={"agent_node_id": agent_node_id, "compatible_nodes_count": len(compatible_nodes)})
-        
         return {
             "success": True,
             "agent_node": agent_node,
@@ -1099,9 +1098,32 @@ async def get_agent_node_info(request: Request, agent_node_id: str):
         raise HTTPException(status_code=500, detail=f"Agent 노드 정보 조회에 실패했습니다: {str(e)}")
 
 @router.post("/generate", response_model=WorkflowGenerationResponse)
-async def generate_workflow_with_ai(request: Request, generation_request: WorkflowGenerationRequest):
-    """범용적 백엔드 로직으로 워크플로우 자동 생성"""
+async def generate_workflow_with_ai(request: Request):
+    """범용적 백엔드 로직으로 워크플로우 자동 생성
+
+    본 엔드포인트는 `application/json` 또는 `application/x-www-form-urlencoded`
+    타입의 POST 요청을 모두 지원합니다. form-data로 전송된 경우 내부에서
+    파싱하여 `WorkflowGenerationRequest` 모델로 변환합니다.
+    """
     try:
+        # 요청 바디를 JSON 또는 form으로 처리
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "application/x-www-form-urlencoded" in content_type or "form" in content_type:
+            form = await request.form()
+            # form은 MultiDict 형태이므로 dict로 변환
+            form_data = {k: v for k, v in form.items()}
+            # context 같은 필드가 JSON 문자열로 전달될 수 있으므로 시도적으로 파싱
+            if "context" in form_data and isinstance(form_data["context"], str):
+                try:
+                    form_data["context"] = json.loads(form_data["context"])
+                except Exception:
+                    # 파싱 실패하면 문자열 그대로 사용
+                    pass
+            generation_request = WorkflowGenerationRequest(**form_data)
+        else:
+            body = await request.json()
+            generation_request = WorkflowGenerationRequest(**body)
+
         user_id = extract_user_id_from_request(request)
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID not found in request")
