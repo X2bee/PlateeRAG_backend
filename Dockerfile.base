@@ -1,0 +1,26 @@
+# Base image with ML dependencies (build once, reuse)
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    ffmpeg \
+    espeak-ng \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ML dependencies in a single layer
+RUN pip install --no-cache-dir \
+    torch==2.7.1 \
+    transformers==4.53.0 \
+    sentence-transformers==5.0.0 \
+    numpy==2.3.2 \
+    scipy==1.16.0 \
+    scikit-learn==1.7.0 \
+    && pip cache purge
+
+# This base image can be pushed to your registry and reused

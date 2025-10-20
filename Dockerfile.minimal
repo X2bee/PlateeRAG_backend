@@ -1,0 +1,52 @@
+# Minimal Dockerfile for API-only deployment
+ARG BASE_IMAGE=python:3.12-slim
+
+FROM ${BASE_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install only essential system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN addgroup --system --gid 1001 app && \
+    adduser --system --uid 1001 --ingroup app --home /app app
+
+WORKDIR /app
+
+# Install only essential Python packages for API
+RUN pip install --no-cache-dir \
+    fastapi==0.116.1 \
+    uvicorn==0.35.0 \
+    pydantic==2.11.7 \
+    pydantic-settings==2.10.1 \
+    python-multipart==0.0.20 \
+    python-dotenv==1.1.1 \
+    psycopg2-binary==2.9.10 \
+    sqlalchemy==2.0.41 \
+    redis==5.2.1 \
+    requests==2.32.4 \
+    aiofiles==24.1.0 \
+    httpx==0.28.1 \
+    pyjwt==2.8.0
+
+# Copy application code
+COPY --chown=app:app . .
+
+USER app
+
+EXPOSE 8000
+
+# Simple health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
