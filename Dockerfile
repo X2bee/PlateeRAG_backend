@@ -28,20 +28,19 @@ ENV UV_BIN=/root/.local/bin/uv
 
 WORKDIR /app
 
-# Copy dependency metadata first for better layer caching
-COPY pyproject.toml ./
-# If you have a lockfile, uncomment the next line:
-# COPY uv.lock ./
-
-# Create venv and install deps (deterministic if uv.lock is present)
-ENV VENV_PATH=/opt/venv
-RUN python -m venv ${VENV_PATH} && \
-    ${UV_BIN} lock && \
-    ${UV_BIN} sync --locked --python ${VENV_PATH}/bin/python && \
-    ${VENV_PATH}/bin/pip install --no-cache-dir "uvicorn[standard]>=0.30" 
-
-# Now copy your application code
+# Copy all files first
 COPY . .
+
+# Create venv and install dependencies
+ENV VENV_PATH=/opt/venv
+RUN python -m venv ${VENV_PATH}
+
+# Activate venv and install dependencies
+RUN . ${VENV_PATH}/bin/activate && \
+    ${UV_BIN} pip install --python ${VENV_PATH}/bin/python -e .
+
+# Verify installation
+RUN ${VENV_PATH}/bin/python -c "import fastapi; print('FastAPI installed successfully')"
 
 # ---- Runtime (slim) ---------------------------------------------------------
 FROM ${BASE_IMAGE} AS runtime
@@ -65,8 +64,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY --from=builder ${VENV_PATH} ${VENV_PATH}
 COPY --from=builder /app /app
 
+# Change ownership to app user
+RUN chown -R app:app ${VENV_PATH} /app
+
 EXPOSE 8000
 USER app
+
+# Verify installation in runtime
+RUN python -c "import fastapi; print('FastAPI available in runtime')"
 
 # Adjust if your entrypoint/module differs
 CMD ["python","-m","uvicorn","main:app","--host","0.0.0.0","--port","8000"]
