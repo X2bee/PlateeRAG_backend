@@ -1,29 +1,68 @@
-name: Deploy Back
+name: Build & Deploy Backend (GitOps)
 
 on:
   push:
-    branches: [ deploy ]
+    branches: [feature/k3s-1]
+
+env:
+  IMAGE_NAME: xgen-backend/api
+  BASE_PATH: apps/backend/base
 
 jobs:
-  deploy:
-    runs-on: self-hosted
+  build-push-update:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      packages: write
+
     steps:
-      - name: Pull latest code
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Docker login (Nexus)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.NEXUS_REGISTRY }}
+          username: ${{ secrets.NEXUS_USERNAME }}
+          password: ${{ secrets.NEXUS_PASSWORD }}
+
+      - name: Set image tag
+        id: vars
         run: |
-          cd /polarag_backend
-          git pull origin deploy
-          echo "✅ Pulled latest source code."
+          SHORT_SHA=${GITHUB_SHA::7}
+          echo "TAG=sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
 
-      - uses: actions/checkout@v4
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v1
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.TAG }}
+            ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Verify uv installation
-        run: uv --version
+      - name: Checkout infra repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PIPELINE_REPO }}
+          token: ${{ secrets.PIPELINE_REPO_PAT }}
+          path: infra
 
-      - name: Install dependencies & Restart server
+      - name: Install kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Update image tag
+        working-directory: infra/${{ env.BASE_PATH }}
         run: |
-          cd /polarag_backend
-          uv sync
-          pm2 reload backend
-          echo "🚀 Backend server restarted."
+          kustomize edit set image ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}=${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.TAG }}
+          cat kustomization.yaml
+
+      - name: Commit & push
+        working-directory: infra
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "backend: update image to ${{ steps.vars.outputs.TAG }}"
+          git push origin main

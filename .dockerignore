@@ -1,0 +1,16 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info
+dist/
+build/
+.cache/
+.data/
+models/
+node_modules/
+.env
+.env.*
+.DS_Store
