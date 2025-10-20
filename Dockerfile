@@ -34,9 +34,11 @@ COPY pyproject.toml ./
 # COPY uv.lock ./
 
 # Create venv and install deps (deterministic if uv.lock is present)
+ENV VENV_PATH=/opt/venv
 RUN python -m venv ${VENV_PATH} && \
     ${UV_BIN} lock && \
-    ${UV_BIN} sync --locked --python ${VENV_PATH}/bin/python
+    ${UV_BIN} sync --locked --python ${VENV_PATH}/bin/python && \
+    ${VENV_PATH}/bin/pip install --no-cache-dir "uvicorn[standard]>=0.30" 
 
 # Now copy your application code
 COPY . .
