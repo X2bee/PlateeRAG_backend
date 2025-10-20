@@ -6,8 +6,7 @@ from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_contex
 from editor.utils.helper.stream_helper import EnhancedAgentStreamingHandler, EnhancedAgentStreamingHandlerWithToolOutput, execute_agent_streaming
 from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
 from editor.utils.prefix_prompt import get_prefix_prompt
-from langchain.agents import create_tool_calling_agent
-from langchain.agents import AgentExecutor
+from langchain.agents import create_agent
 from fastapi import Request
 from controller.helper.singletonHelper import get_config_composer
 
@@ -22,8 +21,7 @@ class AgentVLLMStreamNode(Node):
     nodeName = "Agent VLLM Stream"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드"
     tags = ["agent", "chat", "rag", "vllm", "stream"]
-    disable = True
-    
+
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
         {"id": "tools", "name": "Tools", "type": "TOOL", "multi": True, "required": False, "value": []},
@@ -92,26 +90,45 @@ class AgentVLLMStreamNode(Node):
 
             if tools_list and len(tools_list) > 0:
                 final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt, plan=plan)
-                agent = create_tool_calling_agent(llm, tools_list, final_prompt)
-                agent_executor = AgentExecutor(
-                    agent=agent,
+
+                # LangChain 1.0.0의 create_agent는 system_prompt로 문자열만 받습니다
+                # ChatPromptTemplate에서 system message 추출
+                system_prompt_text = default_prompt
+                if hasattr(final_prompt, 'messages') and len(final_prompt.messages) > 0:
+                    first_msg = final_prompt.messages[0]
+                    if hasattr(first_msg, 'prompt') and hasattr(first_msg.prompt, 'template'):
+                        system_prompt_text = first_msg.prompt.template
+
+                # create_agent는 이제 CompiledStateGraph를 반환합니다
+                agent_graph = create_agent(
+                    model=llm,
                     tools=tools_list,
-                    verbose=True,
-                    handle_parsing_errors=True,
-                    max_iterations=10,
-                    max_execution_time=300,
+                    system_prompt=system_prompt_text
                 )
+
                 if return_intermediate_steps:
                     handler = EnhancedAgentStreamingHandlerWithToolOutput()
                 else:
                     handler = EnhancedAgentStreamingHandler()
 
-                async_executor = lambda: agent_executor.ainvoke(inputs, {"callbacks": [handler]})
+                # LangGraph의 새로운 입력 형식: messages 리스트 사용
+                from langchain_core.messages import HumanMessage
+
+                graph_inputs = {"messages": chat_history + [HumanMessage(content=text)]}
+                if additional_rag_context:
+                    graph_inputs["additional_rag_context"] = additional_rag_context
+
+                # LangGraph 기반 agent 실행을 위한 async executor
+                async_executor = lambda: agent_graph.ainvoke(
+                    graph_inputs,
+                    {"callbacks": [handler]}
+                )
 
                 try:
                     for token in execute_agent_streaming(async_executor, handler):
                         yield token
                 except Exception as e:
+                    logger.error(f"Agent streaming error: {str(e)}", exc_info=True)
                     yield f"\nStreaming Error: {str(e)}\n"
             else:
                 final_prompt = create_context_prompt(additional_rag_context, default_prompt, strict_citation, plan=plan)

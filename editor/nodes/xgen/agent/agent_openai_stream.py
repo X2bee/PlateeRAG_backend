@@ -199,11 +199,20 @@ class AgentOpenAIStreamNode(Node):
                 final_prompt = create_tool_context_prompt(
                     additional_rag_context, default_prompt, plan=plan
                 )
+
+                # LangChain 1.0.0의 create_agent는 system_prompt로 문자열만 받습니다
+                # ChatPromptTemplate에서 system message 추출
+                system_prompt_text = default_prompt
+                if hasattr(final_prompt, 'messages') and len(final_prompt.messages) > 0:
+                    first_msg = final_prompt.messages[0]
+                    if hasattr(first_msg, 'prompt') and hasattr(first_msg.prompt, 'template'):
+                        system_prompt_text = first_msg.prompt.template
+
                 # create_agent는 이제 CompiledStateGraph를 반환합니다
                 agent_graph = create_agent(
                     model=llm,
                     tools=tools_list,
-                    system_prompt=final_prompt
+                    system_prompt=system_prompt_text
                 )
 
                 if return_intermediate_steps:
@@ -236,7 +245,24 @@ class AgentOpenAIStreamNode(Node):
                 )
                 chain = final_prompt | llm
                 for chunk in chain.stream(inputs):
-                    yield chunk.content
+                    # Claude와 OpenAI 모두 지원하도록 content 처리
+                    content = chunk.content
+
+                    # Claude의 경우 content가 리스트 형태일 수 있음
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict):
+                                # text 타입의 청크만 추출
+                                if item.get('type') == 'text' and 'text' in item:
+                                    yield item['text']
+                            elif isinstance(item, str):
+                                yield item
+                    # OpenAI나 일반 문자열의 경우
+                    elif isinstance(content, str):
+                        yield content
+                    # 기타 형태의 content 처리
+                    elif content:
+                        yield str(content)
 
         except Exception as e:
             logger.error(

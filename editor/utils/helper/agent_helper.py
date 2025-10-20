@@ -3,7 +3,7 @@ import re
 import json
 from typing import Any, Optional, Union, List, Dict
 from json import JSONDecodeError
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.exceptions import OutputParserException
 from langchain_core.outputs import Generation

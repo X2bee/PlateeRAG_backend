@@ -152,15 +152,8 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
     if not config_composer:
         raise ValueError("No Config Composer set.")
 
-    # Anthropic 모델 감지 - 모든 Claude 모델 시리즈 포함
-    anthropic_models = [
-        'claude-haiku',      # Claude Haiku 시리즈 (3, 3.5, 4.5 등)
-        'claude-sonnet',     # Claude Sonnet 시리즈 (3, 3.5, 3.7, 4, 4.5 등)
-        'claude-opus',       # Claude Opus 시리즈 (3, 4, 4.1 등)
-        'claude-2',          # Claude 2 시리즈
-        'claude-instant'     # Claude Instant 시리즈
-    ]
-    is_anthropic_model = any(model.startswith(am) for am in anthropic_models)
+    # Anthropic 모델 감지 - 모든 Claude 모델은 "claude-"로 시작
+    is_anthropic_model = model.startswith('claude-')
 
     if is_anthropic_model:
         # Anthropic 모델 사용
@@ -372,7 +365,7 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
         current_input: 현재 입력 텍스트 (최적화 사용 시 필요)
         llm: LLM 객체 (최적화 사용 시 필요)
     """
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
     if plan and "steps" in plan and isinstance(plan["steps"], list) and len(plan["steps"]) > 0:
         plan_description = "\n".join(plan["steps"])
@@ -406,7 +399,7 @@ def create_context_prompt(additional_rag_context, default_prompt, strict_citatio
         current_input: 현재 입력 텍스트 (최적화 사용 시 필요)
         llm: LLM 객체 (최적화 사용 시 필요)
     """
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
     if plan and "steps" in plan and isinstance(plan["steps"], list) and len(plan["steps"]) > 0:
         plan_description = "\n".join(plan["steps"])

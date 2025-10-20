@@ -2,7 +2,7 @@ from editor.node_composer import Node
 import logging
 import json
 from typing import List, Optional, Dict, Any
-from langchain.schema import SystemMessage, HumanMessage
+from langchain.messages import SystemMessage, HumanMessage
 from editor.utils.helper.service_helper import AppServiceManager
 import re
 from collections import Counter
@@ -125,14 +125,14 @@ class DBMemoryNode(Node):
         """텍스트를 전처리하여 키워드 리스트로 반환"""
         if not text:
             return []
-        
+
         # 소문자 변환 및 특수문자 제거
         text = re.sub(r'[^\w\s가-힣]', ' ', text.lower())
         # 단어 분리 (한글, 영문 모두 지원)
         words = text.split()
         # 길이가 2 이상인 단어만 유지
         words = [word for word in words if len(word) >= 2]
-        
+
         return words
 
     def _calculate_bm25(
@@ -340,26 +340,26 @@ class DBMemoryNode(Node):
         """LLM을 사용할 수 없을 때 간단한 요약 방식"""
         if not messages:
             return ""
-        
+
         summary_parts = []
         current_length = 0
-        
+
         for msg in messages:
             role = "사용자" if msg['role'] == "user" else "AI"
             content = msg['content']
-            
+
             # 긴 내용은 줄임
             if len(content) > 100:
                 content = content[:100] + "..."
-            
+
             part = f"{role}: {content}"
-            
+
             if current_length + len(part) > max_length:
                 break
-                
+
             summary_parts.append(part)
             current_length += len(part)
-        
+
         return "\n".join(summary_parts)
 
     def _select_and_summarize_relevant_messages(
@@ -373,7 +373,7 @@ class DBMemoryNode(Node):
         """현재 입력과 관련된 메시지들을 선택하고 요약 (연결된 agent 모델 사용)"""
         if not historical_messages:
             return ""
-        
+
         # 유사도 필터링 사용 여부에 따라 메시지 선택
         if use_similarity_filter:
             embedding_fn = self._resolve_embedding_function()
@@ -408,11 +408,11 @@ class DBMemoryNode(Node):
                 }
                 for msg in historical_messages
             ]
-        
+
         if not meaningful_messages:
             logger.info("No relevant messages found for current input")
             return ""
-        
+
         # 선택된 메시지들에 대한 상세 로그
         for i, msg in enumerate(meaningful_messages, 1):
             role = msg['role']
@@ -421,9 +421,9 @@ class DBMemoryNode(Node):
             # 긴 메시지는 앞부분만 로그에 출력
             content_preview = content[:100] + "..." if len(content) > 100 else content
             logger.info(f"  [{i}] {role} (score: {score:.4f}): {content_preview}")
-        
+
         logger.info(f"Current input for comparison: {current_input}")
-        
+
         # agent에서 전달받은 LLM을 사용하여 요약
         if llm:
             try:
@@ -694,7 +694,7 @@ class DBMemoryNode(Node):
         )
 
         return filtered_messages
-    
+
     def _group_messages_into_pairs(self, chat_history):
         """연속된 메시지들을 user-ai 대화 쌍으로 묶어서 반환"""
         if not chat_history:

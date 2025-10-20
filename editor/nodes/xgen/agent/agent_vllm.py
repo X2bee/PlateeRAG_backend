@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 from editor.node_composer import Node
-from langchain.schema.output_parser import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.exceptions import OutputParserException
 from editor.utils.helper.agent_helper import (
     NonStreamingAgentHandler,
@@ -11,8 +11,7 @@ from editor.utils.helper.agent_helper import (
     XgenJsonOutputParser
 )
 from editor.utils.prefix_prompt import get_prefix_prompt
-from langchain.agents import create_tool_calling_agent
-from langchain.agents import AgentExecutor
+from langchain.agents import create_agent
 from fastapi import Request
 from controller.helper.singletonHelper import get_config_composer
 from editor.nodes.xgen.agent.functions import prepare_llm_components, rag_context_builder, create_json_output_prompt, create_tool_context_prompt, create_context_prompt
@@ -27,7 +26,6 @@ class AgentVLLMNode(Node):
     nodeName = "Agent VLLM"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드"
     tags = ["agent", "chat", "rag", "vllm"]
-    disable = True
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
@@ -94,20 +92,36 @@ class AgentVLLMNode(Node):
                 default_prompt = create_json_output_prompt(args_schema, default_prompt)
             if tools_list and len(tools_list) > 0:
                 final_prompt = create_tool_context_prompt(additional_rag_context, default_prompt, plan=plan)
-                agent = create_tool_calling_agent(llm, tools_list, final_prompt)
-                agent_executor = AgentExecutor(
-                    agent=agent,
+
+                # LangChain 1.0.0의 create_agent는 system_prompt로 문자열만 받습니다
+                # ChatPromptTemplate에서 system message 추출
+                system_prompt_text = default_prompt
+                if hasattr(final_prompt, 'messages') and len(final_prompt.messages) > 0:
+                    first_msg = final_prompt.messages[0]
+                    if hasattr(first_msg, 'prompt') and hasattr(first_msg.prompt, 'template'):
+                        system_prompt_text = first_msg.prompt.template
+
+                # create_agent는 이제 CompiledStateGraph를 반환합니다
+                agent_graph = create_agent(
+                    model=llm,
                     tools=tools_list,
-                    verbose=True,
-                    handle_parsing_errors=True,
-                    max_iterations=10,
+                    system_prompt=system_prompt_text
                 )
+
                 if return_intermediate_steps:
                     handler = NonStreamingAgentHandlerWithToolOutput()
                 else:
                     handler = NonStreamingAgentHandler()
-                response = agent_executor.invoke(inputs, {"callbacks": [handler]})
-                output = response["output"]
+
+                # LangGraph의 새로운 입력 형식: messages 리스트 사용
+                from langchain_core.messages import HumanMessage
+
+                graph_inputs = {"messages": chat_history + [HumanMessage(content=text)]}
+                if additional_rag_context:
+                    graph_inputs["additional_rag_context"] = additional_rag_context
+
+                response = agent_graph.invoke(graph_inputs, {"callbacks": [handler]})
+                output = response.get("messages", [])[-1].content if response.get("messages") else ""
                 return handler.get_formatted_output(output)
 
             else:

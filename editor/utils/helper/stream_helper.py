@@ -72,8 +72,33 @@ class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
             # self.put_status(f"\n💭 단계 {self.current_step}: 답변 생성 중...\n")
 
     async def on_llm_new_token(self, token: str, **kwargs) -> None:
-        """LLM이 새 토큰을 생성할 때 호출"""
-        if token:
+        """LLM이 새 토큰을 생성할 때 호출 (OpenAI/Claude 모두 지원)"""
+        if not token:
+            return
+
+        # Claude 모델의 경우 토큰이 리스트 형태로 올 수 있음
+        if isinstance(token, list):
+            for item in token:
+                if isinstance(item, dict) and item.get('type') == 'text' and 'text' in item:
+                    text_content = item['text']
+                    if text_content:
+                        self.streamed_tokens.append(text_content)
+                        self.put_token(text_content)
+            return
+
+        # Claude 모델의 경우 토큰이 딕셔너리 형태로 올 수 있음
+        if isinstance(token, dict):
+            # text 타입의 청크만 추출
+            if token.get('type') == 'text' and 'text' in token:
+                text_content = token['text']
+                if text_content:
+                    self.streamed_tokens.append(text_content)
+                    self.put_token(text_content)
+            # tool_use나 다른 타입은 무시
+            return
+
+        # OpenAI 등 문자열로 오는 경우
+        if isinstance(token, str):
             self.streamed_tokens.append(token)
             self.put_token(token)
 
@@ -141,8 +166,33 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
             # self.put_status(f"\n💭 단계 {self.current_step}: 답변 생성 중...\n")
 
     async def on_llm_new_token(self, token: str, **kwargs) -> None:
-        """LLM이 새 토큰을 생성할 때 호출"""
-        if token:
+        """LLM이 새 토큰을 생성할 때 호출 (OpenAI/Claude 모두 지원)"""
+        if not token:
+            return
+
+        # Claude 모델의 경우 토큰이 리스트 형태로 올 수 있음
+        if isinstance(token, list):
+            for item in token:
+                if isinstance(item, dict) and item.get('type') == 'text' and 'text' in item:
+                    text_content = item['text']
+                    if text_content:
+                        self.streamed_tokens.append(text_content)
+                        self.put_token(text_content)
+            return
+
+        # Claude 모델의 경우 토큰이 딕셔너리 형태로 올 수 있음
+        if isinstance(token, dict):
+            # text 타입의 청크만 추출
+            if token.get('type') == 'text' and 'text' in token:
+                text_content = token['text']
+                if text_content:
+                    self.streamed_tokens.append(text_content)
+                    self.put_token(text_content)
+            # tool_use나 다른 타입은 무시
+            return
+
+        # OpenAI 등 문자열로 오는 경우
+        if isinstance(token, str):
             self.streamed_tokens.append(token)
             self.put_token(token)
 
@@ -239,6 +289,25 @@ def execute_agent_streaming(
                 except Exception as e:
                     logger.error(f"Agent 실행 중 오류: {str(e)}", exc_info=True)
 
+                    # 사용자 친화적인 에러 메시지 생성
+                    error_detail = str(e)
+
+                    # OpenAI API 에러 처리
+                    if "404" in error_detail and "does not exist" in error_detail:
+                        if "claude" in error_detail.lower():
+                            error_message = "❌ Claude 모델을 OpenAI API로 호출하려고 했습니다. Anthropic API 키가 올바르게 설정되었는지 확인하세요."
+                        else:
+                            error_message = f"❌ 모델을 찾을 수 없습니다: {error_detail}"
+                    elif "401" in error_detail or "authentication" in error_detail.lower():
+                        error_message = "❌ API 인증 실패: API 키를 확인하세요."
+                    elif "429" in error_detail or "rate limit" in error_detail.lower():
+                        error_message = "❌ API 요청 한도 초과: 잠시 후 다시 시도하세요."
+                    else:
+                        error_message = f"❌ 오류 발생: {error_detail}"
+
+                    # 에러 메시지를 handler를 통해 전달
+                    handler.put_status(f"\n{error_message}\n")
+
                     # LangGraph 관련 오류에 대한 추가 정보 제공
                     if "validation error" in str(e).lower():
                         if "function.arguments" in str(e):
@@ -299,8 +368,8 @@ def execute_agent_streaming(
 
     except Exception as e:
         logger.error(f"스트리밍 중 오류: {str(e)}", exc_info=True)
-        pass
-        # yield f"\n❌ 오류 발생: {str(e)}\n"
+        # 에러 메시지를 사용자에게 yield
+        yield f"\n❌ 오류 발생: {str(e)}\n"
     finally:
         # 스레드 정리
         if thread.is_alive():
