@@ -1,7 +1,8 @@
-# Minimal API dependencies for testing
+# Essential API dependencies
 fastapi==0.116.1
 uvicorn==0.35.0
 pydantic==2.11.7
+pydantic-settings==2.10.1
 starlette==0.47.1
 anyio==4.9.0
 sniffio==1.3.1
@@ -11,3 +12,18 @@ charset-normalizer==3.4.2
 click==8.2.1
 h11==0.16.0
 typing-extensions==4.14.1
+
+# Database and core dependencies
+sqlalchemy==2.0.41
+psycopg2-binary==2.9.10
+python-dotenv==1.1.1
+python-multipart==0.0.20
+aiofiles==24.1.0
+
+# Essential dependencies from main.py
+pyarrow==21.0.0
+APScheduler==3.10.4
+requests==2.32.4
+httpx==0.28.1
+pyjwt==2.8.0
+redis==5.2.1
