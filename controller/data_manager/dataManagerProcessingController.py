@@ -77,21 +77,19 @@ class LoadFromDatabaseRequest(BaseManagerRequest):
     connection_url: Optional[str] = Field(None, description="연결 URL")
     query: Optional[str] = Field(None, description="SQL 쿼리")
     table_name: Optional[str] = Field(None, description="테이블명")
-    schema_name: Optional[str] = Field(None, description="스키마명 (PostgreSQL)", alias="schema")
+    schema_name: Optional[str] = Field(None, description="스키마명 (PostgreSQL)")  # ✅ 이미 올바름
     chunk_size: Optional[int] = Field(None, description="청크 크기", ge=1000)
 
 class TableListRequest(DatabaseConnectionRequest):
     """테이블 목록 조회 요청"""
-    model_config = {"populate_by_name": True}
-
-    schema_name: Optional[str] = Field(None, description="스키마명", alias="schema")
+    db_schema: Optional[str] = Field(None, description="스키마명")  # ✅ schema → db_schema
 
 class TablePreviewRequest(DatabaseConnectionRequest):
     """테이블 미리보기 요청"""
     model_config = {"populate_by_name": True}
 
     table_name: str = Field(..., description="테이블명")
-    schema_name: Optional[str] = Field(None, description="스키마명", alias="schema")
+    db_schema: Optional[str] = Field(None, description="스키마명")  # ✅ schema → db_schema
     limit: int = Field(10, description="조회할 행 수", ge=1, le=100)
 
 class QueryValidationRequest(DatabaseConnectionRequest):
@@ -1310,8 +1308,8 @@ async def list_database_tables(request: Request, list_request: TableListRequest)
                 AND table_type = 'BASE TABLE'
                 ORDER BY table_schema, table_name
             """)
-            result = conn.execute(query, {"schema": list_request.schema_name})
-
+            result = conn.execute(query, {"schema": list_request.db_schema})  # ✅ schema → db_schema
+            
             for row in result:
                 try:
                     count_query = text(f'SELECT COUNT(*) FROM "{row[0]}"."{row[1]}"')
@@ -1377,7 +1375,7 @@ async def list_database_tables(request: Request, list_request: TableListRequest)
         message=f"{len(tables_info)}개의 테이블을 찾았습니다",
         db_type=db_type,
         database=db_config['database'],
-        schema=list_request.schema_name,
+        schema=list_request.db_schema,  # ✅ schema → db_schema
         table_count=len(tables_info),
         tables=tables_info
     )
@@ -1405,9 +1403,9 @@ async def preview_database_table(request: Request, preview_request: TablePreview
     db_type = db_config.get('db_type', 'postgresql').lower()
 
     # 테이블 식별자 생성
-    if db_type == 'postgresql' and preview_request.schema_name:
-        table_identifier = f'"{preview_request.schema_name}"."{preview_request.table_name}"'
-        schema_param = preview_request.schema_name
+    if db_type == 'postgresql' and preview_request.db_schema:  # ✅ schema → db_schema
+        table_identifier = f'"{preview_request.db_schema}"."{preview_request.table_name}"'  # ✅ schema → db_schema
+        schema_param = preview_request.db_schema  # ✅ schema → db_schema
     else:
         table_identifier = f'"{preview_request.table_name}"'
         schema_param = None
@@ -1448,7 +1446,7 @@ async def preview_database_table(request: Request, preview_request: TablePreview
         success=True,
         message="테이블 미리보기 성공",
         table_name=preview_request.table_name,
-        schema=preview_request.schema_name,
+        schema=preview_request.db_schema,  # ✅ schema → db_schema
         total_rows=int(total_rows),
         total_columns=len(column_info),
         columns=column_info,

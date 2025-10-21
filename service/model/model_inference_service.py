@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import importlib
 import inspect
 import logging
+import json
 import pickle
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -44,6 +46,7 @@ class _ModelSource:
     path: Optional[Path] = None
     mlflow_info: Optional[MlflowModelInfo] = None
     original_uri: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class ModelInferenceService:
@@ -66,23 +69,108 @@ class ModelInferenceService:
         model_record: Optional["MLModel"],
     ) -> _ModelSource:
         mlflow_info = extract_mlflow_info(model_record, file_path)
+        metadata_context = self._build_metadata_context(model_record, mlflow_info)
         if mlflow_info:
+            context_copy = metadata_context.copy()
             return _ModelSource(
                 kind="mlflow",
                 cache_key=mlflow_info.cache_key(),
                 cache_revision=mlflow_info.cache_revision(model_record),
                 mlflow_info=mlflow_info,
                 original_uri=file_path,
+                metadata=context_copy,
             )
 
         path = Path(file_path).expanduser().resolve()
+        context_copy = metadata_context.copy()
         return _ModelSource(
             kind="local",
             cache_key=str(path),
             cache_revision=None,
             path=path,
             original_uri=str(path),
+            metadata=context_copy,
         )
+
+    @staticmethod
+    def _coerce_metadata_dict(value: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except (TypeError, ValueError):
+                return None
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
+    @classmethod
+    def _extract_model_tags(cls, model_record: Optional["MLModel"]) -> Dict[str, Any]:
+        if model_record is None:
+            return {}
+        metadata_dict = cls._coerce_metadata_dict(getattr(model_record, "metadata", None))
+        if not isinstance(metadata_dict, dict):
+            return {}
+        mlflow_meta = metadata_dict.get("mlflow")
+        if not isinstance(mlflow_meta, dict):
+            return {}
+        additional = cls._coerce_metadata_dict(mlflow_meta.get("additional_metadata"))
+        if not isinstance(additional, dict):
+            return {}
+        tags = additional.get("tags")
+        if isinstance(tags, dict):
+            return tags
+        if isinstance(tags, str):
+            try:
+                parsed = json.loads(tags)
+            except (TypeError, ValueError):
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    @classmethod
+    def _build_metadata_context(
+        cls,
+        model_record: Optional["MLModel"],
+        mlflow_info: Optional[MlflowModelInfo],
+    ) -> Dict[str, Any]:
+        context: Dict[str, Any] = {}
+        if mlflow_info and mlflow_info.extra:
+            context.update(mlflow_info.extra)
+        tags = cls._extract_model_tags(model_record)
+        if tags:
+            existing_tags = context.get("tags")
+            if isinstance(existing_tags, dict):
+                merged = existing_tags.copy()
+                merged.update({k: v for k, v in tags.items() if k not in merged})
+                context["tags"] = merged
+            else:
+                context["tags"] = tags
+        return context
+
+    @staticmethod
+    def _extract_flavor_hint(metadata_context: Dict[str, Any]) -> Optional[str]:
+        keys = (
+            "mlflow_load_flavor",
+            "user_script_model_primary_flavor",
+            "model_format",
+            "xgenml_model_format",
+        )
+
+        candidates: List[Any] = []
+        tags = metadata_context.get("tags")
+        if isinstance(tags, dict):
+            candidates.extend(tags.get(key) for key in keys)
+
+        for key in keys:
+            if key in metadata_context:
+                candidates.append(metadata_context[key])
+
+        for value in candidates:
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+        return None
 
     def _load_local_model(self, source: _ModelSource) -> Any:
         path = source.path
@@ -96,14 +184,40 @@ class ModelInferenceService:
             if cache_entry and cache_entry.get("revision") == mtime:
                 return cache_entry["model"]
 
+        script_path_added: Optional[str] = None
+        script_candidate: Optional[Path] = None
+        if path.is_dir():
+            candidate = path / "user_script.py"
+            if candidate.exists():
+                script_candidate = candidate
+        else:
+            candidate = path.parent / "user_script.py"
+            if candidate.exists():
+                script_candidate = candidate
+
+        if script_candidate:
+            script_dir = str(script_candidate.parent)
+            if script_dir not in sys.path:
+                sys.path.insert(0, script_dir)
+                script_path_added = script_dir
+                logger.info("Temporarily added user script directory to sys.path: %s", script_dir)
+
+        flavor_hint = self._extract_flavor_hint(source.metadata)
+
         try:
-            model = self._load_artifact(path)
+            model = self._load_artifact(path, flavor_hint=flavor_hint)
         except ModuleNotFoundError as exc:
             missing_module = getattr(exc, "name", None)
             if missing_module and self._ensure_fallback_module(missing_module):
-                model = self._load_artifact(path)
+                model = self._load_artifact(path, flavor_hint=flavor_hint)
             else:
                 raise
+        finally:
+            if script_path_added:
+                try:
+                    sys.path.remove(script_path_added)
+                except ValueError:
+                    pass
 
         with self._lock:
             self._cache[source.cache_key] = {"model": model, "revision": mtime}
@@ -164,6 +278,14 @@ class ModelInferenceService:
             extra_kwargs = info.extra.get("load_kwargs")
             if isinstance(extra_kwargs, dict):
                 kwargs.update(extra_kwargs)
+            tags = info.extra.get("tags")
+            tag_flavor = None
+            if isinstance(tags, dict):
+                tag_flavor = tags.get("mlflow_load_flavor") or tags.get("user_script_model_primary_flavor")
+            if tag_flavor and isinstance(tag_flavor, str):
+                tag_flavor = tag_flavor.lower()
+            if tag_flavor == "torchscript":
+                kwargs.setdefault("map_location", "cpu")
 
         try:
             signature = inspect.signature(loader)
@@ -176,13 +298,20 @@ class ModelInferenceService:
                 kwargs["run_id"] = info.run_id
             if info.artifact_path and "artifact_path" in parameters and "artifact_path" not in kwargs:
                 kwargs["artifact_path"] = info.artifact_path
+            if "map_location" not in parameters and "map_location" in kwargs:
+                kwargs.pop("map_location", None)
 
         return kwargs
 
     @staticmethod
     def _select_mlflow_loader(mlflow_module: Any, flavor: str):
         flavor_normalized = (flavor or "pyfunc").lower()
-        target_attr = "pyfunc" if flavor_normalized == "pyfunc" else flavor_normalized
+        alias_map = {
+            "torchscript": "pytorch",
+        }
+        target_attr = alias_map.get(flavor_normalized, flavor_normalized)
+        if target_attr == "pyfunc":
+            target_attr = "pyfunc"
         namespace = getattr(mlflow_module, target_attr, None)
         if namespace is None or not hasattr(namespace, "load_model"):
             raise RuntimeError(
@@ -335,18 +464,27 @@ class ModelInferenceService:
         normalized_inputs = self._normalize_inputs(inputs, input_schema)
         prepared_inputs = self._prepare_inputs_for_model(normalized_inputs, input_schema, mlflow_info)
 
-        predictions = model.predict(prepared_inputs)
-        response: Dict[str, Any] = {
-            "predictions": self._to_serializable(predictions)
-        }
+        is_torch_model = self._is_torch_model(model)
 
-        if return_probabilities and hasattr(model, "predict_proba"):
-            try:
-                probabilities = model.predict_proba(prepared_inputs)
-            except Exception as exc:  # pragma: no cover - model specific failure
-                logger.warning("Model does not support probability prediction: %s", exc)
-            else:
-                response["probabilities"] = self._to_serializable(probabilities)
+        if is_torch_model:
+            predictions = self._predict_with_torch(model, prepared_inputs)
+        else:
+            if not hasattr(model, "predict"):
+                raise AttributeError("Loaded model does not expose a predict method")
+            predictions = model.predict(prepared_inputs)
+
+        response: Dict[str, Any] = {"predictions": self._to_serializable(predictions)}
+
+        if return_probabilities:
+            if is_torch_model:
+                logger.warning("Probability outputs are not supported for torch-based user script models.")
+            elif hasattr(model, "predict_proba"):
+                try:
+                    probabilities = model.predict_proba(prepared_inputs)
+                except Exception as exc:  # pragma: no cover - model specific failure
+                    logger.warning("Model does not support probability prediction: %s", exc)
+                else:
+                    response["probabilities"] = self._to_serializable(probabilities)
 
         return response
 
@@ -382,7 +520,104 @@ class ModelInferenceService:
         return value
 
     @staticmethod
-    def _load_artifact(path: Path) -> Any:
+    def _is_torch_artifact_path(path: Path) -> bool:
+        return path.suffix.lower() in {".pt", ".pth", ".torch"}
+
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def _import_torch():
+        try:
+            import torch  # type: ignore
+        except ImportError:
+            return None
+        return torch
+
+    @staticmethod
+    def _is_torch_model(model: Any) -> bool:
+        torch = ModelInferenceService._import_torch()
+        if torch is None:
+            return False
+
+        script_module_cls = getattr(torch.jit, "ScriptModule", tuple())
+        module_types = tuple(
+            cls for cls in (getattr(torch.nn, "Module", None), script_module_cls) if cls
+        )
+        if not module_types:
+            return False
+
+        return isinstance(model, module_types)
+
+    @staticmethod
+    def _predict_with_torch(model: Any, prepared_inputs: Any) -> Any:
+        torch = ModelInferenceService._import_torch()
+        if torch is None:
+            raise RuntimeError("PyTorch runtime is required to run torch-based models.")
+
+        if hasattr(model, "eval"):
+            model.eval()
+
+        if isinstance(prepared_inputs, list):
+            array_like = prepared_inputs
+        elif hasattr(prepared_inputs, "to_numpy"):
+            array_like = prepared_inputs.to_numpy()
+        elif np is not None:
+            array_like = np.asarray(prepared_inputs)
+        else:
+            array_like = prepared_inputs
+
+        if np is not None:
+            array_like = np.asarray(array_like)
+            if array_like.dtype.kind not in {"f", "c"}:
+                array_like = array_like.astype("float32")
+
+        tensor = torch.as_tensor(array_like, dtype=torch.float32)
+        with torch.no_grad():
+            output = model(tensor)
+
+        if hasattr(output, "detach"):
+            output = output.detach()
+        if hasattr(output, "cpu"):
+            output = output.cpu()
+        if hasattr(output, "numpy"):
+            output = output.numpy()
+
+        return output
+
+    @staticmethod
+    def _load_artifact(path: Path, flavor_hint: Optional[str] = None) -> Any:
+        flavor = (flavor_hint or "").lower()
+        use_torch = False
+        prefer_torchscript = False
+
+        if flavor in {"torchscript", "pytorch"}:
+            use_torch = True
+            prefer_torchscript = flavor == "torchscript"
+        elif ModelInferenceService._is_torch_artifact_path(path):
+            use_torch = True
+            prefer_torchscript = True
+
+        if use_torch:
+            torch = ModelInferenceService._import_torch()
+            if torch is None:
+                raise RuntimeError(
+                    "PyTorch runtime is required to load torch-based user script models."
+                )
+            model = None
+            if prefer_torchscript:
+                try:
+                    model = torch.jit.load(str(path), map_location="cpu")
+                except (RuntimeError, ValueError) as exc:
+                    logger.warning(
+                        "Failed to load TorchScript artifact at %s: %s. Falling back to torch.load.",
+                        path,
+                        exc,
+                    )
+            if model is None:
+                model = torch.load(str(path), map_location="cpu")
+            if hasattr(model, "eval"):
+                model.eval()
+            return model
+
         if joblib is not None:
             return joblib.load(path)
         with path.open("rb") as artifact:

@@ -17,6 +17,7 @@ from service.database.models.group import GroupMeta
 from service.database.models.backend import BackendLogs
 from service.database.models.prompts import Prompts, PromptStoreRating
 from service.database.models.tools import Tools, ToolStoreMeta, ToolStoreRating
+from service.database.models.db_sync_config import DBSyncConfig  # ⭐ 추가
 
 # 사용 가능한 모델들
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     'MLModel',
     'Prompts', 'PromptStoreRating',
     'Tools', 'ToolStoreMeta', 'ToolStoreRating',
+    'DBSyncConfig',  # ⭐ 추가
 ]
 
 # 애플리케이션에서 사용할 모델 목록
@@ -51,4 +53,5 @@ APPLICATION_MODELS = [
     MLModel,
     Prompts, PromptStoreRating,
     Tools, ToolStoreMeta, ToolStoreRating,
+    DBSyncConfig,  # ⭐ 추가
 ]

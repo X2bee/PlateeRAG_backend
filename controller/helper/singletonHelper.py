@@ -1,3 +1,4 @@
+# controller/helper/singletonHelper.py
 from fastapi import HTTPException, Request
 from service.database import AppDatabaseManager
 from config.config_composer import ConfigComposer
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from service.stt.huggingface_stt import HuggingFaceSTT
     from service.data_manager.data_manager_register import DataManagerRegistry
     from service.mlflow.mlflow_artifact_service import MLflowArtifactService
+    from service.data_manager.db_sync_scheduler import DBSyncScheduler  # ✨ 추가
 
 def get_db_manager(request: Request) -> AppDatabaseManager:
     """데이터베이스 매니저 의존성 주입"""
@@ -125,7 +127,6 @@ def get_data_manager_registry(request: Request) -> 'DataManagerRegistry':
     else:
         raise HTTPException(status_code=500, detail="DataManagerRegistry가 초기화되지 않았습니다")
 
-
 def get_mlflow_service(request: Request) -> 'MLflowArtifactService':
     """MLflow artifact service dependency"""
     if hasattr(request.app.state, 'mlflow_service') and request.app.state.mlflow_service:
@@ -153,3 +154,72 @@ def get_redis_version_manager(request: Request) -> RedisVersionManager:
             db=0
         )
     return request.app.state.redis_version_manager
+
+# ✨ DB 동기화 스케줄러 관련 함수 추가
+def get_db_sync_scheduler(request: Request) -> 'DBSyncScheduler':
+    """DB 동기화 스케줄러 가져오기"""
+    if hasattr(request.app.state, 'db_sync_scheduler') and request.app.state.db_sync_scheduler:
+        return request.app.state.db_sync_scheduler
+    else:
+        raise HTTPException(status_code=503, detail="DB 동기화 스케줄러가 초기화되지 않았습니다")
+
+def initialize_db_sync_scheduler(app_state) -> 'DBSyncScheduler':
+    """
+    DB 동기화 스케줄러 초기화
+    
+    Args:
+        app_state: FastAPI app.state 객체
+        
+    Returns:
+        DBSyncScheduler: 초기화된 스케줄러 인스턴스
+    """
+    if hasattr(app_state, 'db_sync_scheduler') and app_state.db_sync_scheduler:
+        print("⚠️  DB 동기화 스케줄러가 이미 초기화되어 있습니다")
+        return app_state.db_sync_scheduler
+    
+    try:
+        from service.data_manager.db_sync_scheduler import DBSyncScheduler
+        
+        # ✅ 필요한 의존성 확인
+        if not hasattr(app_state, 'data_manager_registry') or not app_state.data_manager_registry:
+            raise ValueError("DataManagerRegistry가 초기화되지 않았습니다")
+        
+        if not hasattr(app_state, 'app_db') or not app_state.app_db:
+            raise ValueError("AppDatabaseManager가 초기화되지 않았습니다")
+        
+        print("🔄 DB 동기화 스케줄러 생성 중...")
+        
+        # ✅ 의존성을 전달하여 스케줄러 생성
+        scheduler = DBSyncScheduler(
+            data_manager_registry=app_state.data_manager_registry,
+            app_db_manager=app_state.app_db
+        )
+        scheduler.start()
+        
+        # app.state에 저장
+        app_state.db_sync_scheduler = scheduler
+        
+        print("✅ DB 동기화 스케줄러 초기화 완료")
+        return scheduler
+        
+    except Exception as e:
+        print(f"❌ DB 동기화 스케줄러 초기화 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+def shutdown_db_sync_scheduler(app_state):
+    """
+    DB 동기화 스케줄러 종료
+    
+    Args:
+        app_state: FastAPI app.state 객체
+    """
+    if hasattr(app_state, 'db_sync_scheduler') and app_state.db_sync_scheduler:
+        try:
+            print("🛑 DB 동기화 스케줄러 종료 중...")
+            app_state.db_sync_scheduler.shutdown()
+            app_state.db_sync_scheduler = None
+            print("✅ DB 동기화 스케줄러 종료 완료!")
+        except Exception as e:
+            print(f"❌ DB 동기화 스케줄러 종료 실패: {e}")

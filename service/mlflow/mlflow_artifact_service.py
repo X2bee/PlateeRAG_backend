@@ -7,6 +7,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+import yaml
 
 LOGGER = logging.getLogger("mlflow-artifact-service")
 
@@ -351,6 +352,22 @@ class MLflowArtifactService:
 
         mlmodel = base_path / "MLmodel"
         if mlmodel.exists():
+            try:
+                with mlmodel.open("r", encoding="utf-8") as handle:
+                    mlmodel_dict = yaml.safe_load(handle)
+            except Exception:  # pragma: no cover - best effort parsing
+                LOGGER.warning("Failed to parse MLmodel file at %s", mlmodel, exc_info=True)
+            else:
+                model_path = (
+                    mlmodel_dict.get("flavors", {})
+                    .get("python_function", {})
+                    .get("model_path")
+                )
+                if model_path:
+                    candidate = (mlmodel.parent / model_path).resolve()
+                    if candidate.exists():
+                        return candidate
+
             return mlmodel.parent
 
         return base_path

@@ -6,6 +6,7 @@ import logging
 from service.data_manager.data_manager import DataManager
 from service.storage.minio_client import MinioDataStorage
 from service.storage.redis_version_manager import RedisVersionManager
+from service.data_manager.db_sync_scheduler import DBSyncScheduler
 from datetime import datetime
 
 logger = logging.getLogger("data-manager-registry")
@@ -18,11 +19,10 @@ class DataManagerRegistry:
     - API 재시작 시 자동 복원 (Lazy Loading)
     """
 
-    def __init__(self):
+    def __init__(self, app_db_manager=None):
         self.managers: Dict[str, DataManager] = {}
         self._lock = threading.Lock()
         
-        # ========== 스토리지 클라이언트 초기화 ==========
         try:
             self.minio_storage = MinioDataStorage(
                 endpoint="minio.x2bee.com",
@@ -45,6 +45,18 @@ class DataManagerRegistry:
         except Exception as e:
             logger.error(f"❌ Redis 초기화 실패: {e}")
             self.redis_manager = None
+        
+        # ========== ✨ DB 동기화 스케줄러 초기화 ==========
+        try:
+            self.db_sync_scheduler = DBSyncScheduler(
+                    data_manager_registry=self,
+                    app_db_manager=app_db_manager  # ✅ 전달!
+                )
+            self.db_sync_scheduler.start()
+            logger.info("✅ DB 동기화 스케줄러 초기화 완료")
+        except Exception as e:
+            logger.error(f"❌ DB 동기화 스케줄러 초기화 실패: {e}")
+            self.db_sync_scheduler = None
         
         logger.info("DataManagerRegistry initialized with Dataset-Centric architecture")
         
@@ -483,6 +495,14 @@ class DataManagerRegistry:
     def cleanup(self):
         """레지스트리 정리 - 모든 매니저 정리 및 리소스 해제"""
         logger.info("🧹 DataManagerRegistry 정리 시작...")
+
+        # ========== ✨ 스케줄러 중지 ==========
+        if hasattr(self, 'db_sync_scheduler') and self.db_sync_scheduler:
+            try:
+                self.db_sync_scheduler.stop()
+                logger.info("✅ DB 동기화 스케줄러 중지 완료")
+            except Exception as e:
+                logger.error(f"스케줄러 중지 실패: {e}")
 
         with self._lock:
             # 모든 매니저들을 안전하게 정리
