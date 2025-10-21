@@ -20,7 +20,6 @@ class InputSchemaProviderNode(Node):
     parameters = [
         # Body type: JSON or Form
         {"id": "body_type", "name": "Body Type", "type": "STR", "value": "JSON", "options": [{"value": "JSON", "label": "JSON"}, {"value": "FORM", "label": "Form"}], "description": "Choose JSON to edit the request body as JSON, or Form to send application/x-www-form-urlencoded."},
-        # (삭제) `as_form`은 더 이상 필요하지 않습니다. Body Type으로 전송 방식(JSON/Form)을 제어합니다.
         # 안내용 필드: Request Body 전용 필드 사용 안내
         {"id": "request_body_note", "name": "Request Body (use *_body keys)", "type": "STR", "value": "", "description": "Add fields with suffix '_body' to include them in the POST body (e.g. payload_body, metadata_body)."}
     ]
@@ -65,7 +64,7 @@ class InputSchemaProviderNode(Node):
             if param_id == 'request_body_note':
                 continue
             # GET 방식이면 Request Body 관련 설정은 스키마에 포함시키지 않음
-            if method_upper == 'GET' and (param_id == 'as_form' or param_id == 'request_body_editor' or param_id == 'request_body_note' or param_id.endswith('_body')):
+            if method_upper == 'GET' and (param_id == 'request_body_editor' or param_id == 'request_body_note' or param_id.endswith('_body')):
                 continue
             # body_type이 FORM이면 Request Body Editor 및 안내는 포함시키지 않음 (폼 전송은 개별 필드/키로 처리)
             if body_type_val == 'FORM' and (param_id == 'request_body_editor' or param_id == 'request_body_note'):
