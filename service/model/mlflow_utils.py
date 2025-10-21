@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
@@ -105,6 +106,19 @@ def compute_mlflow_checksum(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _coerce_to_dict(value: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
 def extract_mlflow_info(
     model_record: Optional["MLModel"] = None,
     file_path: Optional[str] = None,
@@ -118,7 +132,7 @@ def extract_mlflow_info(
 
     metadata_block: Dict[str, Any] = {}
 
-    metadata = getattr(model_record, "metadata", None)
+    metadata = _coerce_to_dict(getattr(model_record, "metadata", None))
     if isinstance(metadata, dict):
         if isinstance(metadata.get("mlflow"), dict):
             metadata_block = metadata["mlflow"].copy()
@@ -155,7 +169,20 @@ def extract_mlflow_info(
     run_id = metadata_block.get("run_id")
     model_version = metadata_block.get("model_version")
     registered_model_name = metadata_block.get("registered_model_name")
+    additional_metadata = _coerce_to_dict(metadata_block.get("additional_metadata"))
+    if additional_metadata is not None:
+        metadata_block["additional_metadata"] = additional_metadata
+
+    tags: Optional[Dict[str, Any]] = None
+    if additional_metadata and isinstance(additional_metadata.get("tags"), dict):
+        tags = additional_metadata["tags"]
+
     load_flavor = metadata_block.get("load_flavor", "pyfunc")
+    if tags:
+        tag_flavor = tags.get("mlflow_load_flavor") or tags.get("user_script_model_primary_flavor")
+        if isinstance(tag_flavor, str) and tag_flavor.strip():
+            load_flavor = tag_flavor.strip()
+
     artifact_path = metadata_block.get("artifact_path")
     input_format = metadata_block.get("input_format")
 
@@ -174,6 +201,11 @@ def extract_mlflow_info(
             "input_format",
         }
     }
+
+    if additional_metadata is not None:
+        extra["additional_metadata"] = additional_metadata
+    if tags:
+        extra["tags"] = tags
 
     return MlflowModelInfo(
         model_uri=str(model_uri),
