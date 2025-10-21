@@ -18,6 +18,13 @@ from service.database.models.backend import BackendLogs
 from service.database.models.prompts import Prompts, PromptStoreRating
 from service.database.models.tools import Tools, ToolStoreMeta, ToolStoreRating
 from service.database.models.db_sync_config import DBSyncConfig  # ⭐ 추가
+from service.database.models.data_scraper import (
+    ScraperConfig,
+    ScraperRun,
+    ScrapedItem,
+    ScrapedAsset,
+    ScraperStats,
+)
 
 # 사용 가능한 모델들
 __all__ = [
@@ -35,6 +42,7 @@ __all__ = [
     'Prompts', 'PromptStoreRating',
     'Tools', 'ToolStoreMeta', 'ToolStoreRating',
     'DBSyncConfig',  # ⭐ 추가
+    'ScraperConfig', 'ScraperRun', 'ScrapedItem', 'ScrapedAsset', 'ScraperStats',
 ]
 
 # 애플리케이션에서 사용할 모델 목록
@@ -54,4 +62,5 @@ APPLICATION_MODELS = [
     Prompts, PromptStoreRating,
     Tools, ToolStoreMeta, ToolStoreRating,
     DBSyncConfig,  # ⭐ 추가
+    ScraperConfig, ScraperRun, ScrapedItem, ScrapedAsset, ScraperStats,
 ]

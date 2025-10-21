@@ -50,6 +50,7 @@ from service.data_manager.data_manager_register import DataManagerRegistry
 from service.mlflow.mlflow_artifact_service import MLflowArtifactService
 from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
 from controller.helper.utils.workflow_helpers import workflow_data_synchronizer
+from service.data_scraper.scheduler_manager import build_scheduler
 
 def print_xgen_logo():
     logo = """
@@ -572,6 +573,25 @@ async def lifespan(app: FastAPI):
             
         except Exception as e:
             logger.error(f"❌ Step 7.6: 자동 로드 실패: {e}", exc_info=True)
+
+        # 7.65 데이터 스크래퍼 스케줄러 초기화
+        print_step_banner(7.65, "SCRAPER SCHEDULER SETUP", "Bootstrapping scraper run scheduler")
+        try:
+            redis_client = None
+            if (
+                hasattr(app.state, "data_manager_registry")
+                and app.state.data_manager_registry
+                and getattr(app.state.data_manager_registry, "redis_manager", None)
+            ):
+                redis_client = getattr(app.state.data_manager_registry.redis_manager, "redis_client", None)
+
+            scraper_scheduler = build_scheduler(app.state.app_db, redis_client=redis_client)
+            await scraper_scheduler.start()
+            app.state.data_scraper_scheduler = scraper_scheduler
+            logger.info("✅ Step 7.65: Data scraper scheduler initialized successfully!")
+        except Exception as e:
+            app.state.data_scraper_scheduler = None
+            logger.error(f"❌ Step 7.65: Failed to initialize data scraper scheduler: {e}", exc_info=True)
         # 7.7. MLflow artifact service initialization
         print_step_banner(7.7, "MLFLOW ARTIFACT SERVICE", "Integrating MLflow tracking and artifacts")
         mlflow_tracking_uri = os.getenv("MLFLOW_URL", "").strip()
@@ -751,6 +771,10 @@ async def lifespan(app: FastAPI):
             from controller.helper.singletonHelper import shutdown_db_sync_scheduler
             shutdown_db_sync_scheduler(app.state)
             logger.info("✅ DB Sync Scheduler shutdown complete")
+        if hasattr(app.state, 'data_scraper_scheduler') and app.state.data_scraper_scheduler:
+            logger.info("🔄 Shutting down data scraper scheduler...")
+            await app.state.data_scraper_scheduler.shutdown()
+            logger.info("✅ Data scraper scheduler shutdown complete")
         # Data Manager Registry 정리
         if hasattr(app.state, 'data_manager_registry') and app.state.data_manager_registry:
             logger.info("🔄 Cleaning up data manager registry...")

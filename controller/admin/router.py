@@ -10,6 +10,7 @@ from .adminSystemController import router as adminSystemController
 from .adminGroupController import router as adminGroupRouter
 from .adminDBController import router as adminDBRouter
 from .adminPromptController import router as adminPromptController
+from .adminDataScraperController import router as adminDataScraperRouter
 
 # Admin 라우터 통합
 admin_router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -23,3 +24,4 @@ admin_router.include_router(adminSystemController)
 admin_router.include_router(adminGroupRouter)
 admin_router.include_router(adminDBRouter)
 admin_router.include_router(adminPromptController)
+admin_router.include_router(adminDataScraperRouter)
