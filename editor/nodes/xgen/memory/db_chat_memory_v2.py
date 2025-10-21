@@ -1,8 +1,14 @@
+"""
+DB Memory Node V2 - LangChain 1.0.0
+
+DB에서 대화 기록을 로드하여 LangChain 1.0.0 메시지 리스트로 반환합니다.
+"""
+
 from editor.node_composer import Node
 import logging
 import json
 from typing import List, Optional, Dict, Any
-from langchain.schema import SystemMessage, HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
 from editor.utils.helper.service_helper import AppServiceManager
 import re
 from collections import Counter
@@ -16,8 +22,9 @@ class DBMemoryNode(Node):
     functionId = "memory"
     nodeId = "memory/db_memory_v2"
     nodeName = "DB Memory V2"
-    description = "DB에서 대화 기록을 로드하여 ConversationBufferMemory로 반환하는 노드입니다."
-    tags = ["memory", "database", "chat_history", "xgen"]
+    description = "DB에서 대화 기록을 로드하여 메시지 리스트로 반환 (LangChain 1.0.0)"
+    tags = ["memory", "database", "chat_history", "xgen", "langchain_1.0"]
+    disable = True
 
     inputs = [
         {"id": "current_input", "name": "Current Input", "type": "STR", "multi": False, "required": False},
@@ -125,14 +132,14 @@ class DBMemoryNode(Node):
         """텍스트를 전처리하여 키워드 리스트로 반환"""
         if not text:
             return []
-        
+
         # 소문자 변환 및 특수문자 제거
         text = re.sub(r'[^\w\s가-힣]', ' ', text.lower())
         # 단어 분리 (한글, 영문 모두 지원)
         words = text.split()
         # 길이가 2 이상인 단어만 유지
         words = [word for word in words if len(word) >= 2]
-        
+
         return words
 
     def _calculate_bm25(
@@ -244,20 +251,20 @@ class DBMemoryNode(Node):
     def _resolve_embedding_function(self):
         """AppServiceManager에서 임베딩 서비스를 가져와 callable 형태로 반환"""
         try:
-            get_service = getattr(AppServiceManager, "get_embedding_service", None)
+            get_service = getattr(AppServiceManager, "get_rag_service", None)
             if not callable(get_service):
                 return None
 
-            embedding_service = get_service()
-            if not embedding_service:
+            rag_service = get_service()
+            if not rag_service:
                 return None
 
-            if hasattr(embedding_service, "get_embedding"):
+            if hasattr(rag_service, "generate_embeddings"):
                 def _embed(text: str):
                     if not text:
                         return None
                     try:
-                        vector = embedding_service.get_embedding(text)
+                        vector = rag_service.generate_embeddings(text)
                         if vector is None:
                             return None
                         return list(vector)
@@ -340,26 +347,26 @@ class DBMemoryNode(Node):
         """LLM을 사용할 수 없을 때 간단한 요약 방식"""
         if not messages:
             return ""
-        
+
         summary_parts = []
         current_length = 0
-        
+
         for msg in messages:
             role = "사용자" if msg['role'] == "user" else "AI"
             content = msg['content']
-            
+
             # 긴 내용은 줄임
             if len(content) > 100:
                 content = content[:100] + "..."
-            
+
             part = f"{role}: {content}"
-            
+
             if current_length + len(part) > max_length:
                 break
-                
+
             summary_parts.append(part)
             current_length += len(part)
-        
+
         return "\n".join(summary_parts)
 
     def _select_and_summarize_relevant_messages(
@@ -373,7 +380,7 @@ class DBMemoryNode(Node):
         """현재 입력과 관련된 메시지들을 선택하고 요약 (연결된 agent 모델 사용)"""
         if not historical_messages:
             return ""
-        
+
         # 유사도 필터링 사용 여부에 따라 메시지 선택
         if use_similarity_filter:
             embedding_fn = self._resolve_embedding_function()
@@ -408,11 +415,11 @@ class DBMemoryNode(Node):
                 }
                 for msg in historical_messages
             ]
-        
+
         if not meaningful_messages:
             logger.info("No relevant messages found for current input")
             return ""
-        
+
         # 선택된 메시지들에 대한 상세 로그
         for i, msg in enumerate(meaningful_messages, 1):
             role = msg['role']
@@ -421,9 +428,9 @@ class DBMemoryNode(Node):
             # 긴 메시지는 앞부분만 로그에 출력
             content_preview = content[:100] + "..." if len(content) > 100 else content
             logger.info(f"  [{i}] {role} (score: {score:.4f}): {content_preview}")
-        
+
         logger.info(f"Current input for comparison: {current_input}")
-        
+
         # agent에서 전달받은 LLM을 사용하여 요약
         if llm:
             try:
@@ -531,40 +538,34 @@ class DBMemoryNode(Node):
             simple_summary = self._simple_message_summary(meaningful_messages)
             return simple_summary
 
-    def load_memory_from_db(self, db_messages: List[Dict[str, str]]):
+    def convert_to_langchain_messages(self, db_messages: List[Dict[str, str]]) -> List[BaseMessage]:
         """
-        DB에서 로드한 메시지 리스트를 기반으로 LangChain 메모리 객체를 생성합니다.
+        DB에서 로드한 메시지 리스트를 LangChain 1.0.0 메시지 객체로 변환합니다.
 
         Args:
             db_messages: {'role': 'user' | 'ai', 'content': '...'} 형태의 딕셔너리 리스트
 
         Returns:
-            대화 기록이 채워진 ConversationBufferMemory 객체
+            LangChain BaseMessage 객체 리스트 (HumanMessage, AIMessage)
         """
         try:
-            from langchain.memory import ConversationBufferMemory
-            from langchain_community.chat_message_histories import ChatMessageHistory
-
-            chat_history = ChatMessageHistory()
+            messages: List[BaseMessage] = []
             for msg in db_messages:
-                if msg.get("role") == "user":
-                    chat_history.add_user_message(msg.get("content"))
-                elif msg.get("role") == "ai":
-                    chat_history.add_ai_message(msg.get("content"))
+                role = msg.get("role")
+                content = msg.get("content", "")
 
-            memory = ConversationBufferMemory(
-                chat_memory=chat_history,
-                memory_key="chat_history",
-                return_messages=True
-            )
-            return memory
+                if role == "user":
+                    messages.append(HumanMessage(content=content))
+                elif role == "ai":
+                    messages.append(AIMessage(content=content))
+                else:
+                    logger.warning(f"Unknown message role: {role}. Skipping message.")
 
-        except ImportError as e:
-            logger.error(f"LangChain import error: {e}")
-            return None
+            return messages
+
         except Exception as e:
-            logger.error(f"Error creating memory object: {e}")
-            return None
+            logger.error(f"Error converting to LangChain messages: {e}")
+            return []
 
     def _filter_messages_by_similarity(
         self,
@@ -694,7 +695,7 @@ class DBMemoryNode(Node):
         )
 
         return filtered_messages
-    
+
     def _group_messages_into_pairs(self, chat_history):
         """연속된 메시지들을 user-ai 대화 쌍으로 묶어서 반환"""
         if not chat_history:
@@ -759,7 +760,7 @@ class DBMemoryNode(Node):
         current_input: str = "",
     ):
         """
-        DB에서 대화 기록을 로드하여 ConversationBufferMemory 객체를 반환합니다.
+        DB에서 대화 기록을 로드하여 LangChain 1.0.0 메시지 리스트를 반환합니다.
 
         Args:
             interaction_id: 상호작용 ID
@@ -770,7 +771,7 @@ class DBMemoryNode(Node):
             current_input: 현재 사용자 입력 (유사도 계산 기준)
 
         Returns:
-            ConversationBufferMemory 객체 또는 오류 메시지
+            List[BaseMessage]: LangChain 1.0.0 메시지 리스트
         """
         try:
             # DB에서 메시지 로드
@@ -778,8 +779,7 @@ class DBMemoryNode(Node):
 
             if not db_messages:
                 logger.info(f"No chat history found for interaction_id: {interaction_id}")
-                # 빈 메모리 객체 반환
-                return self.load_memory_from_db([])
+                return []
 
             # 입력 타입을 안정적으로 처리
             if isinstance(current_input, list):
@@ -808,14 +808,13 @@ class DBMemoryNode(Node):
             elif enable_similarity_filter and not current_input:
                 logger.info("Similarity filtering enabled but current_input was empty; skipping filter")
 
-            memory = self.load_memory_from_db(db_messages)
+            # LangChain 1.0.0 메시지 객체로 변환
+            messages = self.convert_to_langchain_messages(db_messages)
 
-            if memory is None:
-                return None
+            logger.info(f"Successfully loaded {len(messages)} messages for interaction_id: {interaction_id}")
 
-            logger.info(f"Successfully loaded {len(db_messages)} messages for interaction_id: {interaction_id}")
-            return memory
+            return messages
 
         except Exception as e:
             logger.error(f"Error in execute: {e}")
-            return None
+            return []

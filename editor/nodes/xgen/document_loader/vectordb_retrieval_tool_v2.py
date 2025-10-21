@@ -5,7 +5,7 @@ from collections import Counter
 from typing import Optional, Dict, Any
 from editor.node_composer import Node
 from editor.utils.citation_prompt import citation_prompt
-from langchain.agents import tool
+from langchain_core.tools import tool
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from fastapi import Request

@@ -34,7 +34,8 @@ class AgentFeedbackLoopStreamNode(Node):
     nodeName = "Agent Stream Feedback Loop"
     description = "LangGraph 기반 피드백 루프를 스트리밍 형태로 제공하는 Agent 노드"
     tags = ["agent", "feedback", "loop", "langgraph", "iterative", "evaluation", "stream"]
-
+    disable = True
+    
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
         {"id": "tools", "name": "Tools", "type": "TOOL", "multi": True, "required": False, "value": []},

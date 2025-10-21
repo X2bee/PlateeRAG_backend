@@ -3,7 +3,7 @@ import re
 from typing import Dict, List
 
 from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain.schema.output_parser import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -36,7 +36,7 @@ def create_feedback_graph(
     stream_emitter=None,
 ):
         """LangGraph 피드백 루프 그래프 생성"""
-        
+
         use_tools = bool(tools_list)
         tool_agent_executor = None
         if use_tools:
@@ -375,9 +375,9 @@ def create_feedback_graph(
                     "timestamp": time.time(),
                     "duplicate": duplicate_result,
                 }
-                
+
                 new_tool_results = state["tool_results"] + [tool_result]
-                
+
                 if duplicate_result and stream_emitter:
                     stream_emitter.emit_status(
                         f"<FEEDBACK_STATUS>경고: 동일한 출력이 연속 {duplicate_run_length}회 감지되었습니다. 접근 방식을 변경하세요.</FEEDBACK_STATUS>\n"
@@ -393,7 +393,7 @@ def create_feedback_graph(
                     "result_frequencies": result_frequencies,
                     "duplicate_run_length": duplicate_run_length,
                 }
-                
+
             except Exception as e:
                 logger.error(f"Task execution failed: {str(e)}")
                 if stream_emitter:
@@ -588,7 +588,7 @@ def create_feedback_graph(
                         "tool_results": updated_tool_results,
                         "stagnation_count": state.get("stagnation_count", 0) + 1,
                     }
-                
+
                 # 피드백 평가 프롬프트 생성
                 original_request = state.get("original_user_request") or state.get("user_input")
                 todo_description = state.get("current_todo_description", "")
@@ -641,10 +641,10 @@ def create_feedback_graph(
                 formatted_evaluation_prompt = f"추가 컨텍스트: {additional_rag_context}\n\n{evaluation_prompt}"
 
                 # 직접 LLM 호출
-                from langchain.schema import HumanMessage
+                from langchain.messages import HumanMessage
                 messages = [HumanMessage(content=formatted_evaluation_prompt)]
                 llm_response = llm.invoke(messages)
-                
+
                 def parse_evaluation_result(content):
                     """평가 결과를 파싱하는 함수 - 여러 fallback 방법 포함"""
                     import json
@@ -783,7 +783,7 @@ def create_feedback_graph(
 
                 if stream_emitter:
                     stream_emitter.emit_feedback_score(todo_index, iteration, evaluation_result)
-                
+
                 # 결과 업데이트
                 updated_tool_results = state["tool_results"][:-1] + [{
                     **latest_result,
@@ -794,7 +794,7 @@ def create_feedback_graph(
                         "improvements": improvements_list,
                     }
                 }]
-                
+
                 return {
                     **state,
                     "feedback_score": score,
@@ -803,7 +803,7 @@ def create_feedback_graph(
                     "stagnation_count": stagnation_count,
                     "messages": state["messages"] + [{"role": "system", "content": f"Feedback evaluation: Score {score}/10 - {evaluation_result.get('reasoning', '')}"}]
                 }
-                
+
             except Exception as e:
                 logger.error(f"Feedback evaluation failed: {str(e)}")
                 return {**state, "feedback_score": 0}
@@ -863,14 +863,14 @@ def create_feedback_graph(
                         final_result,
                         requirements_met,
                     )
-                
+
                 return {
                     **state,
                     "final_result": final_result,
                     "final_result_clean": final_result,
                     "requirements_met": requirements_met
                 }
-                
+
             except Exception as e:
                 logger.error(f"Result finalization failed: {str(e)}")
                 if stream_emitter:
@@ -888,7 +888,7 @@ def create_feedback_graph(
 
         # 그래프 구성
         workflow = StateGraph(FeedbackState)
-        
+
         # 노드 추가
         workflow.add_node("execution_router", execution_router)
         workflow.add_node("execute_direct", execute_direct)
@@ -896,7 +896,7 @@ def create_feedback_graph(
         workflow.add_node("evaluate_feedback", evaluate_feedback)
         workflow.add_node("increment_iteration", increment_iteration)
         workflow.add_node("finalize_result", finalize_result)
-        
+
         # 엣지 설정
         workflow.set_entry_point("execution_router")
         workflow.add_conditional_edges(
@@ -919,5 +919,5 @@ def create_feedback_graph(
         workflow.add_edge("execute_direct", "evaluate_feedback")
         workflow.add_edge("increment_iteration", "execute_task")
         workflow.add_edge("finalize_result", END)
-        
+
         return workflow.compile(checkpointer=memory)

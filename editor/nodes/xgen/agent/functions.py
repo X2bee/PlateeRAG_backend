@@ -1,7 +1,7 @@
 import re
 import logging
+import os
 from typing import Any, List, Optional
-
 from langchain_core.messages import SystemMessage
 
 from editor.utils.helper.async_helper import sync_run_async
@@ -143,35 +143,65 @@ def _flatten_tools_list(tools_list):
     logger.info(f"Tools flattened: {len(tools_list)} items -> {len(flattened)} items")
     return flattened
 
-def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, base_url, n_messages=None, streaming=True, plan=None):
+def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, n_messages=None, streaming=True, plan=None, base_url=None):
     from langchain_openai import ChatOpenAI
+    from langchain_anthropic import ChatAnthropic
+    from langchain_google_genai import ChatGoogleGenerativeAI
     from editor.utils.helper.service_helper import AppServiceManager
 
     config_composer = AppServiceManager.get_config_composer()
     if not config_composer:
         raise ValueError("No Config Composer set.")
 
-    llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
-    if llm_provider == "openai":
-        api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
-        print(api_key)
+    # Anthropic 모델 감지 - 모든 Claude 모델은 "claude-"로 시작
+    is_anthropic_model = model.startswith('claude-')
+    is_google_model = model.startswith('gemini-')
+
+    if is_anthropic_model:
+        # Anthropic 모델 사용
+        api_key = config_composer.get_config_by_name("ANTHROPIC_API_KEY").value
+        os.environ["ANTHROPIC_API_KEY"] = api_key
         if not api_key:
-            logger.error(f"OpenAI API Key is not set")
-            raise ValueError("OpenAI API Key is not set.")
+            logger.error(f"Anthropic API Key is not set")
+            raise ValueError("Anthropic API Key is not set.")
 
-    elif llm_provider == "vllm":
-        api_key = None
-        logger.info(f"vLLM API Key is set to None [currently not used]")
+        llm = ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming, anthropic_api_key=api_key)
 
-        # TODO: vLLM API 키 설정 로직 추가
-        # api_key = config_composer.get_config_by_name("VLLM_API_KEY").value
-        # if not api_key:
-        #     return "vLLM API Key is not set."
+    elif is_google_model:
+        # Google Gemini 모델 사용
+        api_key = config_composer.get_config_by_name("GEMINI_API_KEY").value
+        os.environ["GOOGLE_API_KEY"] = api_key
+        if not api_key:
+            logger.error(f"Google Generative AI API Key is not set")
+            raise ValueError("Google Generative AI API Key is not set.")
+
+        llm = ChatGoogleGenerativeAI(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming, google_api_key=api_key)
     else:
-        logger.error(f"Unsupported LLM Provider: {llm_provider}")
-        raise ValueError(f"Unsupported LLM Provider: {llm_provider}")
+        # OpenAI 또는 다른 모델 사용
+        llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
+        if llm_provider == "openai":
+            api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
+            os.environ["OPENAI_API_KEY"] = api_key
+            if not api_key:
+                logger.error(f"OpenAI API Key is not set")
+                raise ValueError("OpenAI API Key is not set.")
 
-    llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, base_url=base_url, streaming=streaming)
+        elif llm_provider == "vllm":
+            api_key = None
+            logger.info(f"vLLM API Key is set to None [currently not used]")
+
+            # TODO: vLLM API 키 설정 로직 추가
+            # api_key = config_composer.get_config_by_name("VLLM_API_KEY").value
+            # if not api_key:
+            #     return "vLLM API Key is not set."
+        else:
+            logger.error(f"Unsupported LLM Provider: {llm_provider}")
+            raise ValueError(f"Unsupported LLM Provider: {llm_provider}")
+
+        if base_url:
+            llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming, base_url=base_url)
+        else:
+            llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming)
 
     tools_list = []
     if tools:
@@ -205,40 +235,34 @@ def prepare_chat_history(
     current_input: Optional[str] = None,
     llm: Optional[Any] = None,
 ):
-    """최적화된 chat_history 생성 - 기존 inputs 구조와 호환"""
+    """
+    LangChain 1.0.0 메모리 형식 처리 - List[BaseMessage] 직접 반환
+
+    Args:
+        memory: List[BaseMessage] 또는 None
+        current_input: 현재 사용자 입력
+        llm: LLM 객체 (요약 생성용, 선택사항)
+
+    Returns:
+        List[BaseMessage]: 대화 기록 메시지 리스트
+    """
     if not memory:
         return []
-    try:
-        # 메모리에서 모든 대화 기록 추출
-        memory_vars = memory.load_memory_variables({})
-        full_chat_history = memory_vars.get("chat_history", [])
 
-        if not full_chat_history:
+    try:
+        # LangChain 1.0.0: memory는 이미 List[BaseMessage] 형태
+        if isinstance(memory, list):
+            chat_history = memory
+        else:
+            # 혹시 다른 형태가 올 경우 빈 리스트 반환
+            logger.warning(f"Unexpected memory type: {type(memory)}. Expected List[BaseMessage]")
             return []
 
-        summary_message = None
+        if not chat_history:
+            return []
+
+        # LLM이 제공되고 현재 입력이 있으면 요약 메시지 추가
         if llm and current_input:
-            try:
-                summary_message = _summarize_chat_history_with_llm(
-                    full_chat_history,
-                    current_input,
-                    llm,
-                )
-            except Exception as summarize_error:
-                logger.warning(f"Failed to summarize chat history: {summarize_error}")
-
-        if summary_message:
-            # Append summary as system message while preserving original order
-            return list(full_chat_history) + [summary_message]
-
-        return full_chat_history
-
-    except Exception as e:
-        logger.error(f"Error in prepare_chat_history: {e}")
-        # 오류 발생 시 기존 방식으로 fallback
-        memory_vars = memory.load_memory_variables({})
-        chat_history = memory_vars.get("chat_history", [])
-        if chat_history and llm and current_input:
             try:
                 summary_message = _summarize_chat_history_with_llm(
                     chat_history,
@@ -248,9 +272,13 @@ def prepare_chat_history(
                 if summary_message:
                     return list(chat_history) + [summary_message]
             except Exception as summarize_error:
-                logger.warning(f"Failed to summarize chat history after fallback: {summarize_error}")
+                logger.warning(f"Failed to summarize chat history: {summarize_error}")
 
-        return chat_history if memory else []
+        return chat_history
+
+    except Exception as e:
+        logger.error(f"Error in prepare_chat_history: {e}")
+        return []
 
 def _message_role_and_content(message) -> Optional[tuple]:
     role = None
@@ -293,7 +321,7 @@ def _build_conversation_text(messages: List[Any]) -> str:
 
     return "\n".join(lines)
 
-
+#제거 예정 사용되지 않을 것으로 보임.
 def _summarize_chat_history_with_llm(
     chat_history,
     current_input: str,
@@ -341,7 +369,9 @@ def create_json_output_prompt(args_schema, original_prompt):
     escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
     return f"{original_prompt}\n\n{escaped_instructions}"
 
-def create_tool_context_prompt(additional_rag_context, default_prompt, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True, plan=None):
+
+# 제거 예정 사용되지 않는 것으로 보임.
+def create_tool_context_prompt(additional_rag_context, default_prompt, n_messages=None, plan=None):
     """
     Tool context prompt 생성 - 메모리가 있을 때만 최적화 기능 사용
 
@@ -351,7 +381,7 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
         current_input: 현재 입력 텍스트 (최적화 사용 시 필요)
         llm: LLM 객체 (최적화 사용 시 필요)
     """
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
     if plan and "steps" in plan and isinstance(plan["steps"], list) and len(plan["steps"]) > 0:
         plan_description = "\n".join(plan["steps"])
@@ -375,6 +405,7 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
         ])
     return final_prompt
 
+# 제거 예정 사용되지 않는 것으로 보임.
 def create_context_prompt(additional_rag_context, default_prompt, strict_citation, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True, plan=None):
     """
     Context prompt 생성 - 메모리가 있을 때만 최적화 기능 사용
@@ -385,7 +416,7 @@ def create_context_prompt(additional_rag_context, default_prompt, strict_citatio
         current_input: 현재 입력 텍스트 (최적화 사용 시 필요)
         llm: LLM 객체 (최적화 사용 시 필요)
     """
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
     if plan and "steps" in plan and isinstance(plan["steps"], list) and len(plan["steps"]) > 0:
         plan_description = "\n".join(plan["steps"])

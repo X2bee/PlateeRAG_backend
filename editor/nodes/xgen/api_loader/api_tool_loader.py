@@ -4,7 +4,7 @@ from typing import Any, Dict
 from pydantic import BaseModel, create_model, Field
 from editor.node_composer import Node
 from editor.utils.helper.parse_helper import parse_param_value
-from langchain.agents import tool
+from langchain_core.tools import tool
 import json
 import re
 from editor.utils.helper.async_helper import sync_run_async

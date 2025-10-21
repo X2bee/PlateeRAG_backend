@@ -12,6 +12,7 @@ from controller.admin.adminBaseController import validate_superuser
 from service.database.logger_helper import create_logger
 
 try:
+    # Use nvidia-ml-py (official replacement for deprecated pynvml)
     import pynvml
     GPU_AVAILABLE = True
 except ImportError:

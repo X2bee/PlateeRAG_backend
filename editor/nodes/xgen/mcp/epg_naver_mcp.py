@@ -3,7 +3,7 @@ import os
 import json
 from typing import List, Dict, Any
 from editor.node_composer import Node
-from langchain.agents import tool
+from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from service.epg_lite.epg_json import epg_to_json
 

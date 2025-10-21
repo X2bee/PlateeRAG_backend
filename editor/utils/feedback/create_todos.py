@@ -3,7 +3,7 @@ import logging
 import re
 from typing import Dict, List, Optional
 
-from langchain.schema import HumanMessage
+from langchain.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
 

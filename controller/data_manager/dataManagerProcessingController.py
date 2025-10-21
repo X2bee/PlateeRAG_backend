@@ -12,21 +12,21 @@ import collections.abc
 if not hasattr(collections, 'Callable'):
     collections.Callable = collections.abc.Callable
 import mlflow
-import json 
+import json
 import io
 import tempfile
 from sqlalchemy.exc import OperationalError, DatabaseError
 import psycopg2
 
 from controller.helper.singletonHelper import (
-    get_db_manager, 
-    get_data_manager_registry, 
+    get_db_manager,
+    get_data_manager_registry,
     get_config_composer
 )
 from controller.helper.controllerHelper import (
-    extract_user_id_from_request, 
-    validate_db_config, 
-    parse_connection_url, 
+    extract_user_id_from_request,
+    validate_db_config,
+    parse_connection_url,
     create_db_connection_string,
     parse_db_error
 )
@@ -43,13 +43,13 @@ def get_mlflow_config(config_composer, request_uri: Optional[str] = None) -> Dic
         's3_secret_key': 'minioadmin123',
         's3_endpoint': 'https://minio.x2bee.com'
     }
-    
+
     try:
         if not request_uri:
             config['tracking_uri'] = config_composer.get_config_by_name("MLFLOW_TRACKING_URI").value
     except Exception as e:
         logger.warning(f"MLFLOW_TRACKING_URI 설정 가져오기 실패: {e}")
-    
+
     return config
 
 def setup_mlflow_env(config: Dict[str, str]):
@@ -71,21 +71,25 @@ class DatabaseConnectionRequest(BaseModel):
 
 class LoadFromDatabaseRequest(BaseManagerRequest):
     """데이터베이스 로드 요청"""
+    model_config = {"populate_by_name": True}
+
     db_config: Optional[Dict[str, Any]] = Field(None, description="데이터베이스 연결 설정")
     connection_url: Optional[str] = Field(None, description="연결 URL")
     query: Optional[str] = Field(None, description="SQL 쿼리")
     table_name: Optional[str] = Field(None, description="테이블명")
-    schema: Optional[str] = Field(None, description="스키마명 (PostgreSQL)")
+    schema_name: Optional[str] = Field(None, description="스키마명 (PostgreSQL)")  # ✅ 이미 올바름
     chunk_size: Optional[int] = Field(None, description="청크 크기", ge=1000)
 
 class TableListRequest(DatabaseConnectionRequest):
     """테이블 목록 조회 요청"""
-    schema: Optional[str] = Field(None, description="스키마명")
+    db_schema: Optional[str] = Field(None, description="스키마명")  # ✅ schema → db_schema
 
 class TablePreviewRequest(DatabaseConnectionRequest):
     """테이블 미리보기 요청"""
+    model_config = {"populate_by_name": True}
+
     table_name: str = Field(..., description="테이블명")
-    schema: Optional[str] = Field(None, description="스키마명")
+    db_schema: Optional[str] = Field(None, description="스키마명")  # ✅ schema → db_schema
     limit: int = Field(10, description="조회할 행 수", ge=1, le=100)
 
 class QueryValidationRequest(DatabaseConnectionRequest):
@@ -186,14 +190,14 @@ def with_auth_manager(func: Callable) -> Callable:
         user_id = extract_user_id_from_request(request)
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
-        
+
         # manager_id 추출 (첫 번째 인자 또는 키워드 인자에서)
         manager_id = None
         if args and hasattr(args[0], 'manager_id'):
             manager_id = args[0].manager_id
         elif 'manager_id' in kwargs:
             manager_id = kwargs['manager_id']
-        
+
         if manager_id:
             registry = get_data_manager_registry(request)
             manager = registry.get_manager(manager_id, user_id)
@@ -203,7 +207,7 @@ def with_auth_manager(func: Callable) -> Callable:
                     detail=f"매니저 '{manager_id}'를 찾을 수 없거나 접근 권한이 없습니다"
                 )
             kwargs['manager'] = manager
-        
+
         kwargs['user_id'] = user_id
         kwargs['request'] = request
         return await func(*args, **kwargs)
@@ -234,10 +238,10 @@ def get_db_config_from_request(db_request: DatabaseConnectionRequest) -> Dict[st
             return parse_connection_url(db_request.connection_url)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     if not db_request.db_config:
         raise HTTPException(status_code=400, detail="db_config 또는 connection_url 중 하나가 필요합니다")
-    
+
     validate_db_config(db_request.db_config)
     return db_request.db_config
 
@@ -263,7 +267,7 @@ def create_response(
     response_model=Dict[str, Any])
 @handle_errors("데이터셋 다운로드")
 async def hf_download_dataset(
-    request: Request, 
+    request: Request,
     download_request: DownloadDatasetRequest
 ) -> Dict[str, Any]:
     """HuggingFace에서 데이터셋 다운로드 및 적재"""
@@ -743,25 +747,25 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
     config_composer = get_config_composer(request)
     mlflow_config = get_mlflow_config(config_composer, upload_request.mlflow_tracking_uri)
     setup_mlflow_env(mlflow_config)
-    
+
     mlflow.set_experiment(upload_request.experiment_name)
-    
+
     with mlflow.start_run() as run:
         logger.info(f"MLflow Run 시작: {run.info.run_id}, experiment={upload_request.experiment_name}")
-        
+
         # 1. 데이터셋 파일 생성 및 업로드
         if upload_request.format == "parquet":
             file_path = manager.download_dataset_as_parquet()
         else:
             file_path = manager.download_dataset_as_csv()
-        
+
         mlflow.log_artifact(file_path, artifact_path=upload_request.artifact_path)
         logger.info(f"데이터셋 파일 업로드 완료: {os.path.basename(file_path)}")
-        
+
         # 2. 계보(Lineage) 정보 생성
         version_history = manager.get_version_history()
         source_info = manager.redis_manager.get_source_info(manager.manager_id) if manager.redis_manager else {}
-        
+
         lineage_info = {
             "manager_id": upload_request.manager_id,
             "dataset_id": manager.dataset_id,
@@ -774,29 +778,29 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
             "uploaded_at": datetime.now().isoformat(),
             "uploaded_by": user_id
         }
-        
+
         # 3. Lineage JSON 저장
         with tempfile.NamedTemporaryFile(mode='w', suffix='_lineage.json', delete=False) as f:
             json.dump(lineage_info, f, indent=2, default=str)
             lineage_path = f.name
-        
+
         mlflow.log_artifact(lineage_path, artifact_path=upload_request.artifact_path)
-        
+
         # 4. 통계 정보 저장
         statistics = manager.get_dataset_statistics()
         with tempfile.NamedTemporaryFile(mode='w', suffix='_stats.json', delete=False) as f:
             json.dump(statistics, f, indent=2, default=str)
             stats_path = f.name
-        
+
         mlflow.log_artifact(stats_path, artifact_path=upload_request.artifact_path)
-        
+
         # 5. 메트릭 로깅
         if isinstance(statistics.get('statistics'), dict):
             dataset_info = statistics['statistics'].get('dataset_info', {})
             mlflow.log_metric("dataset_rows", dataset_info.get('total_rows', 0))
             mlflow.log_metric("dataset_columns", dataset_info.get('total_columns', 0))
             mlflow.log_metric("total_versions", len(version_history))
-        
+
         # 6. 파라미터 로깅
         params = {
             "dataset_name": upload_request.dataset_name,
@@ -805,15 +809,15 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
             "dataset_id": manager.dataset_id,
             "current_version": manager.current_version - 1
         }
-        
+
         if source_info:
             params["source_type"] = source_info.get("type")
             if source_info.get("type") == "huggingface":
                 params["source_repo"] = source_info.get("repo_id")
             params["original_checksum"] = source_info.get("checksum")
-        
+
         mlflow.log_params(params)
-        
+
         # 7. 태그 설정
         tags = {
             "dataset_name": upload_request.dataset_name,
@@ -824,12 +828,12 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
             "final_checksum": lineage_info["final_checksum"],
             "source_type": source_info.get("type") if source_info else "unknown"
         }
-        
+
         if upload_request.tags:
             tags.update(upload_request.tags)
-        
+
         mlflow.set_tags(tags)
-        
+
         # 8. Redis에 Run 정보 저장
         if manager.redis_manager:
             manager.redis_manager.add_mlflow_run(
@@ -842,7 +846,7 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
                     "version_at_upload": manager.current_version - 1
                 }
             )
-        
+
         # 9. MinIO의 processed-datasets에도 저장
         if manager.minio_storage:
             try:
@@ -850,7 +854,7 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
                 buffer = io.BytesIO()
                 pq.write_table(manager.dataset, buffer)
                 buffer.seek(0)
-                
+
                 processed_path = f"{upload_request.experiment_name}/{run.info.run_id}/dataset.parquet"
                 manager.minio_storage.client.put_object(
                     "processed-datasets",
@@ -859,7 +863,7 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
                     length=buffer.getbuffer().nbytes,
                     content_type="application/octet-stream"
                 )
-                
+
                 # Lineage 정보 저장
                 lineage_buffer = io.BytesIO(json.dumps(lineage_info, indent=2, default=str).encode())
                 lineage_minio_path = f"{upload_request.experiment_name}/{run.info.run_id}/lineage.json"
@@ -870,12 +874,12 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
                     length=lineage_buffer.getbuffer().nbytes,
                     content_type="application/json"
                 )
-                
+
                 logger.info(f"MinIO 저장 완료: {processed_path}")
-                
+
             except Exception as e:
                 logger.warning(f"MinIO 저장 실패 (MLflow는 성공): {e}")
-        
+
         # 임시 파일 정리
         try:
             os.unlink(file_path)
@@ -883,9 +887,9 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
             os.unlink(stats_path)
         except Exception as e:
             logger.warning(f"임시 파일 정리 실패: {e}")
-    
+
     logger.info(f"MLflow 업로드 완료: run_id={run.info.run_id}")
-    
+
     return create_response(
         success=True,
         message="데이터셋이 버전 정보와 함께 MLflow에 업로드되었습니다",
@@ -918,11 +922,11 @@ async def list_mlflow_datasets(request: Request, list_request: ListMlflowDataset
     config_composer = get_config_composer(request)
     mlflow_config = get_mlflow_config(config_composer, list_request.mlflow_tracking_uri)
     setup_mlflow_env(mlflow_config)
-    
+
     client = mlflow.tracking.MlflowClient()
-    
+
     logger.info(f"MLflow 데이터셋 목록 조회 시작 (user_id: {user_id})")
-    
+
     # 실험 목록 가져오기
     if list_request.experiment_name:
         try:
@@ -933,28 +937,28 @@ async def list_mlflow_datasets(request: Request, list_request: ListMlflowDataset
             experiments = []
     else:
         experiments = client.search_experiments(max_results=1000)
-    
+
     datasets = []
-    
+
     for experiment in experiments:
         runs = client.search_runs(
             experiment_ids=[experiment.experiment_id],
             max_results=list_request.max_results,
             order_by=["start_time DESC"]
         )
-        
+
         for run in runs:
             tags = run.data.tags
             if "dataset_name" not in tags:
                 continue
-            
+
             # user_id 필터링
             if tags.get("user_id") != str(user_id):
                 continue
-            
+
             params = run.data.params
             metrics = run.data.metrics
-            
+
             # 아티팩트 목록 조회
             artifact_list = []
             try:
@@ -969,7 +973,7 @@ async def list_mlflow_datasets(request: Request, list_request: ListMlflowDataset
                 ]
             except Exception as e:
                 logger.warning(f"아티팩트 조회 실패 (run {run.info.run_id}): {e}")
-            
+
             dataset_info = {
                 "run_id": run.info.run_id,
                 "experiment_name": experiment.name,
@@ -990,11 +994,11 @@ async def list_mlflow_datasets(request: Request, list_request: ListMlflowDataset
                 "artifacts": artifact_list,
                 "run_url": f"{mlflow_config['tracking_uri']}/#/experiments/{experiment.experiment_id}/runs/{run.info.run_id}"
             }
-            
+
             datasets.append(dataset_info)
-    
+
     logger.info(f"MLflow 데이터셋 목록 조회 완료: {len(datasets)}개")
-    
+
     return create_response(
         success=True,
         message=f"{len(datasets)}개의 데이터셋을 찾았습니다",
@@ -1025,27 +1029,27 @@ async def get_mlflow_dataset_columns(request: Request, columns_request: GetMLflo
     config_composer = get_config_composer(request)
     mlflow_config = get_mlflow_config(config_composer, columns_request.mlflow_tracking_uri)
     setup_mlflow_env(mlflow_config)
-    
+
     client = mlflow.tracking.MlflowClient()
-    
+
     logger.info(f"MLflow 데이터셋 컬럼 조회: run_id={columns_request.run_id}")
-    
+
     # 아티팩트 목록 조회
     artifacts = client.list_artifacts(columns_request.run_id, columns_request.artifact_path)
-    
+
     # 데이터셋 파일 찾기
     dataset_file = None
     for artifact in artifacts:
         if artifact.path.endswith('.csv') or artifact.path.endswith('.parquet'):
             dataset_file = artifact
             break
-    
+
     if not dataset_file:
         raise HTTPException(
             status_code=404,
             detail=f"Run {columns_request.run_id}에서 데이터셋 파일을 찾을 수 없습니다"
         )
-    
+
     # 임시 디렉토리에 파일 다운로드
     with tempfile.TemporaryDirectory() as temp_dir:
         local_path = client.download_artifacts(
@@ -1053,15 +1057,15 @@ async def get_mlflow_dataset_columns(request: Request, columns_request: GetMLflo
             dataset_file.path,
             dst_path=temp_dir
         )
-        
+
         # 파일 형식에 따라 컬럼 정보 추출
         file_format = 'parquet' if dataset_file.path.endswith('.parquet') else 'csv'
-        
+
         if file_format == 'parquet':
             table = pq.read_table(local_path)
         else:
             table = csv.read_csv(local_path)
-        
+
         schema = table.schema
         columns_info = [
             {
@@ -1071,11 +1075,11 @@ async def get_mlflow_dataset_columns(request: Request, columns_request: GetMLflo
             }
             for field in schema
         ]
-        
+
         num_rows = len(table)
-    
+
     logger.info(f"컬럼 정보 조회 완료: {len(columns_info)}개 컬럼")
-    
+
     return create_response(
         success=True,
         message="컬럼 정보를 성공적으로 조회했습니다",
@@ -1103,21 +1107,21 @@ async def test_database_connection(request: Request, conn_request: DatabaseConne
     except Exception as e:
         logger.error(f"DB 설정 파싱 실패: {e}")
         raise HTTPException(status_code=400, detail=f"데이터베이스 설정을 파싱할 수 없습니다: {str(e)}")
-    
+
     try:
         from sqlalchemy import create_engine, text
     except ImportError:
         raise HTTPException(status_code=500, detail="sqlalchemy 패키지가 설치되지 않았습니다")
-    
+
     db_type = db_config.get('db_type', 'postgresql').lower()
     connection_string = None
     engine = None
-    
+
     try:
         # 연결 문자열 생성
         connection_string = create_db_connection_string(db_config)
         logger.info(f"DB 연결 시도: {db_type}://{db_config.get('username', '')}@{db_config.get('host', '')}:{db_config.get('port', '')}/{db_config['database']}")
-        
+
         # 연결 테스트
         engine = create_engine(
             connection_string,
@@ -1126,20 +1130,20 @@ async def test_database_connection(request: Request, conn_request: DatabaseConne
                 'connect_timeout': 10  # 10초 타임아웃
             }
         )
-        
+
         schemas = []
         tables = []
-        
+
         with engine.connect() as conn:
             # 간단한 쿼리로 연결 테스트
             conn.execute(text("SELECT 1"))
-            
+
             # 스키마/테이블 정보 조회
             if db_type == 'postgresql':
                 # 스키마 목록
                 schemas_query = text("""
-                    SELECT schema_name, 
-                           (SELECT COUNT(*) FROM information_schema.tables 
+                    SELECT schema_name,
+                           (SELECT COUNT(*) FROM information_schema.tables
                             WHERE table_schema = s.schema_name AND table_type = 'BASE TABLE') as table_count
                     FROM information_schema.schemata s
                     WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
@@ -1147,11 +1151,11 @@ async def test_database_connection(request: Request, conn_request: DatabaseConne
                 """)
                 schemas_result = conn.execute(schemas_query)
                 schemas = [{"schema_name": row[0], "table_count": row[1]} for row in schemas_result]
-                
+
                 # 테이블 목록 (최대 50개)
                 tables_query = text("""
-                    SELECT table_schema, table_name 
-                    FROM information_schema.tables 
+                    SELECT table_schema, table_name
+                    FROM information_schema.tables
                     WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
                     AND table_type = 'BASE TABLE'
                     ORDER BY table_schema, table_name
@@ -1159,26 +1163,26 @@ async def test_database_connection(request: Request, conn_request: DatabaseConne
                 """)
                 tables_result = conn.execute(tables_query)
                 tables = [{"schema": row[0], "table": row[1]} for row in tables_result]
-                
+
             elif db_type == 'mysql':
                 tables_query = text("SHOW TABLES")
                 tables_result = conn.execute(tables_query)
                 tables = [{"table": row[0]} for row in tables_result]
-                
+
             elif db_type == 'sqlite':
                 tables_query = text("""
-                    SELECT name FROM sqlite_master 
+                    SELECT name FROM sqlite_master
                     WHERE type='table'
                     ORDER BY name
                 """)
                 tables_result = conn.execute(tables_query)
                 tables = [{"table": row[0]} for row in tables_result]
-        
+
         if engine:
             engine.dispose()
-        
+
         logger.info(f"✅ DB 연결 성공: {db_type}/{db_config['database']}, {len(tables)}개 테이블")
-        
+
         return create_response(
             success=True,
             message="데이터베이스 연결 성공",
@@ -1192,19 +1196,19 @@ async def test_database_connection(request: Request, conn_request: DatabaseConne
             tables_count=len(tables),
             tables=tables,
             parsed_config={
-                k: v for k, v in db_config.items() 
+                k: v for k, v in db_config.items()
                 if k != 'password'  # 비밀번호 제외
             }
         )
-        
+
     except (OperationalError, DatabaseError) as e:
         # SQLAlchemy 데이터베이스 오류
         if engine:
             engine.dispose()
-        
+
         error_info = parse_db_error(e, db_config)
         logger.error(f"❌ DB 연결 실패 ({error_info['error_type']}): {error_info['user_message']}")
-        
+
         raise HTTPException(
             status_code=400,  # 400으로 변경 (사용자 입력 오류)
             detail={
@@ -1221,20 +1225,20 @@ async def test_database_connection(request: Request, conn_request: DatabaseConne
                 }
             }
         )
-    
+
     except ImportError as e:
         if engine:
             engine.dispose()
-        
+
         logger.error(f"필수 패키지 미설치: {e}")
-        
+
         # DB 타입별 필요 패키지 안내
         required_packages = {
             'postgresql': 'psycopg2-binary',
             'mysql': 'pymysql',
             'sqlite': '(내장 패키지)'
         }
-        
+
         raise HTTPException(
             status_code=500,
             detail={
@@ -1247,13 +1251,13 @@ async def test_database_connection(request: Request, conn_request: DatabaseConne
                 ]
             }
         )
-    
+
     except Exception as e:
         if engine:
             engine.dispose()
-        
+
         logger.error(f"예상치 못한 오류: {e}", exc_info=True)
-        
+
         raise HTTPException(
             status_code=500,
             detail={
@@ -1277,26 +1281,26 @@ async def list_database_tables(request: Request, list_request: TableListRequest)
         raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
 
     db_config = get_db_config_from_request(list_request)
-    
+
     try:
         from sqlalchemy import create_engine, text, inspect
     except ImportError:
         raise HTTPException(status_code=500, detail="sqlalchemy 패키지가 필요합니다")
-    
+
     connection_string = create_db_connection_string(db_config)
     engine = create_engine(connection_string)
     inspector = inspect(engine)
-    
+
     db_type = db_config.get('db_type', 'postgresql').lower()
     tables_info = []
-    
+
     with engine.connect() as conn:
         if db_type == 'postgresql':
             query = text("""
-                SELECT 
+                SELECT
                     table_schema,
                     table_name,
-                    (SELECT COUNT(*) FROM information_schema.columns 
+                    (SELECT COUNT(*) FROM information_schema.columns
                      WHERE table_schema = t.table_schema AND table_name = t.table_name) as column_count
                 FROM information_schema.tables t
                 WHERE (:schema IS NULL OR table_schema = :schema)
@@ -1304,7 +1308,7 @@ async def list_database_tables(request: Request, list_request: TableListRequest)
                 AND table_type = 'BASE TABLE'
                 ORDER BY table_schema, table_name
             """)
-            result = conn.execute(query, {"schema": list_request.schema})
+            result = conn.execute(query, {"schema": list_request.db_schema})  # ✅ schema → db_schema
             
             for row in result:
                 try:
@@ -1312,7 +1316,7 @@ async def list_database_tables(request: Request, list_request: TableListRequest)
                     row_count = conn.execute(count_query).scalar()
                 except Exception:
                     row_count = None
-                
+
                 tables_info.append({
                     "schema": row[0],
                     "table_name": row[1],
@@ -1320,11 +1324,11 @@ async def list_database_tables(request: Request, list_request: TableListRequest)
                     "row_count": row_count,
                     "full_name": f"{row[0]}.{row[1]}"
                 })
-        
+
         elif db_type == 'mysql':
             query = text("""
                 SELECT TABLE_SCHEMA, TABLE_NAME,
-                       (SELECT COUNT(*) FROM information_schema.COLUMNS 
+                       (SELECT COUNT(*) FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = t.TABLE_SCHEMA AND TABLE_NAME = t.TABLE_NAME) as COLUMN_COUNT,
                        TABLE_ROWS
                 FROM information_schema.TABLES t
@@ -1332,7 +1336,7 @@ async def list_database_tables(request: Request, list_request: TableListRequest)
                 ORDER BY TABLE_NAME
             """)
             result = conn.execute(query, {"database": db_config['database']})
-            
+
             for row in result:
                 tables_info.append({
                     "schema": row[0],
@@ -1341,37 +1345,37 @@ async def list_database_tables(request: Request, list_request: TableListRequest)
                     "row_count": row[3],
                     "full_name": f"{row[0]}.{row[1]}"
                 })
-        
+
         elif db_type == 'sqlite':
             table_names = inspector.get_table_names()
-            
+
             for table_name in table_names:
                 columns = inspector.get_columns(table_name)
                 column_count = len(columns)
-                
+
                 try:
                     count_query = text(f'SELECT COUNT(*) FROM "{table_name}"')
                     row_count = conn.execute(count_query).scalar()
                 except Exception:
                     row_count = None
-                
+
                 tables_info.append({
                     "table_name": table_name,
                     "column_count": column_count,
                     "row_count": row_count,
                     "full_name": table_name
                 })
-    
+
     engine.dispose()
-    
+
     logger.info(f"테이블 목록 조회 완료: {len(tables_info)}개 테이블")
-    
+
     return create_response(
         success=True,
         message=f"{len(tables_info)}개의 테이블을 찾았습니다",
         db_type=db_type,
         database=db_config['database'],
-        schema=list_request.schema,
+        schema=list_request.db_schema,  # ✅ schema → db_schema
         table_count=len(tables_info),
         tables=tables_info
     )
@@ -1385,33 +1389,33 @@ async def preview_database_table(request: Request, preview_request: TablePreview
         raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
 
     db_config = get_db_config_from_request(preview_request)
-    
+
     try:
         from sqlalchemy import create_engine, text, inspect
         import pandas as pd
     except ImportError:
         raise HTTPException(status_code=500, detail="필수 패키지가 설치되지 않았습니다")
-    
+
     connection_string = create_db_connection_string(db_config)
     engine = create_engine(connection_string)
     inspector = inspect(engine)
-    
+
     db_type = db_config.get('db_type', 'postgresql').lower()
-    
+
     # 테이블 식별자 생성
-    if db_type == 'postgresql' and preview_request.schema:
-        table_identifier = f'"{preview_request.schema}"."{preview_request.table_name}"'
-        schema_param = preview_request.schema
+    if db_type == 'postgresql' and preview_request.db_schema:  # ✅ schema → db_schema
+        table_identifier = f'"{preview_request.db_schema}"."{preview_request.table_name}"'  # ✅ schema → db_schema
+        schema_param = preview_request.db_schema  # ✅ schema → db_schema
     else:
         table_identifier = f'"{preview_request.table_name}"'
         schema_param = None
-    
+
     # 테이블 존재 확인
     available_tables = inspector.get_table_names(schema=schema_param)
     if preview_request.table_name not in available_tables:
         engine.dispose()
         raise HTTPException(status_code=404, detail=f"테이블 '{preview_request.table_name}'을 찾을 수 없습니다")
-    
+
     # 스키마 정보 조회
     columns = inspector.get_columns(preview_request.table_name, schema=schema_param)
     column_info = [
@@ -1423,26 +1427,26 @@ async def preview_database_table(request: Request, preview_request: TablePreview
         }
         for col in columns
     ]
-    
+
     # 샘플 데이터 조회
     with engine.connect() as conn:
         query = f"SELECT * FROM {table_identifier} LIMIT {preview_request.limit}"
         df = pd.read_sql(query, conn)
         sample_data = df.to_dict('records')
-        
+
         # 전체 행 수 조회
         count_query = f"SELECT COUNT(*) as total FROM {table_identifier}"
         total_rows = pd.read_sql(count_query, conn)['total'][0]
-    
+
     engine.dispose()
-    
+
     logger.info(f"테이블 미리보기: {preview_request.table_name} ({total_rows} rows)")
-    
+
     return create_response(
         success=True,
         message="테이블 미리보기 성공",
         table_name=preview_request.table_name,
-        schema=preview_request.schema,
+        schema=preview_request.db_schema,  # ✅ schema → db_schema
         total_rows=int(total_rows),
         total_columns=len(column_info),
         columns=column_info,
@@ -1459,28 +1463,28 @@ async def validate_sql_query(request: Request, validation_request: QueryValidati
         raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
 
     db_config = get_db_config_from_request(validation_request)
-    
+
     try:
         from sqlalchemy import create_engine, text
         import pandas as pd
     except ImportError:
         raise HTTPException(status_code=500, detail="필수 패키지가 설치되지 않았습니다")
-    
+
     connection_string = create_db_connection_string(db_config)
     engine = create_engine(connection_string)
-    
+
     # 쿼리 정리
     test_query = validation_request.query.strip().rstrip(';')
-    
+
     # LIMIT 추가 (없는 경우)
     if 'LIMIT' not in test_query.upper():
         test_query = f"{test_query} LIMIT 1"
-    
+
     try:
         with engine.connect() as conn:
             # 쿼리 실행 (1개 행만)
             df = pd.read_sql(test_query, conn)
-            
+
             # 컬럼 정보 추출
             column_info = [
                 {
@@ -1490,7 +1494,7 @@ async def validate_sql_query(request: Request, validation_request: QueryValidati
                 }
                 for col in df.columns
             ]
-            
+
             # 예상 행 수 추정
             estimated_rows = None
             try:
@@ -1500,11 +1504,11 @@ async def validate_sql_query(request: Request, validation_request: QueryValidati
                 estimated_rows = int(count_df['total'][0])
             except Exception as count_error:
                 logger.warning(f"행 수 추정 실패: {count_error}")
-        
+
         engine.dispose()
-        
+
         logger.info(f"쿼리 검증 성공: {len(column_info)}개 컬럼, 예상 {estimated_rows}행")
-        
+
         return {
             "success": True,
             "valid": True,
@@ -1514,12 +1518,12 @@ async def validate_sql_query(request: Request, validation_request: QueryValidati
             "estimated_rows": estimated_rows,
             "query": validation_request.query
         }
-        
+
     except Exception as query_error:
         engine.dispose()
         error_message = str(query_error)
         logger.warning(f"쿼리 검증 실패: {error_message}")
-        
+
         return {
             "success": False,
             "valid": False,
@@ -1549,7 +1553,7 @@ async def load_dataset_from_database(request: Request, load_request: LoadFromDat
             logger.info(f"URL에서 DB 설정 파싱: {db_config['db_type']}/{db_config['database']}")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     if not db_config:
         raise HTTPException(status_code=400, detail="db_config 또는 connection_url 중 하나가 필요합니다")
 
