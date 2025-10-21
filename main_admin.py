@@ -96,5 +96,71 @@ async def create_superuser(request: Request):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+# Auth endpoints
+@app.post("/auth/login")
+async def login(request: Request):
+    try:
+        data = await request.json()
+        username = data.get("username")
+        password = data.get("password")
+        
+        print(f"Login attempt: {username}")
+        
+        # Simple mock authentication
+        if username and password:
+            return {
+                "success": True,
+                "message": "Login successful",
+                "token": "mock-jwt-token",
+                "user": {
+                    "username": username,
+                    "role": "admin"
+                }
+            }
+        else:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+            
+    except Exception as e:
+        print(f"Login error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/auth/me")
+async def get_current_user():
+    return {
+        "username": "admin",
+        "role": "admin",
+        "email": "admin@test.com"
+    }
+
+# Superuser login endpoint
+@app.post("/api/admin/user/superuser-login")
+async def superuser_login(request: Request):
+    try:
+        data = await request.json()
+        username = data.get("username")
+        password = data.get("password")
+        
+        print(f"Superuser login attempt: {username}")
+        
+        # Simple mock authentication for superuser
+        if username and password:
+            return {
+                "success": True,
+                "message": "Superuser login successful",
+                "token": "mock-superuser-jwt-token",
+                "user": {
+                    "username": username,
+                    "role": "superuser",
+                    "email": f"{username}@admin.com",
+                    "is_superuser": True
+                }
+            }
+        else:
+            raise HTTPException(status_code=401, detail="Invalid superuser credentials")
+            
+    except Exception as e:
+        print(f"Superuser login error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
