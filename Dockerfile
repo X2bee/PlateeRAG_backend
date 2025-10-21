@@ -1,45 +1,64 @@
-# Simple Dockerfile without virtual environment
-FROM python:3.12-slim
+# Let BASE_IMAGE be overridden at build time (mirrors, nexus proxy, etc.)
+ARG BASE_IMAGE=python:3.12-slim
 
+# ---- Base (shared) ----------------------------------------------------------
+FROM ${BASE_IMAGE} AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_SYSTEM_PYTHON=1
 ARG DEBIAN_FRONTEND=noninteractive
-
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    ca-certificates curl git \
+ && rm -rf /var/lib/apt/lists/*
+ENV VENV_PATH=/opt/venv
+ENV PATH="${VENV_PATH}/bin:${PATH}"
 
-# Create non-root user
-RUN addgroup --system --gid 1001 app && \
-    adduser --system --uid 1001 --ingroup app --home /app app
+# ---- Builder (compilers here only) ------------------------------------------
+FROM base AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential rustc cargo libpq-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV UV_BIN=/root/.local/bin/uv
 
 WORKDIR /app
+# Copy dependency metadata first (best cache)
+COPY pyproject.toml ./
+# If you later commit uv.lock, add: COPY uv.lock ./
 
-# Copy requirements and install dependencies
-COPY requirements-minimal.txt ./
-RUN pip install --no-cache-dir -r requirements-minimal.txt && \
-    pip cache purge
+# Create venv & install deps into it via wheelhouse (generate lock if absent)
+RUN python -m venv ${VENV_PATH} && \
+    ${UV_BIN} lock && \
+    ${UV_BIN} export --format=requirements-txt --locked --no-hashes > /tmp/requirements.txt && \
+    ${VENV_PATH}/bin/pip install --upgrade pip wheel && \
+    ${VENV_PATH}/bin/pip wheel --no-cache-dir --wheel-dir /wheelhouse -r /tmp/requirements.txt && \
+    ${VENV_PATH}/bin/pip install --no-cache-dir --no-index --find-links=/wheelhouse -r /tmp/requirements.txt
 
-# Copy application code
-COPY --chown=app:app . .
+# Now copy application
+COPY . .
 
-# Switch to non-root user
-USER app
+# ---- Runtime (tiny) ---------------------------------------------------------
+FROM ${BASE_IMAGE} AS runtime
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg espeak-ng libpq5 \
+ && rm -rf /var/lib/apt/lists/*
 
-# Verify installation
-RUN python -c "import fastapi; print('FastAPI version:', fastapi.__version__)" && \
-    python -c "import uvicorn; print('Uvicorn version:', uvicorn.__version__)"
+# Non-root user
+RUN addgroup --system --gid 1001 app && \
+    adduser  --system --uid 1001 --ingroup app --home /app app
+WORKDIR /app
+
+# Venv and app from builder
+ENV VENV_PATH=/opt/venv
+ENV PATH="${VENV_PATH}/bin:${PATH}"
+
+COPY --from=builder ${VENV_PATH} ${VENV_PATH}
+COPY --from=builder /app /app
 
 EXPOSE 8000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Start the application (using admin version for testing)
-CMD ["python", "-m", "uvicorn", "main_admin:app", "--host", "0.0.0.0", "--port", "8000"]
+USER app
+CMD ["python","-m","uvicorn","main:app","--host","0.0.0.0","--port","8000"]
