@@ -35,3 +35,5 @@ langchain-core==0.3.69
 openai==1.97.0
 qdrant-client==1.14.3
 minio==7.2.18
+pandas==2.2.3
+numpy==2.3.2
