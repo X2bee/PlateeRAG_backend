@@ -27,3 +27,11 @@ requests==2.32.4
 httpx==0.28.1
 pyjwt==2.8.0
 redis==5.2.1
+
+# Additional dependencies for main.py
+boto3
+langchain==0.3.26
+langchain-core==0.3.69
+openai==1.97.0
+qdrant-client==1.14.3
+minio==7.2.18
