@@ -3,7 +3,7 @@ import logging
 import queue
 import threading
 from typing import Any, Generator, Callable, Awaitable
-from langchain.callbacks.base import AsyncCallbackHandler
+from langchain_core.callbacks import AsyncCallbackHandler
 import re
 import json
 
@@ -72,8 +72,33 @@ class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
             # self.put_status(f"\n💭 단계 {self.current_step}: 답변 생성 중...\n")
 
     async def on_llm_new_token(self, token: str, **kwargs) -> None:
-        """LLM이 새 토큰을 생성할 때 호출"""
-        if token:
+        """LLM이 새 토큰을 생성할 때 호출 (OpenAI/Claude 모두 지원)"""
+        if not token:
+            return
+
+        # Claude 모델의 경우 토큰이 리스트 형태로 올 수 있음
+        if isinstance(token, list):
+            for item in token:
+                if isinstance(item, dict) and item.get('type') == 'text' and 'text' in item:
+                    text_content = item['text']
+                    if text_content:
+                        self.streamed_tokens.append(text_content)
+                        self.put_token(text_content)
+            return
+
+        # Claude 모델의 경우 토큰이 딕셔너리 형태로 올 수 있음
+        if isinstance(token, dict):
+            # text 타입의 청크만 추출
+            if token.get('type') == 'text' and 'text' in token:
+                text_content = token['text']
+                if text_content:
+                    self.streamed_tokens.append(text_content)
+                    self.put_token(text_content)
+            # tool_use나 다른 타입은 무시
+            return
+
+        # OpenAI 등 문자열로 오는 경우
+        if isinstance(token, str):
             self.streamed_tokens.append(token)
             self.put_token(token)
 
@@ -94,6 +119,19 @@ class EnhancedAgentStreamingHandler(AsyncCallbackHandler):
 
     async def on_agent_finish(self, finish, **kwargs) -> None:
         pass
+
+    # LangGraph 지원을 위한 추가 메서드
+    async def on_chain_start(self, serialized, inputs, **kwargs) -> None:
+        """Chain 시작 시 호출 (LangGraph 노드 실행 시작)"""
+        pass
+
+    async def on_chain_end(self, outputs, **kwargs) -> None:
+        """Chain 종료 시 호출 (LangGraph 노드 실행 완료)"""
+        pass
+
+    async def on_chain_error(self, error, **kwargs) -> None:
+        """Chain 오류 시 호출"""
+        self.put_error(error)
 
 class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
     def __init__(self):
@@ -128,8 +166,33 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
             # self.put_status(f"\n💭 단계 {self.current_step}: 답변 생성 중...\n")
 
     async def on_llm_new_token(self, token: str, **kwargs) -> None:
-        """LLM이 새 토큰을 생성할 때 호출"""
-        if token:
+        """LLM이 새 토큰을 생성할 때 호출 (OpenAI/Claude 모두 지원)"""
+        if not token:
+            return
+
+        # Claude 모델의 경우 토큰이 리스트 형태로 올 수 있음
+        if isinstance(token, list):
+            for item in token:
+                if isinstance(item, dict) and item.get('type') == 'text' and 'text' in item:
+                    text_content = item['text']
+                    if text_content:
+                        self.streamed_tokens.append(text_content)
+                        self.put_token(text_content)
+            return
+
+        # Claude 모델의 경우 토큰이 딕셔너리 형태로 올 수 있음
+        if isinstance(token, dict):
+            # text 타입의 청크만 추출
+            if token.get('type') == 'text' and 'text' in token:
+                text_content = token['text']
+                if text_content:
+                    self.streamed_tokens.append(text_content)
+                    self.put_token(text_content)
+            # tool_use나 다른 타입은 무시
+            return
+
+        # OpenAI 등 문자열로 오는 경우
+        if isinstance(token, str):
             self.streamed_tokens.append(token)
             self.put_token(token)
 
@@ -178,15 +241,29 @@ class EnhancedAgentStreamingHandlerWithToolOutput(AsyncCallbackHandler):
     async def on_agent_finish(self, finish, **kwargs) -> None:
         pass
 
+    # LangGraph 지원을 위한 추가 메서드
+    async def on_chain_start(self, serialized, inputs, **kwargs) -> None:
+        """Chain 시작 시 호출 (LangGraph 노드 실행 시작)"""
+        pass
+
+    async def on_chain_end(self, outputs, **kwargs) -> None:
+        """Chain 종료 시 호출 (LangGraph 노드 실행 완료)"""
+        pass
+
+    async def on_chain_error(self, error, **kwargs) -> None:
+        """Chain 오류 시 호출"""
+        self.put_error(error)
+
 def execute_agent_streaming(
     async_executor_func: Callable[[], Awaitable[Any]],
     handler: EnhancedAgentStreamingHandler
 ) -> Generator[str, None, None]:
     """
     Agent 실행을 스트리밍으로 처리하는 범용 함수
+    LangGraph 1.0.0+ CompiledStateGraph 지원
 
     Args:
-        async_executor_func: 실행할 비동기 함수 (예: lambda: agent_executor.ainvoke(inputs, {"callbacks": [handler]}))
+        async_executor_func: 실행할 비동기 함수 (예: lambda: agent_graph.ainvoke(inputs, {"callbacks": [handler]}))
         handler: 스트리밍 핸들러
 
     Yields:
@@ -211,12 +288,38 @@ def execute_agent_streaming(
                     return result
                 except Exception as e:
                     logger.error(f"Agent 실행 중 오류: {str(e)}", exc_info=True)
-                    # OpenAI API validation error에 대한 추가 정보 제공
-                    if "validation error" in str(e).lower() and "function.arguments" in str(e):
-                        logger.error("OpenAI Tool Calling validation error detected. This may be caused by:")
-                        logger.error("1. Tool with empty or None args_schema")
-                        logger.error("2. Tool function returning invalid argument format")
-                        logger.error("3. Pydantic schema validation failure")
+
+                    # 사용자 친화적인 에러 메시지 생성
+                    error_detail = str(e)
+
+                    # OpenAI API 에러 처리
+                    if "404" in error_detail and "does not exist" in error_detail:
+                        if "claude" in error_detail.lower():
+                            error_message = "❌ Claude 모델을 OpenAI API로 호출하려고 했습니다. Anthropic API 키가 올바르게 설정되었는지 확인하세요."
+                        else:
+                            error_message = f"❌ 모델을 찾을 수 없습니다: {error_detail}"
+                    elif "401" in error_detail or "authentication" in error_detail.lower():
+                        error_message = "❌ API 인증 실패: API 키를 확인하세요."
+                    elif "429" in error_detail or "rate limit" in error_detail.lower():
+                        error_message = "❌ API 요청 한도 초과: 잠시 후 다시 시도하세요."
+                    else:
+                        error_message = f"❌ 오류 발생: {error_detail}"
+
+                    # 에러 메시지를 handler를 통해 전달
+                    handler.put_status(f"\n{error_message}\n")
+
+                    # LangGraph 관련 오류에 대한 추가 정보 제공
+                    if "validation error" in str(e).lower():
+                        if "function.arguments" in str(e):
+                            logger.error("OpenAI Tool Calling validation error detected. This may be caused by:")
+                            logger.error("1. Tool with empty or None args_schema")
+                            logger.error("2. Tool function returning invalid argument format")
+                            logger.error("3. Pydantic schema validation failure")
+                        elif "messages" in str(e).lower():
+                            logger.error("LangGraph state validation error. Check that:")
+                            logger.error("1. Input format matches AgentState schema (must contain 'messages' key)")
+                            logger.error("2. Messages are proper langchain_core.messages objects")
+
                     handler.put_error(e)
                     execution_finished[0] = True
                     raise e
@@ -244,7 +347,11 @@ def execute_agent_streaming(
                     break
                 elif msg_type == 'error':
                     if exception_container[0]:
-                        raise exception_container[0]
+                        error = exception_container[0]
+                        if error is not None:
+                            raise error
+                        else:
+                            raise RuntimeError("Unknown error occurred during agent execution")
                     elif value:
                         raise value
                     else:
@@ -258,15 +365,19 @@ def execute_agent_streaming(
                         break
                     # 스레드가 비정상 종료된 경우
                     elif not thread.is_alive() and exception_container[0]:
-                        raise exception_container[0]
+                        error = exception_container[0]
+                        if error is not None:
+                            raise error
+                        else:
+                            raise RuntimeError("Thread terminated unexpectedly without error")
                     elif not thread.is_alive():
                         break
                 continue
 
     except Exception as e:
         logger.error(f"스트리밍 중 오류: {str(e)}", exc_info=True)
-        pass
-        # yield f"\n❌ 오류 발생: {str(e)}\n"
+        # 에러 메시지를 사용자에게 yield
+        yield f"\n❌ 오류 발생: {str(e)}\n"
     finally:
         # 스레드 정리
         if thread.is_alive():

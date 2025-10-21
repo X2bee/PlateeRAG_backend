@@ -11,6 +11,7 @@ from service.database.connection import AppDatabaseManager
 TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
 try:
+    # Use nvidia-ml-py (official replacement for deprecated pynvml)
     import pynvml
     PYNVML_AVAILABLE = True
 except ImportError:

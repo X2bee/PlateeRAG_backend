@@ -1,34 +1,34 @@
-from langchain.agents import create_agent
-from langchain.agents.middleware import SummarizationMiddleware
-from typing import Dict, Any, Optional, Generator
-from pydantic import BaseModel
 import logging
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
 from editor.node_composer import Node
 from editor.nodes.xgen.agent.functions import (
     prepare_llm_components,
     rag_context_builder,
     create_json_output_prompt,
 )
-from editor.utils.helper.stream_helper import (
-    EnhancedAgentStreamingHandler,
-    EnhancedAgentStreamingHandlerWithToolOutput,
-    execute_agent_streaming,
+from editor.utils.helper.agent_helper import (
+    NonStreamingAgentHandler,
+    NonStreamingAgentHandlerWithToolOutput,
+    use_guarder_for_text_moderation,
+    XgenJsonOutputParser,
 )
 from editor.utils.prefix_prompt import get_prefix_prompt
-from editor.utils.helper.agent_helper import use_guarder_for_text_moderation, XgenJsonOutputParser
+from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
 
 logger = logging.getLogger(__name__)
 
 default_prompt = """You are a helpful AI assistant."""
 
 
-class AgentOpenAIStreamNode(Node):
+class AgentPublicNode(Node):
     categoryId = "xgen"
     functionId = "agents"
-    nodeId = "agents/openai_stream"
-    nodeName = "Agent OpenAI Stream"
-    description = "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드"
-    tags = ["agent", "chat", "rag", "openai", "stream"]
+    nodeId = "agents/public"
+    nodeName = "Agent Public"
+    description = "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드"
+    tags = ["agent", "chat", "rag", "public_model"]
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
@@ -57,13 +57,15 @@ class AgentOpenAIStreamNode(Node):
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
         {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
     ]
-    outputs = [{"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}]
+    outputs = [
+        {"id": "result", "name": "Result", "type": "STR"},
+    ]
     parameters = [
         {
             "id": "model",
             "name": "Model",
             "type": "STR",
-            "value": "gpt-5",
+            "value": "gpt-4.1",
             "required": True,
             "options": [
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
@@ -75,6 +77,19 @@ class AgentOpenAIStreamNode(Node):
                 {"value": "gpt-5", "label": "GPT-5"},
                 {"value": "gpt-5-mini", "label": "GPT-5 Mini"},
                 {"value": "gpt-5-nano", "label": "GPT-5 Nano"},
+                {"value": "claude-3-5-haiku-20241022", "label": "Claude Haiku 3.5"},
+                {"value": "claude-3-5-sonnet-20241022", "label": "Claude Sonnet 3.5"},
+                {"value": "claude-3-7-sonnet-20250219", "label": "Claude Sonnet 3.7"},
+                {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4"},
+                {"value": "claude-opus-4-20250514", "label": "Claude Opus 4"},
+                {"value": "claude-opus-4-1-20250805", "label": "Claude Opus 4.1"},
+                {"value": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5"},
+                {"value": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
+                {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
+                {"value": "gemini-2.0-flash-lite", "label": "Gemini 2.0 Flash Lite"},
+                {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+                {"value": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite"},
+                {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
             ],
         },
         {
@@ -82,6 +97,8 @@ class AgentOpenAIStreamNode(Node):
             "name": "Temperature",
             "type": "FLOAT",
             "value": 1,
+            "required": False,
+            "optional": True,
             "min": 0.0,
             "max": 2.0,
             "step": 0.1,
@@ -91,6 +108,8 @@ class AgentOpenAIStreamNode(Node):
             "name": "Max Tokens",
             "type": "INT",
             "value": 8192,
+            "required": False,
+            "optional": True,
             "min": 1,
             "max": 65536,
             "step": 1,
@@ -104,6 +123,15 @@ class AgentOpenAIStreamNode(Node):
             "optional": True,
         },
         {
+            "id": "return_intermediate_steps",
+            "name": "Return Intermediate Steps",
+            "type": "BOOL",
+            "value": False,
+            "required": False,
+            "optional": True,
+            "description": "Tool 사용시 해당 과정을 출력할지 여부를 결정합니다.",
+        },
+        {
             "id": "default_prompt",
             "name": "Default Prompt",
             "type": "STR",
@@ -112,15 +140,6 @@ class AgentOpenAIStreamNode(Node):
             "optional": True,
             "expandable": True,
             "description": "기본 프롬프트로 AI가 따르는 System 지침을 의미합니다.",
-        },
-        {
-            "id": "return_intermediate_steps",
-            "name": "Return Intermediate Steps",
-            "type": "BOOL",
-            "value": False,
-            "required": False,
-            "optional": True,
-            "description": "중간 단계를 반환할지 여부입니다.",
         },
         {
             "id": "use_guarder",
@@ -141,21 +160,19 @@ class AgentOpenAIStreamNode(Node):
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
         plan: Optional[Dict[str, Any]] = None,
-        model: str = "gpt-5",
+        model: str = "gpt-4.1",
         temperature: float = 1,
         max_tokens: int = 8192,
         strict_citation: bool = True,
-        default_prompt: str = default_prompt,
         return_intermediate_steps: bool = False,
+        default_prompt: str = default_prompt,
         use_guarder: bool = False,
-    ) -> Generator[str, None, None]:
-
+    ) -> str:
         try:
             if use_guarder:
                 is_safe, moderation_message = use_guarder_for_text_moderation(text)
                 if not is_safe:
-                    yield moderation_message
-                    return
+                    return moderation_message
 
             default_prompt = get_prefix_prompt() + default_prompt
             llm, tools_list, chat_history = prepare_llm_components(
@@ -165,9 +182,10 @@ class AgentOpenAIStreamNode(Node):
                 model,
                 temperature,
                 max_tokens,
-                streaming=True,
+                streaming=False,
                 plan=plan,
             )
+
             additional_rag_context = ""
             if rag_context:
                 additional_rag_context = rag_context_builder(
@@ -179,7 +197,15 @@ class AgentOpenAIStreamNode(Node):
 
             system_prompt_text = default_prompt
 
-            agent_summarization_model = f"openai:{model}"
+            is_anthropic_model = model.startswith('claude-')
+            is_google_model = model.startswith('gemini-')
+
+            if is_anthropic_model:
+                agent_summarization_model = f"anthropic:{model}"
+            elif is_google_model:
+                agent_summarization_model = f"google_genai:{model}"
+            else:
+                agent_summarization_model = f"openai:{model}"
 
             agent_summarization_middleware = SummarizationMiddleware(
                 model=agent_summarization_model,
@@ -202,9 +228,9 @@ class AgentOpenAIStreamNode(Node):
                 )
 
             if return_intermediate_steps:
-                handler = EnhancedAgentStreamingHandlerWithToolOutput()
+                handler = NonStreamingAgentHandlerWithToolOutput()
             else:
-                handler = EnhancedAgentStreamingHandler()
+                handler = NonStreamingAgentHandler()
 
             # LangGraph의 새로운 입력 형식: messages 리스트 사용
             from langchain_core.messages import HumanMessage
@@ -216,44 +242,34 @@ class AgentOpenAIStreamNode(Node):
 
             graph_inputs = {"messages": chat_history + [HumanMessage(content=final_user_message)]}
 
-            # LangGraph 기반 agent 실행을 위한 async executor
-            async_executor = lambda: agent_graph.ainvoke(
-                graph_inputs, {"callbacks": [handler]}
+            # LangGraph 기반 agent 실행
+            response = agent_graph.invoke(graph_inputs, {"callbacks": [handler]})
+            output = (
+                response.get("messages", [])[-1].content
+                if response.get("messages")
+                else ""
             )
 
-            try:
-                # args_schema가 있으면 전체 응답 수집 후 파싱하여 정합성 검증된 결과 반환
-                if args_schema:
-                    collected_output = []
-                    for token in execute_agent_streaming(async_executor, handler):
-                        collected_output.append(token)
+            formatted_output = handler.get_formatted_output(output)
 
-                    # 전체 출력 수집 완료 후 정합성 검증
-                    full_output = "".join(collected_output)
-                    try:
-                        parser = XgenJsonOutputParser()
-                        parsed_output = parser.parse(full_output)
-                        logger.info("[AGENT_STREAM_EXECUTE] JSON 파싱 성공")
-                        logger.info(f"[AGENT_STREAM_EXECUTE] 파싱된 출력: {parsed_output}")
-                        # 파싱 성공 시 원본 출력을 yield
-                        yield full_output
-                    except Exception as parse_error:
-                        logger.error(f"[AGENT_STREAM_EXECUTE] JSON 파싱 실패: {parse_error}")
-                        logger.error(f"[AGENT_STREAM_EXECUTE] 수집된 출력: {full_output}")
-                        # 파싱 실패 시 원본 출력 그대로 반환
-                        yield full_output
-                else:
-                    # args_schema가 없으면 일반 스트리밍
-                    for token in execute_agent_streaming(async_executor, handler):
-                        yield token
+            # args_schema가 있으면 XgenJsonOutputParser로 파싱하여 정합성 검증
+            if args_schema:
+                try:
+                    parser = XgenJsonOutputParser()
+                    parsed_output = parser.parse(output)
+                    logger.info("[AGENT_EXECUTE] JSON 파싱 성공")
+                    return parsed_output
+                except Exception as parse_error:
+                    logger.error(f"[AGENT_EXECUTE] JSON 파싱 실패: {parse_error}")
+                    logger.error(f"[AGENT_EXECUTE] 원본 출력: {output}")
+                    # 파싱 실패 시 원본 formatted_output 반환
+                    return formatted_output
 
-            except Exception as e:
-                logger.error(f"Agent streaming error: {str(e)}", exc_info=True)
-                yield f"\nStreaming Error: {str(e)}\n"
+            return formatted_output
 
         except Exception as e:
             logger.error(
-                f"[AGENT_STREAM_EXECUTE] 스트리밍 Agent 실행 중 오류 발생: {str(e)}",
+                f"[AGENT_EXECUTE] Agent 실행 중 오류 발생: {str(e)}",
                 exc_info=True,
             )
-            yield f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
+            return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"

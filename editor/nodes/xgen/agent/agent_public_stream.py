@@ -22,13 +22,13 @@ logger = logging.getLogger(__name__)
 default_prompt = """You are a helpful AI assistant."""
 
 
-class AgentOpenAIStreamNode(Node):
+class AgentPublicStreamNode(Node):
     categoryId = "xgen"
     functionId = "agents"
-    nodeId = "agents/openai_stream"
-    nodeName = "Agent OpenAI Stream"
-    description = "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드"
-    tags = ["agent", "chat", "rag", "openai", "stream"]
+    nodeId = "agents/public_stream"
+    nodeName = "Agent Public Stream"
+    description = "도구, 메모리 및 RAG 컨텍스트 등을 활용하여 채팅 응답을 스트리밍으로 생성하는 Agent"
+    tags = ["agent", "chat", "rag", "public_model", "stream"]
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
@@ -63,7 +63,7 @@ class AgentOpenAIStreamNode(Node):
             "id": "model",
             "name": "Model",
             "type": "STR",
-            "value": "gpt-5",
+            "value": "gpt-4.1",
             "required": True,
             "options": [
                 {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo"},
@@ -75,6 +75,19 @@ class AgentOpenAIStreamNode(Node):
                 {"value": "gpt-5", "label": "GPT-5"},
                 {"value": "gpt-5-mini", "label": "GPT-5 Mini"},
                 {"value": "gpt-5-nano", "label": "GPT-5 Nano"},
+                {"value": "claude-3-5-haiku-20241022", "label": "Claude Haiku 3.5"},
+                {"value": "claude-3-5-sonnet-20241022", "label": "Claude Sonnet 3.5"},
+                {"value": "claude-3-7-sonnet-20250219", "label": "Claude Sonnet 3.7"},
+                {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4"},
+                {"value": "claude-opus-4-20250514", "label": "Claude Opus 4"},
+                {"value": "claude-opus-4-1-20250805", "label": "Claude Opus 4.1"},
+                {"value": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5"},
+                {"value": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
+                {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
+                {"value": "gemini-2.0-flash-lite", "label": "Gemini 2.0 Flash Lite"},
+                {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+                {"value": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite"},
+                {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
             ],
         },
         {
@@ -141,7 +154,7 @@ class AgentOpenAIStreamNode(Node):
         rag_context: Optional[Dict[str, Any]] = None,
         args_schema: Optional[BaseModel] = None,
         plan: Optional[Dict[str, Any]] = None,
-        model: str = "gpt-5",
+        model: str = "gpt-4.1",
         temperature: float = 1,
         max_tokens: int = 8192,
         strict_citation: bool = True,
@@ -179,7 +192,15 @@ class AgentOpenAIStreamNode(Node):
 
             system_prompt_text = default_prompt
 
-            agent_summarization_model = f"openai:{model}"
+            is_anthropic_model = model.startswith('claude-')
+            is_google_model = model.startswith('gemini-')
+
+            if is_anthropic_model:
+                agent_summarization_model = f"anthropic:{model}"
+            elif is_google_model:
+                agent_summarization_model = f"google_genai:{model}"
+            else:
+                agent_summarization_model = f"openai:{model}"
 
             agent_summarization_middleware = SummarizationMiddleware(
                 model=agent_summarization_model,

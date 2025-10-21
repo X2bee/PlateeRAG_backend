@@ -31,6 +31,7 @@ class AgentVLLMFeedbackLoopNode(Node):
     nodeName = "Agent VLLM Feedback Loop"
     description = "사용자 요청을 TODO로 분해하고 각 TODO를 피드백 루프를 통해 순차적으로 실행하는 Agent 노드"
     tags = ["agent", "feedback", "loop", "langgraph", "iterative", "evaluation"]
+    disable = True
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},

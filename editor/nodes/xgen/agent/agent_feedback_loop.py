@@ -28,6 +28,7 @@ class AgentFeedbackLoopNode(Node):
     nodeName = "Agent Feedback Loop"
     description = "LangGraph 기반 피드백 루프를 통해 사용자 요구사항에 맞는 결과를 반복적으로 생성하는 Agent 노드"
     tags = ["agent", "feedback", "loop", "langgraph", "iterative", "evaluation"]
+    disable = True
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},

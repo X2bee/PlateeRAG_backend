@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, List, Set
 from editor.node_composer import Node
-from langchain.agents import tool
+from langchain_core.tools import tool
 from editor.utils.helper.service_helper import AppServiceManager
 from editor.utils.helper.async_helper import sync_run_async
 from service.database.models.vectordb import VectorDB, VectorDBChunkEdge

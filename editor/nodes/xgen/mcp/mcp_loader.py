@@ -2,7 +2,7 @@ import logging
 import httpx
 from typing import Any, Dict, List
 from editor.node_composer import Node
-from langchain.agents import tool
+from langchain_core.tools import tool
 from fastapi import Request
 from editor.utils.helper.async_helper import sync_run_async
 from controller.mcpController import MCP_STATION_BASE_URL

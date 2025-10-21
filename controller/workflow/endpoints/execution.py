@@ -52,21 +52,7 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
             workflow_data = await default_workflow_parameter_helper(request, request_body, workflow_data)
             backend_log.info("Using default mode workflow",
                            metadata={"file_path": file_path})
-
-        ## 워크플로우 실행인 경우, 해당하는 워크플로우 파일을 찾아서 사용.
         else:
-            # downloads_path = os.path.join(os.getcwd(), "downloads")
-            # download_path_id = os.path.join(downloads_path, extracted_user_id)
-
-            # if not request_body.workflow_name.endswith('.json'):
-            #     filename = f"{request_body.workflow_name}.json"
-            # else:
-            #     filename = request_body.workflow_name
-            # file_path = os.path.join(download_path_id, filename)
-            # with open(file_path, 'r', encoding='utf-8') as f:
-            #     workflow_data = json.load(f)
-
-            #### DB방식으로 변경중
             workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": extracted_user_id, "workflow_name": request_body.workflow_name}, limit=1)
             workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
             if isinstance(workflow_data, str):
@@ -289,13 +275,6 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             backend_log.info("Using default mode workflow for streaming",
                            metadata={"file_path": file_path})
         else:
-            # downloads_path = os.path.join(os.getcwd(), "downloads")
-            # download_path_id = os.path.join(downloads_path, extracted_user_id)
-            # filename = f"{request_body.workflow_name}.json" if not request_body.workflow_name.endswith('.json') else request_body.workflow_name
-            # file_path = os.path.join(download_path_id, filename)
-            # with open(file_path, 'r', encoding='utf-8') as f:
-            #     workflow_data = json.load(f)
-
             #### DB방식으로 변경중
             workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": extracted_user_id, "workflow_name": request_body.workflow_name}, limit=1)
             workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
