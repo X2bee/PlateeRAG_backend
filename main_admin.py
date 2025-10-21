@@ -44,6 +44,16 @@ async def health_check():
 async def test_endpoint():
     return {"message": "API proxy is working!", "timestamp": "2025-10-21"}
 
+@app.post("/api/test-post")
+async def test_post_endpoint(request: Request):
+    try:
+        body = await request.body()
+        print(f"Test POST - Raw body: {body}")
+        return {"message": "POST proxy is working!", "received_body": body.decode()}
+    except Exception as e:
+        print(f"Test POST error: {str(e)}")
+        return {"error": str(e)}
+
 # Request models
 class CreateSuperuserRequest(BaseModel):
     username: str
