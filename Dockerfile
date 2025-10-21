@@ -11,6 +11,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git \
  && rm -rf /var/lib/apt/lists/*
+
 ENV VENV_PATH=/opt/venv
 ENV PATH="${VENV_PATH}/bin:${PATH}"
 
@@ -20,24 +21,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential rustc cargo libpq-dev \
  && rm -rf /var/lib/apt/lists/*
 
-# uv
+# install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV UV_BIN=/root/.local/bin/uv
 
 WORKDIR /app
-# Copy dependency metadata first (best cache)
+
+# Copy dependency metadata first (better cache). Add uv.lock if you have it.
 COPY pyproject.toml ./
-# If you later commit uv.lock, add: COPY uv.lock ./
+# COPY uv.lock ./
 
-# Create venv & install deps into it via wheelhouse (generate lock if absent)
-RUN python -m venv ${VENV_PATH} && \
-    ${UV_BIN} lock && \
-    ${UV_BIN} export --format=requirements-txt --locked --no-hashes > /tmp/requirements.txt && \
-    ${VENV_PATH}/bin/pip install --upgrade pip wheel && \
-    ${VENV_PATH}/bin/pip wheel --no-cache-dir --wheel-dir /wheelhouse -r /tmp/requirements.txt && \
-    ${VENV_PATH}/bin/pip install --no-cache-dir --no-index --find-links=/wheelhouse -r /tmp/requirements.txt
+# Create venv and install locked deps directly (no wheelhouse)
+RUN python -m venv ${VENV_PATH} \
+ && ${UV_BIN} lock \
+ && ${UV_BIN} sync --locked --python ${VENV_PATH}/bin/python
 
-# Now copy application
+# If uvicorn isn’t listed in your pyproject’s runtime deps, keep this:
+RUN ${VENV_PATH}/bin/pip install --no-cache-dir "uvicorn[standard]>=0.30"
+
+# Now copy the application code
 COPY . .
 
 # ---- Runtime (tiny) ---------------------------------------------------------
@@ -52,10 +54,12 @@ RUN addgroup --system --gid 1001 app && \
     adduser  --system --uid 1001 --ingroup app --home /app app
 WORKDIR /app
 
-# Venv and app from builder
 ENV VENV_PATH=/opt/venv
-ENV PATH="${VENV_PATH}/bin:${PATH}"
+ENV PATH="${VENV_PATH}/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
+# Bring venv and app from builder
 COPY --from=builder ${VENV_PATH} ${VENV_PATH}
 COPY --from=builder /app /app
 
