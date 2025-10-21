@@ -1,4 +1,5 @@
 from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
 from typing import Dict, Any, Optional, Generator
 from pydantic import BaseModel
 import logging
@@ -7,8 +8,6 @@ from editor.nodes.xgen.agent.functions import (
     prepare_llm_components,
     rag_context_builder,
     create_json_output_prompt,
-    create_tool_context_prompt,
-    create_context_prompt,
 )
 from editor.utils.helper.stream_helper import (
     EnhancedAgentStreamingHandler,
@@ -16,7 +15,7 @@ from editor.utils.helper.stream_helper import (
     execute_agent_streaming,
 )
 from editor.utils.prefix_prompt import get_prefix_prompt
-from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
+from editor.utils.helper.agent_helper import use_guarder_for_text_moderation, XgenJsonOutputParser
 
 logger = logging.getLogger(__name__)
 
@@ -76,19 +75,6 @@ class AgentOpenAIStreamNode(Node):
                 {"value": "gpt-5", "label": "GPT-5"},
                 {"value": "gpt-5-mini", "label": "GPT-5 Mini"},
                 {"value": "gpt-5-nano", "label": "GPT-5 Nano"},
-                {"value": "claude-3-5-haiku-20241022", "label": "Claude Haiku 3.5"},
-                {"value": "claude-3-5-sonnet-20241022", "label": "Claude Sonnet 3.5"},
-                {"value": "claude-3-7-sonnet-20250219", "label": "Claude Sonnet 3.7"},
-                {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4"},
-                {"value": "claude-opus-4-20250514", "label": "Claude Opus 4"},
-                {"value": "claude-opus-4-1-20250805", "label": "Claude Opus 4.1"},
-                {"value": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5"},
-                {"value": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
-                {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
-                {"value": "gemini-2.0-flash-lite", "label": "Gemini 2.0 Flash Lite"},
-                {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
-                {"value": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite"},
-                {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
             ],
         },
         {
@@ -188,82 +174,82 @@ class AgentOpenAIStreamNode(Node):
                     text, rag_context, strict_citation
                 )
 
-            inputs = {
-                "input": text,
-                "chat_history": chat_history,
-                "additional_rag_context": additional_rag_context if rag_context else "",
-            }
-
             if args_schema:
                 default_prompt = create_json_output_prompt(args_schema, default_prompt)
 
+            system_prompt_text = default_prompt
+
+            agent_summarization_model = f"openai:{model}"
+
+            agent_summarization_middleware = SummarizationMiddleware(
+                model=agent_summarization_model,
+                max_tokens_before_summary=4000,
+                messages_to_keep=10,
+            )
+
             if tools_list:
-                final_prompt = create_tool_context_prompt(
-                    additional_rag_context, default_prompt, plan=plan
-                )
-
-                # LangChain 1.0.0의 create_agent는 system_prompt로 문자열만 받습니다
-                # ChatPromptTemplate에서 system message 추출
-                system_prompt_text = default_prompt
-                if hasattr(final_prompt, "messages") and len(final_prompt.messages) > 0:
-                    first_msg = final_prompt.messages[0]
-                    if hasattr(first_msg, "prompt") and hasattr(
-                        first_msg.prompt, "template"
-                    ):
-                        system_prompt_text = first_msg.prompt.template
-
-                # create_agent는 이제 CompiledStateGraph를 반환합니다
                 agent_graph = create_agent(
-                    model=llm, tools=tools_list, system_prompt=system_prompt_text
+                    model=llm,
+                    tools=tools_list,
+                    system_prompt=system_prompt_text,
+                    middleware=[agent_summarization_middleware],
+                )
+            else:
+                agent_graph = create_agent(
+                    model=llm,
+                    system_prompt=system_prompt_text,
+                    middleware=[agent_summarization_middleware],
                 )
 
-                if return_intermediate_steps:
-                    handler = EnhancedAgentStreamingHandlerWithToolOutput()
+            if return_intermediate_steps:
+                handler = EnhancedAgentStreamingHandlerWithToolOutput()
+            else:
+                handler = EnhancedAgentStreamingHandler()
+
+            # LangGraph의 새로운 입력 형식: messages 리스트 사용
+            from langchain_core.messages import HumanMessage
+
+            # additional_rag_context를 HumanMessage content에 포함
+            final_user_message = text
+            if additional_rag_context:
+                final_user_message = f"{text}\n\n{additional_rag_context}"
+
+            graph_inputs = {"messages": chat_history + [HumanMessage(content=final_user_message)]}
+
+            # LangGraph 기반 agent 실행을 위한 async executor
+            async_executor = lambda: agent_graph.ainvoke(
+                graph_inputs, {"callbacks": [handler]}
+            )
+
+            try:
+                # args_schema가 있으면 전체 응답 수집 후 파싱하여 정합성 검증된 결과 반환
+                if args_schema:
+                    collected_output = []
+                    for token in execute_agent_streaming(async_executor, handler):
+                        collected_output.append(token)
+
+                    # 전체 출력 수집 완료 후 정합성 검증
+                    full_output = "".join(collected_output)
+                    try:
+                        parser = XgenJsonOutputParser()
+                        parsed_output = parser.parse(full_output)
+                        logger.info("[AGENT_STREAM_EXECUTE] JSON 파싱 성공")
+                        logger.info(f"[AGENT_STREAM_EXECUTE] 파싱된 출력: {parsed_output}")
+                        # 파싱 성공 시 원본 출력을 yield
+                        yield full_output
+                    except Exception as parse_error:
+                        logger.error(f"[AGENT_STREAM_EXECUTE] JSON 파싱 실패: {parse_error}")
+                        logger.error(f"[AGENT_STREAM_EXECUTE] 수집된 출력: {full_output}")
+                        # 파싱 실패 시 원본 출력 그대로 반환
+                        yield full_output
                 else:
-                    handler = EnhancedAgentStreamingHandler()
-
-                # LangGraph의 새로운 입력 형식: messages 리스트 사용
-                from langchain_core.messages import HumanMessage
-
-                graph_inputs = {"messages": chat_history + [HumanMessage(content=text)]}
-                if additional_rag_context:
-                    graph_inputs["additional_rag_context"] = additional_rag_context
-
-                # LangGraph 기반 agent 실행을 위한 async executor
-                async_executor = lambda: agent_graph.ainvoke(
-                    graph_inputs, {"callbacks": [handler]}
-                )
-
-                try:
+                    # args_schema가 없으면 일반 스트리밍
                     for token in execute_agent_streaming(async_executor, handler):
                         yield token
-                except Exception as e:
-                    logger.error(f"Agent streaming error: {str(e)}", exc_info=True)
-                    yield f"\nStreaming Error: {str(e)}\n"
-            else:
-                final_prompt = create_context_prompt(
-                    additional_rag_context, default_prompt, strict_citation, plan=plan
-                )
-                chain = final_prompt | llm
-                for chunk in chain.stream(inputs):
-                    # Claude와 OpenAI 모두 지원하도록 content 처리
-                    content = chunk.content
 
-                    # Claude의 경우 content가 리스트 형태일 수 있음
-                    if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, dict):
-                                # text 타입의 청크만 추출
-                                if item.get("type") == "text" and "text" in item:
-                                    yield item["text"]
-                            elif isinstance(item, str):
-                                yield item
-                    # OpenAI나 일반 문자열의 경우
-                    elif isinstance(content, str):
-                        yield content
-                    # 기타 형태의 content 처리
-                    elif content:
-                        yield str(content)
+            except Exception as e:
+                logger.error(f"Agent streaming error: {str(e)}", exc_info=True)
+                yield f"\nStreaming Error: {str(e)}\n"
 
         except Exception as e:
             logger.error(

@@ -1,7 +1,7 @@
 import re
 import logging
+import os
 from typing import Any, List, Optional
-
 from langchain_core.messages import SystemMessage
 
 from editor.utils.helper.async_helper import sync_run_async
@@ -143,7 +143,7 @@ def _flatten_tools_list(tools_list):
     logger.info(f"Tools flattened: {len(tools_list)} items -> {len(flattened)} items")
     return flattened
 
-def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, n_messages=None, streaming=True, plan=None):
+def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, n_messages=None, streaming=True, plan=None, base_url=None):
     from langchain_openai import ChatOpenAI
     from langchain_anthropic import ChatAnthropic
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -160,6 +160,7 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
     if is_anthropic_model:
         # Anthropic 모델 사용
         api_key = config_composer.get_config_by_name("ANTHROPIC_API_KEY").value
+        os.environ["ANTHROPIC_API_KEY"] = api_key
         if not api_key:
             logger.error(f"Anthropic API Key is not set")
             raise ValueError("Anthropic API Key is not set.")
@@ -169,6 +170,7 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
     elif is_google_model:
         # Google Gemini 모델 사용
         api_key = config_composer.get_config_by_name("GEMINI_API_KEY").value
+        os.environ["GOOGLE_API_KEY"] = api_key
         if not api_key:
             logger.error(f"Google Generative AI API Key is not set")
             raise ValueError("Google Generative AI API Key is not set.")
@@ -179,7 +181,7 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
         llm_provider = config_composer.get_config_by_name("DEFAULT_LLM_PROVIDER").value
         if llm_provider == "openai":
             api_key = config_composer.get_config_by_name("OPENAI_API_KEY").value
-            print(api_key)
+            os.environ["OPENAI_API_KEY"] = api_key
             if not api_key:
                 logger.error(f"OpenAI API Key is not set")
                 raise ValueError("OpenAI API Key is not set.")
@@ -196,7 +198,10 @@ def prepare_llm_components(text, tools, memory, model, temperature, max_tokens, 
             logger.error(f"Unsupported LLM Provider: {llm_provider}")
             raise ValueError(f"Unsupported LLM Provider: {llm_provider}")
 
-        llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming)
+        if base_url:
+            llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming, base_url=base_url)
+        else:
+            llm = ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens, streaming=streaming)
 
     tools_list = []
     if tools:
@@ -316,7 +321,7 @@ def _build_conversation_text(messages: List[Any]) -> str:
 
     return "\n".join(lines)
 
-
+#제거 예정 사용되지 않을 것으로 보임.
 def _summarize_chat_history_with_llm(
     chat_history,
     current_input: str,
@@ -364,7 +369,9 @@ def create_json_output_prompt(args_schema, original_prompt):
     escaped_instructions = format_instructions.replace("{", "{{").replace("}", "}}")
     return f"{original_prompt}\n\n{escaped_instructions}"
 
-def create_tool_context_prompt(additional_rag_context, default_prompt, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True, plan=None):
+
+# 제거 예정 사용되지 않는 것으로 보임.
+def create_tool_context_prompt(additional_rag_context, default_prompt, n_messages=None, plan=None):
     """
     Tool context prompt 생성 - 메모리가 있을 때만 최적화 기능 사용
 
@@ -398,6 +405,7 @@ def create_tool_context_prompt(additional_rag_context, default_prompt, n_message
         ])
     return final_prompt
 
+# 제거 예정 사용되지 않는 것으로 보임.
 def create_context_prompt(additional_rag_context, default_prompt, strict_citation, n_messages=None, memory=None, current_input=None, llm=None, use_optimization=True, plan=None):
     """
     Context prompt 생성 - 메모리가 있을 때만 최적화 기능 사용

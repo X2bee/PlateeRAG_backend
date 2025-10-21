@@ -8,8 +8,6 @@ from editor.nodes.xgen.agent.functions import (
     prepare_llm_components,
     rag_context_builder,
     create_json_output_prompt,
-    create_tool_context_prompt,
-    create_context_prompt,
 )
 from editor.utils.helper.stream_helper import (
     EnhancedAgentStreamingHandler,
@@ -17,7 +15,7 @@ from editor.utils.helper.stream_helper import (
     execute_agent_streaming,
 )
 from editor.utils.prefix_prompt import get_prefix_prompt
-from editor.utils.helper.agent_helper import use_guarder_for_text_moderation
+from editor.utils.helper.agent_helper import use_guarder_for_text_moderation, XgenJsonOutputParser
 
 logger = logging.getLogger(__name__)
 
@@ -192,18 +190,7 @@ class AgentPublicStreamNode(Node):
             if args_schema:
                 default_prompt = create_json_output_prompt(args_schema, default_prompt)
 
-
-            final_prompt = create_tool_context_prompt(
-                additional_rag_context, default_prompt, plan=plan
-            )
-
             system_prompt_text = default_prompt
-            if hasattr(final_prompt, "messages") and len(final_prompt.messages) > 0:
-                first_msg = final_prompt.messages[0]
-                if hasattr(first_msg, "prompt") and hasattr(
-                    first_msg.prompt, "template"
-                ):
-                    system_prompt_text = first_msg.prompt.template
 
             is_anthropic_model = model.startswith('claude-')
             is_google_model = model.startswith('gemini-')
@@ -243,9 +230,12 @@ class AgentPublicStreamNode(Node):
             # LangGraph의 새로운 입력 형식: messages 리스트 사용
             from langchain_core.messages import HumanMessage
 
-            graph_inputs = {"messages": chat_history + [HumanMessage(content=text)]}
+            # additional_rag_context를 HumanMessage content에 포함
+            final_user_message = text
             if additional_rag_context:
-                graph_inputs["additional_rag_context"] = additional_rag_context
+                final_user_message = f"{text}\n\n{additional_rag_context}"
+
+            graph_inputs = {"messages": chat_history + [HumanMessage(content=final_user_message)]}
 
             # LangGraph 기반 agent 실행을 위한 async executor
             async_executor = lambda: agent_graph.ainvoke(
@@ -253,8 +243,31 @@ class AgentPublicStreamNode(Node):
             )
 
             try:
-                for token in execute_agent_streaming(async_executor, handler):
-                    yield token
+                # args_schema가 있으면 전체 응답 수집 후 파싱하여 정합성 검증된 결과 반환
+                if args_schema:
+                    collected_output = []
+                    for token in execute_agent_streaming(async_executor, handler):
+                        collected_output.append(token)
+
+                    # 전체 출력 수집 완료 후 정합성 검증
+                    full_output = "".join(collected_output)
+                    try:
+                        parser = XgenJsonOutputParser()
+                        parsed_output = parser.parse(full_output)
+                        logger.info("[AGENT_STREAM_EXECUTE] JSON 파싱 성공")
+                        logger.info(f"[AGENT_STREAM_EXECUTE] 파싱된 출력: {parsed_output}")
+                        # 파싱 성공 시 원본 출력을 yield
+                        yield full_output
+                    except Exception as parse_error:
+                        logger.error(f"[AGENT_STREAM_EXECUTE] JSON 파싱 실패: {parse_error}")
+                        logger.error(f"[AGENT_STREAM_EXECUTE] 수집된 출력: {full_output}")
+                        # 파싱 실패 시 원본 출력 그대로 반환
+                        yield full_output
+                else:
+                    # args_schema가 없으면 일반 스트리밍
+                    for token in execute_agent_streaming(async_executor, handler):
+                        yield token
+
             except Exception as e:
                 logger.error(f"Agent streaming error: {str(e)}", exc_info=True)
                 yield f"\nStreaming Error: {str(e)}\n"
