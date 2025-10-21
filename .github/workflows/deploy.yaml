@@ -44,6 +44,9 @@ jobs:
           tags: |
             ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.TAG }}
             ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          provenance: false
+          sbom: false
+          outputs: type=registry
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
