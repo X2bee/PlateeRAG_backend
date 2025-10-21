@@ -12,7 +12,7 @@ env:
   # ---- Build args for the new Dockerfile ----
   # Choose only the groups you truly need in prod.
   # e.g. "rag,jp-core" if you use embeddings + JP tokenization, or "" for minimal.
-  UV_GROUPS: "rag,jp-core"
+  UV_GROUPS: ""
   # 0 = skip torch; 1 = install CPU-only torch wheels (smaller than CUDA)
   INSTALL_TORCH: "0"
   TORCH_VER: "2.7.1"

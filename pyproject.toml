@@ -133,3 +133,4 @@ gpu = [
 [tool.uv]
 # Install only the base dependencies by default
 default-groups = []
+
