@@ -36,10 +36,9 @@ ENV UV_BIN=/root/.local/bin/uv
 
 WORKDIR /app
 
-# Copy dependency metadata first (for caching)
+# Copy dependency files first (for caching)
+COPY requirements-minimal.txt ./
 COPY pyproject.toml ./
-# If you maintain a lockfile, also:
-# COPY uv.lock ./
 
 # Bring args into this stage
 ARG UV_GROUPS
@@ -47,14 +46,13 @@ ARG INSTALL_TORCH
 ARG TORCH_VER
 ARG TORCHAUDIO_VER
 
-# Create venv, install locked base deps, optional groups
+# Create venv and install dependencies
 RUN python -m venv ${VENV_PATH} \
- && ${UV_BIN} lock \
- && ${UV_BIN} sync --locked --python ${VENV_PATH}/bin/python \
+ && ${UV_BIN} pip install -r requirements-minimal.txt --python ${VENV_PATH}/bin/python \
  && if [ -n "${UV_GROUPS}" ]; then \
       for g in $(echo "${UV_GROUPS}" | tr ',' ' '); do \
         echo ">> Installing optional group: ${g}"; \
-        ${UV_BIN} sync --locked --group "${g}" --python ${VENV_PATH}/bin/python; \
+        ${UV_BIN} pip install --python ${VENV_PATH}/bin/python --extra-index-url https://pypi.org/simple/ ".[${g}]"; \
       done; \
     fi
 
