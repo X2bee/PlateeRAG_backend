@@ -13,32 +13,42 @@ from controller.helper.controllerHelper import extract_user_id_from_request, val
 router = APIRouter(prefix="/sync", tags=["data-manager-sync"])
 logger = logging.getLogger("data-manager-sync-controller")
 
+def get_app_db(request: Request):
+    """Request에서 AppDB 인스턴스 가져오기"""
+    if not hasattr(request.app.state, 'app_db'):
+        raise HTTPException(status_code=500, detail="AppDB가 초기화되지 않았습니다")
+    return request.app.state.app_db
+
 #========== Request Models ==========
 class AddDBSyncRequest(BaseModel):
     """DB 자동 동기화 추가 요청"""
-    manager_id: str = Field(..., description="Manager ID")
+    manager_id: str = Field(..., description="매니저 ID")
     db_config: Dict[str, Any] = Field(..., description="DB 연결 설정")
     sync_config: Dict[str, Any] = Field(..., description="동기화 설정")
-
+    
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "manager_id": "mgr_abc123",
                 "db_config": {
                     "db_type": "postgresql",
                     "host": "localhost",
                     "port": 5432,
-                    "database": "mydb",
-                    "username": "user",
-                    "password": "password"
+                    "database": "myapp",
+                    "username": "postgres",
+                    "password": "password123"
                 },
                 "sync_config": {
                     "enabled": True,
                     "schedule_type": "interval",
                     "interval_minutes": 30,
-                    "table_name": "users",
+                    "query": "SELECT * FROM users WHERE active = true",
                     "detect_changes": True,
-                    "notification_enabled": False
+                    "notification_enabled": False,
+                    # ✨ MLflow 설정 추가
+                    "mlflow_enabled": True,
+                    "mlflow_experiment_name": "user_data_sync",
+                    "mlflow_tracking_uri": "https://mlflow.example.com"
                 }
             }
         }
@@ -60,77 +70,54 @@ class GetSyncStatusRequest(BaseModel):
     """동기화 상태 조회 요청"""
     manager_id: str = Field(..., description="Manager ID")
 
+class UpdateMLflowConfigRequest(BaseModel):
+    """MLflow 설정 업데이트 요청"""
+    manager_id: str = Field(..., description="매니저 ID")
+    mlflow_enabled: bool = Field(..., description="MLflow 자동 업로드 활성화 여부")
+    mlflow_experiment_name: Optional[str] = Field(None, description="MLflow 실험 이름")
+    mlflow_tracking_uri: Optional[str] = Field(None, description="MLflow Tracking URI")
+
+
 #========== API Endpoints ==========
 @router.post("/add",
 summary="DB 자동 동기화 추가",
-description="외부 DB에서 주기적으로 데이터를 가져오는 자동 동기화 설정",
+description="새로운 DB 자동 동기화 설정을 추가합니다 (MLflow 자동 업로드 옵션 포함)",
 response_model=Dict[str, Any])
 async def add_db_sync(request: Request, sync_request: AddDBSyncRequest) -> Dict[str, Any]:
-    """DB 자동 동기화 추가"""
+    """DB 자동 동기화 추가 (MLflow 옵션 포함)"""
     try:
         user_id = extract_user_id_from_request(request)
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
         
-        # DB 설정 검증
-        try:
-            validate_db_config(sync_request.db_config)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        
-        # 동기화 설정 검증
-        sync_config = sync_request.sync_config
-        
-        if sync_config.get('schedule_type') not in ['interval', 'cron']:
-            raise HTTPException(
-                status_code=400,
-                detail="schedule_type은 'interval' 또는 'cron'이어야 합니다"
-            )
-        
-        if sync_config.get('schedule_type') == 'interval':
-            if not sync_config.get('interval_minutes'):
-                raise HTTPException(
-                    status_code=400,
-                    detail="interval_minutes가 필요합니다"
-                )
-            if sync_config.get('interval_minutes') < 1:
-                raise HTTPException(
-                    status_code=400,
-                    detail="interval_minutes는 1 이상이어야 합니다"
-                )
-        elif sync_config.get('schedule_type') == 'cron':
-            if not sync_config.get('cron_expression'):
-                raise HTTPException(
-                    status_code=400,
-                    detail="cron_expression이 필요합니다"
-                )
-        
-        if not sync_config.get('query') and not sync_config.get('table_name'):
-            raise HTTPException(
-                status_code=400,
-                detail="query 또는 table_name 중 하나는 필수입니다"
-            )
-        
-        # ✨ 스케줄러 가져오기 (변경)
         scheduler = get_db_sync_scheduler(request)
         
-        # 동기화 추가
-        result = scheduler.add_db_sync(
+        # ✨ sync_config에 MLflow 설정 포함
+        success = scheduler.add_db_sync(
             manager_id=sync_request.manager_id,
             user_id=user_id,
             db_config=sync_request.db_config,
-            sync_config=sync_config
+            sync_config=sync_request.sync_config  # MLflow 설정 포함됨
         )
         
-        logger.info(f"✅ DB 자동 동기화 추가: manager={sync_request.manager_id}, user={user_id}")
+        if not success:
+            raise HTTPException(status_code=400, detail="DB 자동 동기화 추가 실패")
         
-        return result
+        mlflow_status = "MLflow 자동 업로드 활성화" if sync_request.sync_config.get('mlflow_enabled') else ""
+        logger.info(f"✅ DB 동기화 추가: manager={sync_request.manager_id} {mlflow_status}")
+        
+        return {
+            'success': True,
+            'message': 'DB 자동 동기화가 추가되었습니다',
+            'manager_id': sync_request.manager_id,
+            'mlflow_enabled': sync_request.sync_config.get('mlflow_enabled', False)
+        }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ DB 동기화 추가 실패: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"DB 동기화 추가 실패: {str(e)}")
+        logger.error(f"동기화 추가 실패: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/remove",
 summary="DB 자동 동기화 제거",
@@ -176,7 +163,6 @@ async def pause_db_sync(request: Request, sync_request: ControlDBSyncRequest) ->
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
         
-        # ✨ 스케줄러 가져오기 (변경)
         scheduler = get_db_sync_scheduler(request)
         
         success = scheduler.pause_db_sync(sync_request.manager_id, user_id)
@@ -186,10 +172,14 @@ async def pause_db_sync(request: Request, sync_request: ControlDBSyncRequest) ->
         
         logger.info(f"⏸️  DB 동기화 일시 중지: manager={sync_request.manager_id}")
         
+        # ✨ 업데이트된 상태 반환
+        updated_status = scheduler.get_sync_status(sync_request.manager_id, user_id)
+        
         return {
             'success': True,
             'message': 'DB 자동 동기화가 일시 중지되었습니다',
-            'manager_id': sync_request.manager_id
+            'manager_id': sync_request.manager_id,
+            'status': updated_status  # ✨ 추가
         }
         
     except HTTPException:
@@ -197,6 +187,7 @@ async def pause_db_sync(request: Request, sync_request: ControlDBSyncRequest) ->
     except Exception as e:
         logger.error(f"동기화 일시 중지 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/resume",
 summary="DB 자동 동기화 재개",
@@ -209,7 +200,6 @@ async def resume_db_sync(request: Request, sync_request: ControlDBSyncRequest) -
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
         
-        # ✨ 스케줄러 가져오기 (변경)
         scheduler = get_db_sync_scheduler(request)
         
         success = scheduler.resume_db_sync(sync_request.manager_id, user_id)
@@ -219,10 +209,14 @@ async def resume_db_sync(request: Request, sync_request: ControlDBSyncRequest) -
         
         logger.info(f"▶️  DB 동기화 재개: manager={sync_request.manager_id}")
         
+        # ✨ 업데이트된 상태 반환
+        updated_status = scheduler.get_sync_status(sync_request.manager_id, user_id)
+        
         return {
             'success': True,
             'message': 'DB 자동 동기화가 재개되었습니다',
-            'manager_id': sync_request.manager_id
+            'manager_id': sync_request.manager_id,
+            'status': updated_status  # ✨ 추가
         }
         
     except HTTPException:
@@ -242,13 +236,26 @@ async def get_sync_status(request: Request, status_request: GetSyncStatusRequest
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
         
-        # ✨ 스케줄러 가져오기 (변경)
         scheduler = get_db_sync_scheduler(request)
         
         status = scheduler.get_sync_status(status_request.manager_id, user_id)
         
         if not status:
-            raise HTTPException(status_code=404, detail="동기화 설정을 찾을 수 없습니다")
+            # ✨ 404 대신 success: false로 반환 (프론트에서 처리 용이)
+            return {
+                'success': False,
+                'message': '동기화 설정을 찾을 수 없습니다',
+                'status': None
+            }
+        
+        # ✨ 다음 실행 시간 포맷팅 추가
+        if status.get('next_run_time'):
+            try:
+                # ISO 형식으로 변환
+                status['next_run_time'] = status['next_run_time']
+            except Exception as e:
+                logger.warning(f"다음 실행 시간 파싱 실패: {e}")
+                status['next_run_time'] = None
         
         return {
             'success': True,
@@ -260,6 +267,7 @@ async def get_sync_status(request: Request, status_request: GetSyncStatusRequest
     except Exception as e:
         logger.error(f"동기화 상태 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/list",
 summary="모든 DB 동기화 목록 조회",
@@ -300,14 +308,20 @@ async def trigger_manual_sync(request: Request, sync_request: ManualSyncRequest)
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
         
-        # ✨ 스케줄러 가져오기 (변경)
         scheduler = get_db_sync_scheduler(request)
         
         result = scheduler.trigger_manual_sync(sync_request.manager_id, user_id)
         
         logger.info(f"✅ 수동 동기화 실행: manager={sync_request.manager_id}")
         
-        return result
+        # ✨ 실행 결과 상세 정보 추가
+        return {
+            'success': True,
+            'message': '수동 동기화가 완료되었습니다',
+            'manager_id': sync_request.manager_id,
+            'sync_result': result,  # status, message, duration_seconds 등
+            'timestamp': datetime.now().isoformat()  # ✨ 추가
+        }
         
     except HTTPException:
         raise
@@ -343,3 +357,98 @@ async def scheduler_health_check(request: Request):
     except Exception as e:
         logger.error(f"Health check 실패: {e}")
         raise HTTPException(status_code=503, detail="스케줄러 상태 확인 실패")
+
+@router.post("/update-mlflow-config",
+summary="MLflow 설정 업데이트",
+description="DB 동기화의 MLflow 자동 업로드 설정을 업데이트합니다",
+response_model=Dict[str, Any])
+async def update_mlflow_config(request: Request, update_request: UpdateMLflowConfigRequest) -> Dict[str, Any]:
+    """MLflow 설정 업데이트"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+        
+        from service.database.models.db_sync_config import DBSyncConfig
+        
+        app_db = get_app_db(request)
+        
+        # DB에서 설정 조회
+        db_configs = app_db.find_by_condition(
+            DBSyncConfig,
+            {'manager_id': update_request.manager_id, 'user_id': user_id},
+            limit=1
+        )
+        
+        if not db_configs:
+            raise HTTPException(status_code=404, detail="동기화 설정을 찾을 수 없습니다")
+        
+        db_config = db_configs[0]
+        
+        # MLflow 활성화 시 실험 이름 필수 체크
+        if update_request.mlflow_enabled and not update_request.mlflow_experiment_name:
+            raise HTTPException(status_code=400, detail="MLflow 활성화 시 실험 이름은 필수입니다")
+        
+        # 설정 업데이트
+        db_config.mlflow_enabled = update_request.mlflow_enabled
+        db_config.mlflow_experiment_name = update_request.mlflow_experiment_name
+        db_config.mlflow_tracking_uri = update_request.mlflow_tracking_uri
+        db_config.updated_at = datetime.now().isoformat()
+        
+        app_db.update(db_config)
+        
+        action = "활성화" if update_request.mlflow_enabled else "비활성화"
+        logger.info(f"🔄 MLflow 자동 업로드 {action}: manager={update_request.manager_id}, experiment={update_request.mlflow_experiment_name}")
+        
+        return {
+            'success': True,
+            'message': f'MLflow 자동 업로드가 {action}되었습니다',
+            'manager_id': update_request.manager_id,
+            'mlflow_info': db_config.get_mlflow_info()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"MLflow 설정 업데이트 실패: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✨ MLflow 업로드 이력 조회 엔드포인트
+@router.post("/mlflow-upload-history",
+summary="MLflow 업로드 이력 조회",
+description="특정 매니저의 MLflow 업로드 이력을 조회합니다",
+response_model=Dict[str, Any])
+async def get_mlflow_upload_history(request: Request, status_request: GetSyncStatusRequest) -> Dict[str, Any]:
+    """MLflow 업로드 이력 조회"""
+    try:
+        user_id = extract_user_id_from_request(request)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
+        
+        from service.database.models.db_sync_config import DBSyncConfig
+        
+        app_db = get_app_db(request)
+        
+        db_configs = app_db.find_by_condition(
+            DBSyncConfig,
+            {'manager_id': status_request.manager_id, 'user_id': user_id},
+            limit=1
+        )
+        
+        if not db_configs:
+            raise HTTPException(status_code=404, detail="동기화 설정을 찾을 수 없습니다")
+        
+        db_config = db_configs[0]
+        
+        return {
+            'success': True,
+            'manager_id': status_request.manager_id,
+            'mlflow_info': db_config.get_mlflow_info()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"MLflow 이력 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
