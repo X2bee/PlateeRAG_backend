@@ -64,5 +64,8 @@ def api_collection(self, request: Request) -> Dict[str, Any]:
 13. dependency (옵션: 기본값 None)
 파라미터 의존성을 설정하면 해당 파라미터가 True일때 활성화됨
 
+    dependencyValue (옵션: 기본값 None)
+    dependency의 값이 특정 값일 때 작동하도록 함.
+
 14. multi (옵션: 기본값 False)
 파라미터가 해당 Port에 여러개 연결될 수 있는지에 대한 여부.

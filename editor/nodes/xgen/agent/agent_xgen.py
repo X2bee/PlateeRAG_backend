@@ -64,7 +64,10 @@ class AgentXgenNode(Node):
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
         {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
     ]
-    outputs = [{"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}]
+    outputs = [
+        {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True, "dependency": "streaming", "dependencyValue": True},
+        {"id": "result", "name": "Result", "type": "STR", "dependency": "streaming", "dependencyValue": False},
+    ]
     parameters = [
         {
             "id": "provider",
