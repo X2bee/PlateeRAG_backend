@@ -71,16 +71,7 @@ ARG INSTALL_OFFICE=false
 
 # Install only minimal runtime system packages (and optionally heavy office deps)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       ca-certificates \
-       libffi7 \
-       libssl3 \
-       # add other shared libs needed by wheels your app uses if you know them
-    && if [ "$INSTALL_OFFICE" = "true" ]; then \
-          apt-get install -y --no-install-recommends poppler-utils \
-            libreoffice-writer libreoffice-calc libreoffice libreoffice-l10n-ko \
-            fonts-nanum fonts-nanum-extra nodejs npm rustc cargo; \
-       fi \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
