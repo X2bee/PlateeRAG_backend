@@ -2,8 +2,6 @@
 FROM python:3.12.11-slim AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
-# Set to "true" if you need LibreOffice, fonts, etc (will increase final image size dramatically)
-ARG INSTALL_OFFICE=false
 
 # Install build and runtime system packages needed to build wheels (adjust as needed)
 RUN apt-get update \
@@ -39,7 +37,7 @@ WORKDIR /src
 
 # Copy only dependency manifests first to leverage Docker cache
 # Adjust filenames if your project uses pyproject.toml or pyproject.yaml naming differences
-COPY pyproject.toml pyproject.yaml* uv.lock* ./
+COPY pyproject.toml uv.lock* ./
 
 # Create a venv and install runtime deps into it
 ENV VENV_PATH=/opt/venv
@@ -67,9 +65,8 @@ ENV PATH="${VENV_PATH}/bin:${PATH}"
 FROM python:3.12.11-slim AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG INSTALL_OFFICE=false
 
-# Install only minimal runtime system packages (and optionally heavy office deps)
+# Install only minimal runtime system packages
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && apt-get clean \
