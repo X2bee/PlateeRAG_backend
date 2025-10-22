@@ -355,7 +355,7 @@ async def get_scraper_summary(request: Request):
     _, backend_log, service = await _get_service_context(request)
     backend_log.info("Fetching scraper summary metrics")
     try:
-        scrapers = service.list_scrapers(pagination=Pagination(limit=500, offset=0))
+        scrapers = service.list_scrapers(pagination=Pagination(limit=200, offset=0))
         items = scrapers.get("items", [])
 
         total_scrapers = len(items)

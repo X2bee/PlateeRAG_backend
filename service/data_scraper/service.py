@@ -196,6 +196,7 @@ class ScraperService:
 
         run_id = self.repo.create_run(run)
         if run_id is None:
+            self.logger.error("Failed to create run record for scraper %s", scraper_id)
             raise RuntimeError("Failed to create scraper run")
         run.id = run_id
 
