@@ -42,6 +42,16 @@ class APICallingTool(Node):
     ]
 
     @staticmethod
+    def _serialize_value(value):
+        """값을 적절한 형태로 직렬화합니다."""
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        elif value is None:
+            return ''
+        else:
+            return str(value)
+
+    @staticmethod
     def get_nested_value(data, path):
         """JSON 경로를 따라가서 중첩된 값을 추출합니다."""
         if not path:
@@ -116,7 +126,7 @@ class APICallingTool(Node):
 
             @tool(tool_name, description=description, args_schema=actual_args_schema)
             def api_tool(return_dict: bool = False, **kwargs) -> str:
-                logger.info(f"Creating API tool with name: {tool_name}, endpoint: {api_endpoint}, method: {method}, timeout: {timeout}")
+                logger.info(f"API tool '{tool_name}' called for {api_endpoint}")
 
                 if not kwargs:
                     kwargs = {}
@@ -159,9 +169,15 @@ class APICallingTool(Node):
                     elif method_upper in ["POST", "PUT", "PATCH"]:
                         send_as_form = False
                         if isinstance(request_data, dict):
-                            if 'body_type' in request_data and str(request_data.get('body_type')).upper() == 'FORM':
+                            # as_form을 먼저 확인 (기존 호환성)
+                            if 'as_form' in request_data and str(request_data.get('as_form')).lower() in ['true', 'ture', '1', 'yes']:
                                 send_as_form = True
+                            # body_type 확인
+                            elif 'body_type' in request_data and str(request_data.get('body_type')).upper() == 'FORM':
+                                send_as_form = True
+                            
                             request_data.pop('body_type', None)
+                            request_data.pop('as_form', None)
 
                         body = None
                         if isinstance(request_data, dict):
@@ -170,8 +186,9 @@ class APICallingTool(Node):
                                 if isinstance(body, str):
                                     try:
                                         body = json.loads(body)
-                                    except Exception:
-                                        pass
+                                    except (json.JSONDecodeError, ValueError) as e:
+                                        logger.warning(f"Failed to parse body as JSON: {e}")
+                                        # JSON 파싱 실패 시 문자열로 유지
                             else:
                                 body_keys = [k for k in list(request_data.keys()) if k.endswith('_body')]
                                 if body_keys:
@@ -183,8 +200,9 @@ class APICallingTool(Node):
                                             try:
                                                 parsed_v = json.loads(v)
                                                 v = parsed_v
-                                            except Exception:
-                                                pass
+                                            except (json.JSONDecodeError, ValueError) as e:
+                                                logger.warning(f"Failed to parse {k} value as JSON: {e}")
+                                                # JSON 파싱 실패 시 문자열로 유지
                                         body[key_name] = v
 
                         if send_as_form:
@@ -192,23 +210,19 @@ class APICallingTool(Node):
                             
                             form_data = {}
                             
+                            # body 데이터를 먼저 처리
                             if body is not None:
                                 if isinstance(body, dict):
-                                    for bk, bv in body.items():
-                                        if isinstance(bv, (dict, list)):
-                                            form_data[bk] = json.dumps(bv, ensure_ascii=False)
-                                        else:
-                                            form_data[bk] = '' if bv is None else str(bv)
+                                    form_data.update(body)
                                 else:
                                     form_data['body'] = str(body)
                             
+                            # 나머지 request_data를 form 필드로 추가 (빈 값 제외)
                             for rk, rv in request_data.items():
-                                if isinstance(rv, (dict, list)):
-                                    form_data[rk] = json.dumps(rv, ensure_ascii=False)
-                                else:
-                                    form_data[rk] = '' if rv is None else str(rv)
+                                if rv is not None and rv != '' and str(rv).strip() != '':
+                                    form_data[rk] = APICallingTool._serialize_value(rv)
                             
-                            logger.info(f"Making {method_upper} request to {endpoint} with form-encoded data: {form_data}")
+                            logger.info(f"Making {method_upper} request to {endpoint} with form data")
                             response = requests.request(
                                 method_upper,
                                 endpoint,
