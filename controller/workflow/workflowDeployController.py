@@ -5,18 +5,23 @@ import logging
 
 from typing import Dict, Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
-from editor.async_workflow_executor import AsyncWorkflowExecutor, execution_manager
+from editor.async_workflow_executor import execution_manager
+from service.database.execution_meta_service import update_execution_meta_count
 
-from service.database.models.executor import ExecutionIO
-from service.database.execution_meta_service import get_or_create_execution_meta, update_execution_meta_count
-
-from controller.workflow.helper import _workflow_parameter_helper, _default_workflow_parameter_helper
 from controller.helper.singletonHelper import get_db_manager
 from controller.workflow.models.requests import WorkflowRequest
 from service.database.models.workflow import WorkflowMeta
+from controller.workflow.execution_runtime import prepare_workflow_execution, persist_stream_results
+from controller.workflow.websocket_support import (
+    authenticate_websocket,
+    get_db_manager_from_websocket,
+    run_websocket_workflow,
+)
+from service.database.logger_helper import create_logger
 
 logger = logging.getLogger("workflow-controller")
 router = APIRouter(prefix="/deploy", tags=["workflow"])
@@ -61,93 +66,30 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
     주어진 노드와 엣지 정보로 워크플로우를 실행합니다.
     """
     try:
-        user_id = request_body.user_id
+        app_db = get_db_manager(request)
+        login_user_id = str(request_body.user_id) if request_body.user_id is not None else ""
 
-        ## 일반채팅인 경우 미리 정의된 워크플로우를 이용하여 일반 채팅에 사용.
-        if request_body.workflow_name == 'default_mode':
-            default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
-            file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
-            with open(file_path, 'r', encoding='utf-8') as f:
-                workflow_data = json.load(f)
-            workflow_data = await _default_workflow_parameter_helper(request, request_body, workflow_data)
-
-        ## 워크플로우 실행인 경우, 해당하는 워크플로우 파일을 찾아서 사용.
-        else:
-            # downloads_path = os.path.join(os.getcwd(), "downloads")
-            # download_path_id = os.path.join(downloads_path, str(user_id))
-
-            # if not request_body.workflow_name.endswith('.json'):
-            #     filename = f"{request_body.workflow_name}.json"
-            # else:
-            #     filename = request_body.workflow_name
-            # file_path = os.path.join(download_path_id, filename)
-            # with open(file_path, 'r', encoding='utf-8') as f:
-            #     workflow_data = json.load(f)
-            #### DB방식으로 변경중
-            app_db = get_db_manager(request)
-
-            workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": user_id, "workflow_name": request_body.workflow_name}, limit=1)
-            workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
-            if isinstance(workflow_data, str):
-                workflow_data = json.loads(workflow_data)
-
-            workflow_data = await _workflow_parameter_helper(request_body, workflow_data)
-
-        ## ========== 워크플로우 데이터 검증 ==========
-        ## TODO 워크플로우 아이디 정합성 관련 로직 생각해볼 것
-        # if workflow_data.get('workflow_id') != request_body.workflow_id:
-        #     raise ValueError(f"워크플로우 ID가 일치하지 않습니다: {workflow_data.get('workflow_id')} != {request_body.workflow_id}")
-
-        if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
-            raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
+        context = await prepare_workflow_execution(
+            app=request.app,
+            app_db=app_db,
+            login_user_id=login_user_id,
+            request_body=request_body,
+            request_like=request,
+            backend_log=None,
+        )
 
         print("--- 워크플로우 실행 시작 ---")
         print(f"실행 워크플로우: {request_body.workflow_name} ({request_body.workflow_id})")
         print(f"입력 데이터: {request_body.input_data}")
 
-        ## 모든 워크플로우는 startnode가 있어야 하며, 입력 데이터는 startnode의 첫 번째 파라미터로 설정되어야 함.
-        ## 사용자의 인풋은 여기에 입력되고, 워크플로우가 실행됨.
-        if request_body.input_data is not None:
-            for node in workflow_data.get('nodes', []):
-                if node.get('data', {}).get('functionId') == 'startnode':
-                    parameters = node.get('data', {}).get('parameters', [])
-                    if parameters and isinstance(parameters, list):
-                        parameters[0]['value'] = request_body.input_data
-                        break
-
-        ## app에 저장된 db_manager를 가져옴. 이걸 통해 DB에 접근할 수 있음.
-        ## DB에 접근하여 execution 데이터를 활용하여, 기록된 대화를 가져올지 말지 결정.
-        app_db = get_db_manager(request)
-
         ## 일반적인 실행(execution)이 아닌 경우, 즉 대화형 실행(conversation execution)인 경우
         ## interaction_id가 "default"가 아닌 경우, 대화형 실행을 위한 메타데이터를 가져오거나 생성
         ## interaction_id가 "default"인 경우, execution_meta는 None으로 설정
-        execution_meta = None
-        if request_body.interaction_id != "default" and app_db:
-            execution_meta = await get_or_create_execution_meta(
-                app_db,
-                user_id,
-                request_body.interaction_id,
-                request_body.workflow_id,
-                request_body.workflow_name,
-                request_body.input_data
-            )
-
-        ## 워크플로우를 실질적으로 비동기 실행 (가장중요)
-        ## 비동기 워크플로우 실행 관련 로직은 AsyncWorkflowExecutor 클래스에 정의되어 있음.
-        ## AsyncWorkflowExecutor 클래스는 워크플로우의 노드와 엣지를 기반으로 워크플로우를 백그라운드에서 실행하는 역할을 함.
-        ## 워크플로우 실행 시, interaction_id를 전달하여 대화형 실행을 지원함. (이렇게 되는 경우, interaction_id는 대화형 실행의 ID로 사용되어 DB에 저장됨)
-        ## 워크플로우 실행 결과는 final_outputs에 저장됨.
-        executor = execution_manager.create_executor(
-            workflow_data=workflow_data,
-            db_manager=app_db,
-            interaction_id=request_body.interaction_id,
-            user_id=user_id
-        )
+        execution_meta = context.execution_meta
 
         # 비동기 실행 및 결과 수집
         final_outputs = []
-        async for output in executor.execute_workflow_async():
+        async for output in context.executor.execute_workflow_async():
             final_outputs.append(output)
 
         ## 대화형 실행인 경우 execution_meta의 값을 가지고, 이 경우에는 대화 count를 증가.
@@ -207,122 +149,35 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
         finally:
             # ✨ 2. 스트림이 모두 끝난 후, 수집된 내용으로 DB 로그 업데이트
             final_text = "".join(full_response_chunks)
-            if not final_text:
-                logger.info("스트림 결과가 비어있어 로그를 업데이트하지 않습니다.")
-                return
-
-            try:
-                logger.info(f"스트림 완료. Interaction ID [{workflow_req.interaction_id}]의 로그 업데이트 시작.")
-
-                # 가장 최근에 생성된 로그 레코드를 찾습니다.
-                log_to_update_list = db_manager.find_by_condition(
-                    ExecutionIO,
-                    {
-                        "user_id": user_id,
-                        "interaction_id": workflow_req.interaction_id,
-                        # "workflow_id": workflow_req.workflow_id, # 워크플로우 ID 로직 삭제
-                    },
-                    limit=1,
-                    orderby="created_at",
-                    orderby_asc=False # 최신순 정렬
-                )
-
-                if not log_to_update_list:
-                    logger.warning(f"업데이트할 ExecutionIO 로그를 찾지 못했습니다. Interaction ID: {workflow_req.interaction_id}")
-                    return
-
-                log_to_update = log_to_update_list[0]
-
-                # output_data 필드의 JSON을 실제 결과로 수정
-                output_data_dict = json.loads(log_to_update.output_data)
-                output_data_dict['result'] = final_text # placeholder를 최종 텍스트로 교체
-
-                # inputs 필드에 있던 generator placeholder도 업데이트 (선택적)
-                if 'inputs' in output_data_dict and isinstance(output_data_dict['inputs'], dict):
-                    for key, value in output_data_dict['inputs'].items():
-                        if value == "<generator_output>":
-                            output_data_dict['inputs'][key] = final_text
-
-                # 수정된 JSON으로 레코드를 업데이트
-                log_to_update.output_data = json.dumps(output_data_dict, ensure_ascii=False)
-                db_manager.update(log_to_update)
-
-                logger.info(f"Interaction ID [{workflow_req.interaction_id}]의 로그가 최종 스트림 결과로 업데이트되었습니다.")
-
-            except Exception as db_error:
-                logger.error(f"ExecutionIO 로그 업데이트 중 DB 오류 발생: {db_error}", exc_info=True)
-            finally:
-                # 완료된 실행들 정리
-                execution_manager.cleanup_completed_executions()
+            await persist_stream_results(db_manager, user_id, workflow_req, final_text, backend_log=None)
 
 
     try:
-        user_id = request_body.user_id
-
-        user_id = int(user_id)
-
-        if request_body.workflow_name == 'default_mode':
-            default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
-            file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
-            with open(file_path, 'r', encoding='utf-8') as f:
-                workflow_data = json.load(f)
-            workflow_data = await _default_workflow_parameter_helper(request, request_body, workflow_data)
-        else:
-            # downloads_path = os.path.join(os.getcwd(), "downloads")
-            # download_path_id = os.path.join(downloads_path, str(user_id))
-            # filename = f"{request_body.workflow_name}.json" if not request_body.workflow_name.endswith('.json') else request_body.workflow_name
-            # file_path = os.path.join(download_path_id, filename)
-            # with open(file_path, 'r', encoding='utf-8') as f:
-            #     workflow_data = json.load(f)
-            #### DB방식으로 변경중
-            app_db = get_db_manager(request)
-
-            workflow_meta = app_db.find_by_condition(WorkflowMeta, {"user_id": user_id, "workflow_name": request_body.workflow_name}, limit=1)
-            workflow_data = workflow_meta[0].workflow_data if workflow_meta else None
-            if isinstance(workflow_data, str):
-                workflow_data = json.loads(workflow_data)
-
-            workflow_data = await _workflow_parameter_helper(request_body, workflow_data)
-
-        ## TODO 워크플로우 아이디 정합성 관련 로직 생각해볼 것
-        # if workflow_data.get('workflow_id') != request_body.workflow_id:
-        #     raise ValueError(f"워크플로우 ID가 일치하지 않습니다.")
-        if not workflow_data or 'nodes' not in workflow_data or 'edges' not in workflow_data:
-            raise ValueError(f"워크플로우 데이터가 유효하지 않습니다: {file_path}")
-
-        if request_body.input_data is not None:
-            for node in workflow_data.get('nodes', []):
-                if node.get('data', {}).get('functionId') == 'startnode':
-                    parameters = node.get('data', {}).get('parameters', [])
-                    if parameters:
-                        parameters[0]['value'] = request_body.input_data
-                        break
-
         app_db = get_db_manager(request)
-        execution_meta = None
-        if request_body.interaction_id != "default" and app_db:
-            execution_meta = await get_or_create_execution_meta(
-                app_db, user_id, request_body.interaction_id,
-                request_body.workflow_id, request_body.workflow_name, request_body.input_data
-            )
+        login_user_id = str(request_body.user_id) if request_body.user_id is not None else ""
+
+        backend_log = None  # deploy 컨트롤러에는 backend logger가 구성되어 있지 않음.
+
+        context = await prepare_workflow_execution(
+            app=request.app,
+            app_db=app_db,
+            login_user_id=login_user_id,
+            request_body=request_body,
+            request_like=request,
+            backend_log=backend_log,
+        )
+
+        execution_meta = context.execution_meta
 
         if execution_meta:
             await update_execution_meta_count(app_db, execution_meta)
 
-        # 비동기 실행기 생성
-        executor = execution_manager.create_executor(
-            workflow_data=workflow_data,
-            db_manager=app_db,
-            interaction_id=request_body.interaction_id,
-            user_id=user_id
-        )
-
         # 비동기 제너레이터 시작 (스트리밍용)
-        result_generator = executor.execute_workflow_async_streaming()
+        result_generator = context.executor.execute_workflow_async_streaming()
 
         # StreamingResponse를 사용하여 SSE 스트림 반환
         return StreamingResponse(
-            stream_generator(result_generator, app_db, user_id, request_body),
+            stream_generator(result_generator, app_db, login_user_id, request_body),
             media_type="text/event-stream"
         )
 
@@ -335,3 +190,107 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
     finally:
         # 완료된 실행들 정리
         execution_manager.cleanup_completed_executions()
+
+@router.websocket("/ws")
+async def execute_workflow_via_websocket(websocket: WebSocket):
+    try:
+        user_session = authenticate_websocket(websocket)
+    except ValueError as auth_error:
+        await websocket.close(code=1008, reason=str(auth_error))
+        return
+
+    login_user_id = str(user_session["user_id"])
+
+    try:
+        app_db = get_db_manager_from_websocket(websocket)
+    except RuntimeError as db_error:
+        await websocket.close(code=1011, reason=str(db_error))
+        return
+
+    backend_log = create_logger(app_db, login_user_id, request=None)
+
+    await websocket.accept()
+    await websocket.send_json(
+        {
+            "type": "ready",
+            "content": {
+                "user_id": login_user_id,
+                "message": "WebSocket connection established",
+            },
+        }
+    )
+
+    while True:
+        try:
+            raw_message = await websocket.receive_json()
+        except WebSocketDisconnect:
+            logger.info("WebSocket disconnected by client (deploy controller)")
+            break
+        except Exception as exc:
+            logger.error("Failed to decode WebSocket message: %s", exc, exc_info=True)
+            try:
+                await websocket.send_json(
+                    {"type": "error", "detail": "Invalid message format"}
+                )
+            except Exception:
+                pass
+            continue
+
+        if not isinstance(raw_message, dict):
+            await websocket.send_json(
+                {"type": "error", "detail": "Message must be a JSON object"}
+            )
+            continue
+
+        message_type = raw_message.get("type", "start")
+
+        if message_type in ("ping", "pong"):
+            await websocket.send_json({"type": "pong"})
+            continue
+
+        if message_type == "close":
+            await websocket.close(code=1000)
+            break
+
+        if message_type not in ("start", "run"):
+            await websocket.send_json(
+                {"type": "error", "detail": f"Unsupported message type: {message_type}"}
+            )
+            continue
+
+        payload = raw_message.get("payload") or {
+            key: value
+            for key, value in raw_message.items()
+            if key not in ("type", "payload")
+        }
+
+        if not isinstance(payload, dict):
+            await websocket.send_json(
+                {"type": "error", "detail": "Payload must be a JSON object"}
+            )
+            continue
+
+        try:
+            request_body = WorkflowRequest(**payload)
+        except ValidationError as exc:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "detail": "Invalid workflow request",
+                    "errors": exc.errors(),
+                }
+            )
+            continue
+
+        try:
+            await run_websocket_workflow(
+                websocket,
+                app_db=app_db,
+                login_user_id=login_user_id,
+                request_body=request_body,
+                backend_log=backend_log,
+            )
+        except WebSocketDisconnect:
+            break
+        except Exception:
+            continue
