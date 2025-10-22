@@ -1,110 +1,110 @@
-# ================== Build-time args ==================
-ARG BASE_IMAGE=python:3.12-slim
+# --- Builder stage: install build tools & Python deps into a venv ---
+FROM python:3.12.11-slim AS builder
 
-# Optional groups from [project.optional-dependencies] (leave empty if none)
-ARG UV_GROUPS=""
-
-# Torch CPU wheels (0 = skip, 1 = install CPU-only)
-ARG INSTALL_TORCH=0
-ARG TORCH_VER=2.7.1
-ARG TORCHAUDIO_VER=2.7.1
-
-# ================== Base ==================
-FROM ${BASE_IMAGE} AS base
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
-    UV_SYSTEM_PYTHON=1
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git \
- && rm -rf /var/lib/apt/lists/*
+# Set to "true" if you need LibreOffice, fonts, etc (will increase final image size dramatically)
+ARG INSTALL_OFFICE=false
 
+# Install build and runtime system packages needed to build wheels (adjust as needed)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential \
+       curl \
+       git \
+       ca-certificates \
+       gcc \
+       libffi-dev \
+       libssl-dev \
+       libbz2-dev \
+       liblzma-dev \
+       libreadline-dev \
+       zlib1g-dev \
+       pkg-config \
+       # nodejs may be needed for some build steps (optional)
+       curl \
+    && if [ "$INSTALL_OFFICE" = "true" ]; then \
+          apt-get install -y --no-install-recommends poppler-utils \
+            libreoffice-writer libreoffice-calc libreoffice libreoffice-l10n-ko \
+            fonts-nanum fonts-nanum-extra nodejs npm rustc cargo; \
+       fi \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user for build/install steps (files will be owned by this user)
+ARG APP_USER=app
+ARG APP_UID=1000
+RUN useradd -m -u ${APP_UID} ${APP_USER}
+
+WORKDIR /src
+
+# Copy only dependency manifests first to leverage Docker cache
+# Adjust filenames if your project uses pyproject.toml or pyproject.yaml naming differences
+COPY pyproject.toml pyproject.yaml* uv.lock* ./
+
+# Create a venv and install runtime deps into it
 ENV VENV_PATH=/opt/venv
+RUN python -m venv ${VENV_PATH} \
+    && ${VENV_PATH}/bin/pip install --upgrade pip setuptools wheel
+
+# Install uv (the CLI you use) and then sync dependencies via uv
+# (keeps dependencies inside venv)
+RUN ${VENV_PATH}/bin/pip install uv \
+    && ${VENV_PATH}/bin/uv sync
+
+# Copy project files (source)
+# Copy everything needed for the app. Use .dockerignore to avoid copying .git, tests, etc.
+COPY --chown=${APP_USER}:${APP_USER} . /src
+
+# If your app needs any build-step (npm build, compiling assets), do it here as the app user:
+USER ${APP_USER}
+# Example: if you need node/npm to build frontend assets, run them here:
+# RUN if [ -f package.json ]; then npm ci && npm run build; fi
+
+# Make sure venv executables are available
 ENV PATH="${VENV_PATH}/bin:${PATH}"
 
-# ================== Builder (has compilers) ==================
-FROM base AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential rustc cargo libpq-dev \
- && rm -rf /var/lib/apt/lists/*
+# --- Final stage: minimal runtime image ---
+FROM python:3.12.11-slim AS runtime
 
-# uv installer
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV UV_BIN=/root/.local/bin/uv
-
-WORKDIR /app
-
-# Copy dependency files first (for caching)
-COPY requirements-minimal.txt ./
-COPY pyproject.toml ./
-
-# Bring args into this stage
-ARG UV_GROUPS
-ARG INSTALL_TORCH
-ARG TORCH_VER
-ARG TORCHAUDIO_VER
-
-# Create venv and install dependencies
-RUN python -m venv ${VENV_PATH} \
- && ${UV_BIN} pip install -r requirements-minimal.txt --python ${VENV_PATH}/bin/python \
- && if [ -n "${UV_GROUPS}" ]; then \
-      for g in $(echo "${UV_GROUPS}" | tr ',' ' '); do \
-        echo ">> Installing optional group: ${g}"; \
-        ${UV_BIN} pip install --python ${VENV_PATH}/bin/python --extra-index-url https://pypi.org/simple/ ".[${g}]"; \
-      done; \
-    fi
-
-# Optional: Torch CPU (only if you actually need Torch at runtime)
-RUN if [ "${INSTALL_TORCH}" = "1" ]; then \
-      ${VENV_PATH}/bin/pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
-        torch==${TORCH_VER} torchaudio==${TORCHAUDIO_VER}; \
-    else \
-      echo ">> Skipping Torch (INSTALL_TORCH=${INSTALL_TORCH})"; \
-    fi
-
-# Safety net: ensure uvicorn & fastapi are present even if pyproject changes
-RUN ${VENV_PATH}/bin/pip install --no-cache-dir "uvicorn>=0.38.0" "fastapi==0.116.1"
-
-# Sanity checks: fail the build if imports don’t work
-RUN ${VENV_PATH}/bin/python - <<'PY'
-import sys
-print("VENVPY:", sys.executable)
-import uvicorn, fastapi
-print("OK uvicorn:", uvicorn.__version__, " fastapi:", fastapi.__version__)
-PY
-
-# Now copy the rest of the app
-COPY . .
-
-# ================== Runtime (slim) ==================
-FROM ${BASE_IMAGE} AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg espeak-ng libpq5 \
- && rm -rf /var/lib/apt/lists/*
+ARG INSTALL_OFFICE=false
 
-# Non-root user
-RUN addgroup --system --gid 1001 app && \
-    adduser  --system --uid 1001 --ingroup app --home /app app
+# Install only minimal runtime system packages (and optionally heavy office deps)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       libffi7 \
+       libssl3 \
+       # add other shared libs needed by wheels your app uses if you know them
+    && if [ "$INSTALL_OFFICE" = "true" ]; then \
+          apt-get install -y --no-install-recommends poppler-utils \
+            libreoffice-writer libreoffice-calc libreoffice libreoffice-l10n-ko \
+            fonts-nanum fonts-nanum-extra nodejs npm rustc cargo; \
+       fi \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user (keep uid consistent)
+ARG APP_USER=app
+ARG APP_UID=1000
+RUN useradd -m -u ${APP_UID} ${APP_USER}
 
 WORKDIR /app
 
-ENV VENV_PATH=/opt/venv
-ENV PATH="${VENV_PATH}/bin:${PATH}" \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+# Copy venv from builder
+COPY --from=builder /opt/venv /opt/venv
+# Copy app source (only what's needed)
+COPY --from=builder --chown=${APP_USER}:${APP_USER} /src /app
 
-# Copy venv and app from builder
-COPY --from=builder ${VENV_PATH} ${VENV_PATH}
-COPY --from=builder /app /app
+ENV PATH="/opt/venv/bin:${PATH}"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
+# Expose the port your app listens to (adjust if your app uses another port)
 EXPOSE 8000
-USER app
 
-# If your app object is in main.py -> app
-CMD ["python","-m","uvicorn","main:app","--host","0.0.0.0","--port","8000"]
+USER ${APP_USER}
+
+# Default command (same as your entrypoint: uses 'uv')
+# If you want explicit host/port, you can change the command.
+CMD ["uv", "run", "python", "main.py", "--host", "0.0.0.0", "--port", "8000"]

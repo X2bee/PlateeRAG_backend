@@ -5,18 +5,8 @@ on:
     branches: [feature/k3s-1]
 
 env:
-  # ---- Image & Infra ----
-  IMAGE_NAME: xgen-backend/api
-  BASE_PATH: apps/backend/base
-
-  # ---- Build args for the new Dockerfile ----
-  # Choose only the groups you truly need in prod.
-  # e.g. "rag,jp-core" if you use embeddings + JP tokenization, or "" for minimal.
-  UV_GROUPS: ""
-  # 0 = skip torch; 1 = install CPU-only torch wheels (smaller than CUDA)
-  INSTALL_TORCH: "0"
-  TORCH_VER: "2.7.1"
-  TORCHAUDIO_VER: "2.7.1"
+  IMAGE_NAME: xgen-backend/api # image path in your Nexus registry
+  BASE_PATH: apps/backend/base # path in k3s-pipeline where kustomization.yaml lives
 
 jobs:
   build-push-update:
@@ -27,9 +17,11 @@ jobs:
       packages: write
 
     steps:
+      # 1) App source
       - name: Checkout backend source
         uses: actions/checkout@v4
 
+      # 2) Login to Nexus registry
       - name: Docker login (Nexus)
         uses: docker/login-action@v3
         with:
@@ -37,38 +29,41 @@ jobs:
           username: ${{ secrets.NEXUS_USERNAME }}
           password: ${{ secrets.NEXUS_PASSWORD }}
 
+      # 3) Tag (short SHA)
       - name: Set image tag
         id: vars
         run: |
           SHORT_SHA=${GITHUB_SHA::7}
           echo "TAG=sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
 
+      # 4) Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build & push with the simple Dockerfile
+      # 5) Build & push image to Nexus
       - name: Build & Push image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile.simple
+          file: ./Dockerfile
           push: true
           platforms: linux/amd64
           tags: |
             ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.TAG }}
             ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          # Disable extra attestations that older Nexus/proxies sometimes mishandle
+          # keep these off for maximum compatibility with Nexus
           provenance: false
           sbom: false
           outputs: type=registry
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # 6) Infra repo (kustomize)
       - name: Checkout infra repo
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.PIPELINE_REPO }} # e.g. X2bee/k3s-pipeline
-          token: ${{ secrets.PIPELINE_REPO_PAT }} # PAT with repo scope
+          token: ${{ secrets.PIPELINE_REPO_PAT }} # PAT with repo or contents:write
           path: infra
 
       - name: Install kustomize
@@ -77,8 +72,9 @@ jobs:
       - name: Update image tag in kustomize
         working-directory: infra/${{ env.BASE_PATH }}
         run: |
-          kustomize edit set image ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}=${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.TAG }}
-          echo "Updated kustomization.yaml:"
+          kustomize edit set image \
+            ${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}=${{ secrets.NEXUS_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.TAG }}
+          echo "== kustomization.yaml =="
           cat kustomization.yaml
 
       - name: Commit & push to infra repo
