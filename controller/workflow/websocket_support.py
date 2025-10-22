@@ -12,23 +12,29 @@ from service.database.execution_meta_service import update_execution_meta_count
 
 
 def authenticate_websocket(websocket: WebSocket) -> Dict[str, Any]:
-    authorization = websocket.headers.get("authorization")
-    if not authorization:
-        raise ValueError("Authorization header is missing")
-    if not authorization.startswith("Bearer "):
-        raise ValueError("Invalid authorization header format")
+    """Validate the websocket connection using headers or query parameters."""
+    token = None
 
-    token = authorization.replace("Bearer ", "").strip()
+    authorization = websocket.headers.get("authorization")
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "").strip()
+
     if not token:
-        raise ValueError("Token is missing in authorization header")
+        token = websocket.query_params.get("token")
+
+    if not token:
+        raise ValueError("Authorization token is missing")
 
     user_session = get_user_by_token(websocket.app.state, token)
     if not user_session:
         raise ValueError("Invalid or expired token")
 
     user_id_header = websocket.headers.get("x-user-id")
-    if user_id_header and str(user_session["user_id"]) != str(user_id_header):
-        raise ValueError("User ID in header does not match token")
+    user_id_query = websocket.query_params.get("user_id")
+    user_id_candidate = user_id_header or user_id_query
+
+    if user_id_candidate and str(user_session["user_id"]) != str(user_id_candidate):
+        raise ValueError("User ID does not match token")
 
     return user_session
 
