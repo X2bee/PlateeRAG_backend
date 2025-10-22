@@ -13,7 +13,9 @@ from controller.node.nodeApiController import register_node_api_routes
 from controller.node.router import node_router
 from controller.admin.router import admin_router
 from controller.workflow.router import workflow_router
-from controller.workflow.endpoints.auto_generation import router as auto_generation_router
+from controller.workflow.endpoints.auto_generation import (
+    router as auto_generation_router,
+)
 from controller.rag.router import rag_router
 from controller.audio.router import audio_router
 from controller.data_manager.router import data_manager_router
@@ -45,11 +47,14 @@ from service.guarder.guarder_factory import GuarderFactory
 from service.vast.proxy_client import VastProxyClient
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
-from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
+from service.retrieval.document_info_generator.document_info_generator import (
+    DocumentInfoGenerator,
+)
 from service.data_manager.data_manager_register import DataManagerRegistry
 from service.mlflow.mlflow_artifact_service import MLflowArtifactService
 from service.sync.workflow_deploy_sync import sync_workflow_deploy_meta
 from controller.helper.utils.workflow_helpers import workflow_data_synchronizer
+
 
 def print_xgen_logo():
     logo = """
@@ -64,6 +69,7 @@ def print_xgen_logo():
     """
     print(logo)
 
+
 def print_step_banner(step_num, title, description=""):
     """각 단계별 배너 출력"""
     banner = f"""
@@ -74,15 +80,17 @@ def print_step_banner(step_num, title, description=""):
     """
     print(banner)
 
+
 def generate_prompt_uid(act_text: str) -> str:
     """act 텍스트로부터 prompt_uid 생성"""
     # 공백을 _로 변경하고 소문자로 변환
-    base_uid = act_text.replace(' ', '_').lower()
+    base_uid = act_text.replace(" ", "_").lower()
     # 특수문자 제거 (영문자, 숫자, _만 유지)
-    base_uid = ''.join(c for c in base_uid if c.isalnum() or c == '_')
+    base_uid = "".join(c for c in base_uid if c.isalnum() or c == "_")
     # UUID 8자리 추가
     unique_suffix = str(uuid.uuid4())[:8]
     return f"{base_uid}_{unique_suffix}"
+
 
 def load_prompts_from_csv(app_db, csv_path: str):
     """
@@ -96,10 +104,19 @@ def load_prompts_from_csv(app_db, csv_path: str):
             return {"success": False, "error": "CSV file not found"}
 
         # 이미 템플릿 프롬프트가 존재하는지 확인
-        existing_templates = app_db.find_by_condition(Prompts, {"is_template": True}, limit=1)
+        existing_templates = app_db.find_by_condition(
+            Prompts, {"is_template": True}, limit=1
+        )
         if existing_templates and len(existing_templates) > 0:
-            logger.info(f"⚠️  Template prompts already exist in database ({len(existing_templates)} records). Skipping CSV import.")
-            return {"success": True, "inserted_count": 0, "skipped": True, "message": "Templates already exist"}
+            logger.info(
+                f"⚠️  Template prompts already exist in database ({len(existing_templates)} records). Skipping CSV import."
+            )
+            return {
+                "success": True,
+                "inserted_count": 0,
+                "skipped": True,
+                "message": "Templates already exist",
+            }
 
         # PyArrow로 CSV 파일 읽기
         table = pv.read_csv(csv_path)
@@ -109,7 +126,14 @@ def load_prompts_from_csv(app_db, csv_path: str):
         data = table.to_pydict()
 
         # 표준 형식 컬럼 확인 (다운로드 형식)
-        required_columns = ['Prompt UID', 'Title', 'Content', 'Language', 'Public', 'Template']
+        required_columns = [
+            "Prompt UID",
+            "Title",
+            "Content",
+            "Language",
+            "Public",
+            "Template",
+        ]
         missing_columns = [col for col in required_columns if col not in data]
         if missing_columns:
             error_msg = f"Missing required columns: {missing_columns}. Expected standard format from download."
@@ -120,12 +144,12 @@ def load_prompts_from_csv(app_db, csv_path: str):
         skipped_count = 0
 
         # 각 행 처리
-        for i in range(len(data['Prompt UID'])):
+        for i in range(len(data["Prompt UID"])):
             try:
-                prompt_uid = data['Prompt UID'][i]
-                title = data['Title'][i]
-                content = data['Content'][i]
-                language = data['Language'][i]
+                prompt_uid = data["Prompt UID"][i]
+                title = data["Title"][i]
+                content = data["Content"][i]
+                language = data["Language"][i]
                 public_available = True
                 is_template = True
 
@@ -144,24 +168,26 @@ def load_prompts_from_csv(app_db, csv_path: str):
                     public_available=public_available,
                     is_template=is_template,
                     language=str(language).strip(),
-                    metadata=None
+                    metadata=None,
                 )
 
                 # 중복 체크 (prompt_uid 기준)
                 existing = app_db.find_by_condition(
-                    Prompts,
-                        {"prompt_uid": new_prompt.prompt_uid},
-                    limit=1
+                    Prompts, {"prompt_uid": new_prompt.prompt_uid}, limit=1
                 )
 
                 if not existing or len(existing) == 0:
                     result = app_db.insert(new_prompt)
                     if result and result.get("result") == "success":
                         inserted_count += 1
-                        logger.debug(f"✅ Inserted prompt: {new_prompt.prompt_uid} ({new_prompt.language})")
+                        logger.debug(
+                            f"✅ Inserted prompt: {new_prompt.prompt_uid} ({new_prompt.language})"
+                        )
                     else:
                         skipped_count += 1
-                        logger.warning(f"⚠️  Failed to insert prompt {i+1}: {new_prompt.prompt_uid}")
+                        logger.warning(
+                            f"⚠️  Failed to insert prompt {i+1}: {new_prompt.prompt_uid}"
+                        )
                 else:
                     skipped_count += 1
                     logger.debug(f"🔄 Skipped existing prompt: {new_prompt.prompt_uid}")
@@ -171,14 +197,21 @@ def load_prompts_from_csv(app_db, csv_path: str):
                 skipped_count += 1
                 continue
 
-        logger.info(f"✅ Successfully processed {inserted_count + skipped_count} prompt records")
+        logger.info(
+            f"✅ Successfully processed {inserted_count + skipped_count} prompt records"
+        )
         logger.info(f"📝 Inserted: {inserted_count}, Skipped: {skipped_count}")
-        return {"success": True, "inserted_count": inserted_count, "skipped_count": skipped_count}
+        return {
+            "success": True,
+            "inserted_count": inserted_count,
+            "skipped_count": skipped_count,
+        }
 
     except Exception as e:
         error_msg = f"Error loading prompts from CSV: {e}"
         logger.error(f"❌ {error_msg}")
         return {"success": False, "error": error_msg}
+
 
 def load_workflow_templates(app_db, templates_dir: str):
     """
@@ -187,14 +220,25 @@ def load_workflow_templates(app_db, templates_dir: str):
     try:
         # 디렉토리 존재 확인
         if not Path(templates_dir).exists():
-            logger.warning(f"⚠️  Workflow templates directory not found: {templates_dir}")
+            logger.warning(
+                f"⚠️  Workflow templates directory not found: {templates_dir}"
+            )
             return {"success": False, "error": "Templates directory not found"}
 
         # 이미 템플릿이 존재하는지 확인
-        existing_templates = app_db.find_by_condition(WorkflowStoreMeta, {"is_template": True}, limit=1)
+        existing_templates = app_db.find_by_condition(
+            WorkflowStoreMeta, {"is_template": True}, limit=1
+        )
         if existing_templates and len(existing_templates) > 0:
-            logger.info(f"⚠️  Workflow templates already exist in database ({len(existing_templates)} records). Skipping template import.")
-            return {"success": True, "inserted_count": 0, "skipped": True, "message": "Templates already exist"}
+            logger.info(
+                f"⚠️  Workflow templates already exist in database ({len(existing_templates)} records). Skipping template import."
+            )
+            return {
+                "success": True,
+                "inserted_count": 0,
+                "skipped": True,
+                "message": "Templates already exist",
+            }
 
         # JSON 파일 목록 가져오기
         json_files = list(Path(templates_dir).glob("*.json"))
@@ -210,7 +254,7 @@ def load_workflow_templates(app_db, templates_dir: str):
         for json_file in json_files:
             try:
                 # JSON 파일 읽기 및 전처리
-                with open(json_file, 'r', encoding='utf-8') as f:
+                with open(json_file, "r", encoding="utf-8") as f:
                     workflow_data = json.load(f)
 
                 # JSON을 다시 파싱하여 유니코드 이스케이프 문자 정리
@@ -220,30 +264,32 @@ def load_workflow_templates(app_db, templates_dir: str):
                 )
 
                 # 필수 필드 확인
-                workflow_id = workflow_data.get('workflow_id')
-                workflow_name = workflow_data.get('workflow_name')
+                workflow_id = workflow_data.get("workflow_id")
+                workflow_name = workflow_data.get("workflow_name")
 
                 if not workflow_id or not workflow_name:
-                    logger.warning(f"⚠️  Skipping {json_file.name}: Missing workflow_id or workflow_name")
+                    logger.warning(
+                        f"⚠️  Skipping {json_file.name}: Missing workflow_id or workflow_name"
+                    )
                     skipped_count += 1
                     continue
 
                 # description 추출 (없으면 workflow_name 사용)
-                description = workflow_data.get('description', workflow_name)
+                description = workflow_data.get("description", workflow_name)
 
                 # nodes와 edges 개수 계산
-                nodes = workflow_data.get('nodes', [])
-                edges = workflow_data.get('edges', [])
+                nodes = workflow_data.get("nodes", [])
+                edges = workflow_data.get("edges", [])
                 node_count = len(nodes)
                 edge_count = len(edges)
 
                 # startnode와 endnode 존재 여부 확인
                 has_startnode = any(
-                    node.get('data', {}).get('functionId') == 'startnode'
+                    node.get("data", {}).get("functionId") == "startnode"
                     for node in nodes
                 )
                 has_endnode = any(
-                    node.get('data', {}).get('functionId') == 'endnode'
+                    node.get("data", {}).get("functionId") == "endnode"
                     for node in nodes
                 )
 
@@ -251,7 +297,7 @@ def load_workflow_templates(app_db, templates_dir: str):
                 is_completed = has_startnode and has_endnode and edge_count > 0
 
                 # tags 추출 (metadata에 있을 수 있음)
-                tags = workflow_data.get('tags', [])
+                tags = workflow_data.get("tags", [])
                 if isinstance(tags, str):
                     tags = [tags]
 
@@ -272,14 +318,12 @@ def load_workflow_templates(app_db, templates_dir: str):
                     is_template=True,
                     description=description,
                     tags=tags,
-                    workflow_data=workflow_data  # 전체 JSON 데이터
+                    workflow_data=workflow_data,  # 전체 JSON 데이터
                 )
 
                 # 중복 체크 (workflow_id 기준)
                 existing = app_db.find_by_condition(
-                    WorkflowStoreMeta,
-                    {"workflow_id": workflow_id},
-                    limit=1
+                    WorkflowStoreMeta, {"workflow_id": workflow_id}, limit=1
                 )
 
                 if not existing or len(existing) == 0:
@@ -303,14 +347,21 @@ def load_workflow_templates(app_db, templates_dir: str):
                 skipped_count += 1
                 continue
 
-        logger.info(f"✅ Successfully processed {inserted_count + skipped_count} workflow template files")
+        logger.info(
+            f"✅ Successfully processed {inserted_count + skipped_count} workflow template files"
+        )
         logger.info(f"📝 Inserted: {inserted_count}, Skipped: {skipped_count}")
-        return {"success": True, "inserted_count": inserted_count, "skipped_count": skipped_count}
+        return {
+            "success": True,
+            "inserted_count": inserted_count,
+            "skipped_count": skipped_count,
+        }
 
     except Exception as e:
         error_msg = f"Error loading workflow templates: {e}"
         logger.error(f"❌ {error_msg}")
         return {"success": False, "error": error_msg}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -318,15 +369,18 @@ async def lifespan(app: FastAPI):
     try:
         try:
             from fix_existing_managers import recover_all_managers
+
             recover_all_managers()
         except Exception as e:
             logger.error(f"⚠️ 매니저 자동 복구 실패: {e}")
-            
+
         print_xgen_logo()
         logger.info("🌟 Starting XGEN application lifespan...")
 
         # 1. 데이터베이스 설정만 먼저 초기화
-        print_step_banner(1, "DATABASE INITIALIZATION", "Initializing core database configuration")
+        print_step_banner(
+            1, "DATABASE INITIALIZATION", "Initializing core database configuration"
+        )
         logger.info("⚙️  Step 1: Database configuration initialization starting...")
 
         database_config = config_composer.initialize_database_config_only()
@@ -336,7 +390,9 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Step 1: Database configuration initialized successfully!")
 
         # 2. 애플리케이션 데이터베이스 초기화 (모든 모델 테이블 생성)
-        print_step_banner(2, "APPLICATION DATABASE SETUP", "Creating tables and running migrations")
+        print_step_banner(
+            2, "APPLICATION DATABASE SETUP", "Creating tables and running migrations"
+        )
         logger.info("⚙️  Step 2: Application database initialization starting...")
 
         app_db = AppDatabaseManager(database_config)
@@ -358,7 +414,9 @@ async def lifespan(app: FastAPI):
             return
 
         # 3. 나머지 설정들 초기화 (이제 DB 테이블이 존재함)
-        print_step_banner(3, "CONFIGURATION SETUP", "Loading remaining system configurations")
+        print_step_banner(
+            3, "CONFIGURATION SETUP", "Loading remaining system configurations"
+        )
         logger.info("⚙️  Step 3: System configuration initialization starting...")
 
         configs = config_composer.initialize_remaining_configs()
@@ -366,9 +424,15 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Step 3: System configurations loaded successfully!")
 
         # 4. RAG 서비스 초기화 (벡터 DB와 임베딩 제공자)
-        print_step_banner(4, "RAG SERVICES INITIALIZATION", "Setting up vector DB and embedding services")
+        print_step_banner(
+            4,
+            "RAG SERVICES INITIALIZATION",
+            "Setting up vector DB and embedding services",
+        )
         try:
-            print_step_banner(4.1, "EMBEDDING SERVICE SETUP", "Setting up embedding services")
+            print_step_banner(
+                4.1, "EMBEDDING SERVICE SETUP", "Setting up embedding services"
+            )
             embedding_client = EmbeddingFactory.create_embedding_client(config_composer)
             app.state.embedding_client = embedding_client
 
@@ -376,11 +440,19 @@ async def lifespan(app: FastAPI):
             vector_manager = VectorManager(config_composer)
             app.state.vector_manager = vector_manager
 
-            print_step_banner(4.3, "DOCUMENT PROCESSOR SETUP", "Setting up document processing services")
+            print_step_banner(
+                4.3,
+                "DOCUMENT PROCESSOR SETUP",
+                "Setting up document processing services",
+            )
             document_processor = DocumentProcessor(config_composer)
             app.state.document_processor = document_processor
 
-            print_step_banner(4.4, "DOCUMENT INFO GENERATOR SETUP", "Setting up document info generation services")
+            print_step_banner(
+                4.4,
+                "DOCUMENT INFO GENERATOR SETUP",
+                "Setting up document info generation services",
+            )
             document_info_generator = DocumentInfoGenerator(config_composer)
             app.state.document_info_generator = document_info_generator
             logger.info("✅ Step 4: RAG services components initialized successfully!")
@@ -395,7 +467,9 @@ async def lifespan(app: FastAPI):
 
         # 5. STT 서비스 초기화
         if config_composer.get_config_by_name("IS_AVAILABLE_STT").value:
-            print_step_banner(5, "STT SERVICE SETUP", "Setting up Speech-to-Text services")
+            print_step_banner(
+                5, "STT SERVICE SETUP", "Setting up Speech-to-Text services"
+            )
             try:
                 logger.info("⚙️  Step 5: STT service initialization starting...")
                 stt_client = STTFactory.create_stt_client(config_composer)
@@ -406,12 +480,16 @@ async def lifespan(app: FastAPI):
                 # STT 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
                 app.state.stt_service = None
         else:
-            print_step_banner(5, "STT SERVICE SETUP", "STT service is disabled in configuration")
+            print_step_banner(
+                5, "STT SERVICE SETUP", "STT service is disabled in configuration"
+            )
             app.state.stt_service = None
 
         # 5.5. TTS 서비스 초기화
         if config_composer.get_config_by_name("IS_AVAILABLE_TTS").value:
-            print_step_banner(5.5, "TTS SERVICE SETUP", "Setting up Text-to-Speech services")
+            print_step_banner(
+                5.5, "TTS SERVICE SETUP", "Setting up Text-to-Speech services"
+            )
             try:
                 logger.info("⚙️  Step 5.5: TTS service initialization starting...")
                 tts_client = TTSFactory.create_tts_client(config_composer)
@@ -422,12 +500,16 @@ async def lifespan(app: FastAPI):
                 # TTS 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
                 app.state.tts_service = None
         else:
-            print_step_banner(5.5, "TTS SERVICE SETUP", "TTS service is disabled in configuration")
+            print_step_banner(
+                5.5, "TTS SERVICE SETUP", "TTS service is disabled in configuration"
+            )
             app.state.tts_service = None
 
         # 5.7. Guarder 서비스 초기화
         if config_composer.get_config_by_name("IS_AVAILABLE_GUARDER").value:
-            print_step_banner(5.7, "GUARDER SERVICE SETUP", "Setting up Text Moderation services")
+            print_step_banner(
+                5.7, "GUARDER SERVICE SETUP", "Setting up Text Moderation services"
+            )
             try:
                 logger.info("⚙️  Step 5.7: Guarder service initialization starting...")
                 guarder_client = GuarderFactory.create_guarder_client(config_composer)
@@ -438,7 +520,11 @@ async def lifespan(app: FastAPI):
                 # Guarder 서비스 초기화 실패 시에도 애플리케이션 시작은 계속
                 app.state.guarder_service = None
         else:
-            print_step_banner(5.7, "GUARDER SERVICE SETUP", "Guarder service is disabled in configuration")
+            print_step_banner(
+                5.7,
+                "GUARDER SERVICE SETUP",
+                "Guarder service is disabled in configuration",
+            )
             app.state.guarder_service = None
 
         # 6. Vast proxy client 생성
@@ -451,129 +537,143 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Step 6: VAST proxy client initialized successfully")
 
         # 7. 워크플로우 실행 매니저 초기화
-        print_step_banner(7, "WORKFLOW MANAGER SETUP", "Setting up workflow execution engine")
+        print_step_banner(
+            7, "WORKFLOW MANAGER SETUP", "Setting up workflow execution engine"
+        )
         logger.info("⚙️  Step 7: Workflow execution manager initialization starting...")
         app.state.execution_manager = execution_manager
         logger.info("✅ Step 7: Workflow execution manager initialized successfully!")
 
-        print_step_banner(7.5, "DATA MANAGER REGISTRY SETUP", "Setting up data manager registry")
+        print_step_banner(
+            7.5, "DATA MANAGER REGISTRY SETUP", "Setting up data manager registry"
+        )
         logger.info("⚙️  Step 7.5: Data manager registry initialization starting...")
-        app.state.data_manager_registry = DataManagerRegistry(app_db_manager=app.state.app_db)
+        app.state.data_manager_registry = DataManagerRegistry(
+            app_db_manager=app.state.app_db
+        )
         logger.info("✅ Step 7.5: Data manager registry initialized successfully!")
 
         # ⭐ 7.6. 저장된 매니저 자동 로드 추가
-        print_step_banner(7.6, "AUTO-LOAD STORED MANAGERS", "Loading managers from storage to memory")
+        print_step_banner(
+            7.6, "AUTO-LOAD STORED MANAGERS", "Loading managers from storage to memory"
+        )
         logger.info("⚙️  Step 7.6: Auto-loading stored managers...")
 
         try:
             import io
             import pandas as pd
             from service.data_manager.data_manager import DataManager
-            
+
             registry = app.state.data_manager_registry
             loaded_count = 0
             failed_count = 0
-            
+
             # Redis에서 모든 매니저 조회
             cursor = 0
             all_manager_ids = set()
-            
+
             while True:
                 cursor, keys = registry.redis_manager.redis_client.scan(
-                    cursor=cursor,
-                    match="manager:*:owner",
-                    count=100
+                    cursor=cursor, match="manager:*:owner", count=100
                 )
-                
+
                 for key in keys:
                     if isinstance(key, bytes):
-                        key = key.decode('utf-8')
-                    
-                    parts = key.split(':')
+                        key = key.decode("utf-8")
+
+                    parts = key.split(":")
                     if len(parts) >= 3:
                         manager_id = parts[1]
                         all_manager_ids.add(manager_id)
-                
+
                 if cursor == 0:
                     break
-            
+
             logger.info(f"  └─ 발견된 매니저: {len(all_manager_ids)}개")
-            
+
             # 각 매니저를 메모리에 로드
             for manager_id in all_manager_ids:
                 try:
                     # 소유자 조회
-                    owner = registry.redis_manager.redis_client.get(f"manager:{manager_id}:owner")
+                    owner = registry.redis_manager.redis_client.get(
+                        f"manager:{manager_id}:owner"
+                    )
                     if not owner:
                         continue
-                    
+
                     # 현재 버전 조회
-                    current_version = registry.redis_manager.get_current_version(manager_id)
+                    current_version = registry.redis_manager.get_current_version(
+                        manager_id
+                    )
                     if current_version == 0:
                         logger.debug(f"  ⏭️  스킵: {manager_id} (버전 없음)")
                         continue
-                    
+
                     # 버전 메타데이터 조회
                     version_info = registry.redis_manager.get_version_metadata(
                         manager_id, current_version - 1
                     )
-                    
-                    if not version_info or version_info.get('num_rows', 0) == 0:
+
+                    if not version_info or version_info.get("num_rows", 0) == 0:
                         logger.debug(f"  ⏭️  스킵: {manager_id} (데이터 없음)")
                         continue
-                    
+
                     # MinIO에서 Parquet 로드
                     try:
                         # versions 버킷 시도
-                        version_key = f"{manager_id}/version_{current_version - 1}.parquet"
-                        response = registry.minio_storage.client.get_object(
-                            registry.minio_storage.versions_bucket,
-                            version_key
+                        version_key = (
+                            f"{manager_id}/version_{current_version - 1}.parquet"
                         )
-                        
+                        response = registry.minio_storage.client.get_object(
+                            registry.minio_storage.versions_bucket, version_key
+                        )
+
                         buffer = io.BytesIO(response.read())
                         response.close()
                         response.release_conn()
-                        
+
                         df = pd.read_parquet(buffer)
-                        
+
                     except Exception as e:
                         # raw-datasets 버킷 시도
                         try:
                             original_key = f"{owner}/{manager_id}/original.parquet"
                             response = registry.minio_storage.client.get_object(
-                                registry.minio_storage.raw_datasets_bucket,
-                                original_key
+                                registry.minio_storage.raw_datasets_bucket, original_key
                             )
-                            
+
                             buffer = io.BytesIO(response.read())
                             response.close()
                             response.release_conn()
-                            
+
                             df = pd.read_parquet(buffer)
-                            
+
                         except Exception as e2:
                             logger.warning(f"  ⚠️  실패: {manager_id} - {e2}")
                             failed_count += 1
                             continue
-                    
+
                     # 메모리에 DataManager 생성 및 등록
                     new_manager = DataManager(manager_id, df)
                     registry.register_manager(manager_id, new_manager, owner)
-                    
+
                     loaded_count += 1
                     logger.debug(f"  ✅ 로드: {manager_id} ({len(df)} rows)")
-                    
+
                 except Exception as e:
                     logger.error(f"  ❌ 오류: {manager_id} - {e}")
                     failed_count += 1
-            
-            logger.info(f"✅ Step 7.6: 자동 로드 완료! 성공: {loaded_count}개, 실패: {failed_count}개")
-            
+
+            logger.info(
+                f"✅ Step 7.6: 자동 로드 완료! 성공: {loaded_count}개, 실패: {failed_count}개"
+            )
+
         except Exception as e:
             logger.error(f"❌ Step 7.6: 자동 로드 실패: {e}", exc_info=True)
         # 7.7. MLflow artifact service initialization
-        print_step_banner(7.7, "MLFLOW ARTIFACT SERVICE", "Integrating MLflow tracking and artifacts")
+        print_step_banner(
+            7.7, "MLFLOW ARTIFACT SERVICE", "Integrating MLflow tracking and artifacts"
+        )
         mlflow_tracking_uri = os.getenv("MLFLOW_URL", "").strip()
         mlflow_default_experiment_id = os.getenv("MLFLOW_DEFAULT_EXPERIMENT_ID")
         mlflow_cache_dir = os.getenv("MLFLOW_CACHE_DIR")
@@ -581,7 +681,9 @@ async def lifespan(app: FastAPI):
 
         if mlflow_tracking_uri:
             try:
-                logger.info("⚙️  Step 7.7: MLflow artifact service initialization starting...")
+                logger.info(
+                    "⚙️  Step 7.7: MLflow artifact service initialization starting..."
+                )
                 mlflow_service = MLflowArtifactService(
                     tracking_uri=mlflow_tracking_uri,
                     default_experiment_id=mlflow_default_experiment_id,
@@ -589,7 +691,9 @@ async def lifespan(app: FastAPI):
                     tracking_token=mlflow_token,
                 )
                 app.state.mlflow_service = mlflow_service
-                logger.info("✅ Step 7.7: MLflow artifact service initialized successfully!")
+                logger.info(
+                    "✅ Step 7.7: MLflow artifact service initialized successfully!"
+                )
             except Exception as mlflow_error:
                 app.state.mlflow_service = None
                 logger.error(
@@ -599,28 +703,45 @@ async def lifespan(app: FastAPI):
                 )
         else:
             app.state.mlflow_service = None
-            logger.warning("⚠️  MLflow tracking URI not configured. MLflow integration is disabled.")
+            logger.warning(
+                "⚠️  MLflow tracking URI not configured. MLflow integration is disabled."
+            )
 
         # 7.8. DB Sync Scheduler 초기화
-        print_step_banner(7.8, "DB SYNC SCHEDULER SETUP", "Setting up database synchronization scheduler")
+        print_step_banner(
+            7.8,
+            "DB SYNC SCHEDULER SETUP",
+            "Setting up database synchronization scheduler",
+        )
         logger.info("⚙️  Step 7.8: DB Sync Scheduler initialization starting...")
-        
+
         try:
             from controller.helper.singletonHelper import initialize_db_sync_scheduler
-            
+
             # 스케줄러 초기화
             db_sync_scheduler = initialize_db_sync_scheduler(app.state)
-            
-            logger.info(f"✅ Step 7.8: DB Sync Scheduler initialized successfully!")
-            logger.info(f"  └─ Scheduler running: {db_sync_scheduler.scheduler.running}")
-            logger.info(f"  └─ Loaded sync configs: {len(db_sync_scheduler.sync_configs)}")
-            
-        except Exception as e:
-            logger.error(f"❌ Step 7.8: Failed to initialize DB Sync Scheduler: {e}", exc_info=True)
-            app.state.db_sync_scheduler = None
-            logger.warning("⚠️  DB Sync Scheduler is disabled. Sync endpoints will not be available.")
 
-        print_step_banner(8, "SYSTEM VALIDATION", "Validating configurations and directories")
+            logger.info(f"✅ Step 7.8: DB Sync Scheduler initialized successfully!")
+            logger.info(
+                f"  └─ Scheduler running: {db_sync_scheduler.scheduler.running}"
+            )
+            logger.info(
+                f"  └─ Loaded sync configs: {len(db_sync_scheduler.sync_configs)}"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"❌ Step 7.8: Failed to initialize DB Sync Scheduler: {e}",
+                exc_info=True,
+            )
+            app.state.db_sync_scheduler = None
+            logger.warning(
+                "⚠️  DB Sync Scheduler is disabled. Sync endpoints will not be available."
+            )
+
+        print_step_banner(
+            8, "SYSTEM VALIDATION", "Validating configurations and directories"
+        )
         logger.info("⚙️  Step 8: System validation starting...")
 
         config_composer.ensure_directories()
@@ -633,7 +754,9 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Step 8: System validation completed!")
 
         # 9. 워크플로우 데이터 동기화
-        print_step_banner(9, "WORKFLOW DATA SYNC", "Synchronizing workflow filesystem and database")
+        print_step_banner(
+            9, "WORKFLOW DATA SYNC", "Synchronizing workflow filesystem and database"
+        )
         logger.info("⚙️  Step 9: Workflow data synchronization starting...")
 
         try:
@@ -652,22 +775,30 @@ async def lifespan(app: FastAPI):
             logger.error(f"❌ Step 9: Failed to sync workflow data: {e}")
 
         # 9.5. 워크플로우-배포 메타데이터 동기화
-        print_step_banner(9.5, "WORKFLOW-DEPLOY SYNC", "Synchronizing workflow and deploy metadata")
+        print_step_banner(
+            9.5, "WORKFLOW-DEPLOY SYNC", "Synchronizing workflow and deploy metadata"
+        )
         logger.info("⚙️  Step 9.5: Workflow-deploy metadata synchronization starting...")
 
         try:
             sync_result = sync_workflow_deploy_meta(app.state.app_db)
             if sync_result["success"]:
-                logger.info(f"✅ Step 9.5: Workflow-deploy sync completed successfully! "
-                           f"Created {sync_result['created_deploys']} new deploy entries from "
-                           f"{sync_result['total_workflows']} total workflows")
+                logger.info(
+                    f"✅ Step 9.5: Workflow-deploy sync completed successfully! "
+                    f"Created {sync_result['created_deploys']} new deploy entries from "
+                    f"{sync_result['total_workflows']} total workflows"
+                )
             else:
-                logger.warning(f"⚠️  Step 9.5: Workflow-deploy sync completed with issues. "
-                             f"Errors: {sync_result.get('errors', [])}")
+                logger.warning(
+                    f"⚠️  Step 9.5: Workflow-deploy sync completed with issues. "
+                    f"Errors: {sync_result.get('errors', [])}"
+                )
         except Exception as e:
             logger.error(f"❌ Step 9.5: Failed to sync workflow-deploy metadata: {e}")
 
-        print_step_banner(10, "NODE DISCOVERY", "Discovering and registering XGEN nodes")
+        print_step_banner(
+            10, "NODE DISCOVERY", "Discovering and registering XGEN nodes"
+        )
         logger.info("⚙️  Step 10: Node discovery starting...")
 
         run_discovery()
@@ -681,55 +812,83 @@ async def lifespan(app: FastAPI):
         register_node_api_routes()
         logger.info("✅ Node API routes registered successfully!")
 
-        logger.info(f"✅ Step 10: Node discovery completed! Registered {app.state.node_count} nodes")
+        logger.info(
+            f"✅ Step 10: Node discovery completed! Registered {app.state.node_count} nodes"
+        )
 
         # 11. 프롬프트 템플릿 데이터 로드
-        print_step_banner(11, "PROMPT TEMPLATES LOADING", "Loading prompt templates from CSV to database")
+        print_step_banner(
+            11,
+            "PROMPT TEMPLATES LOADING",
+            "Loading prompt templates from CSV to database",
+        )
         logger.info("⚙️  Step 11: Prompt templates loading starting...")
 
         try:
-            constants_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "constants")
+            constants_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "constants"
+            )
             prompts_csv_path = os.path.join(constants_dir, "prompts_processed.csv")
             load_result = load_prompts_from_csv(app.state.app_db, prompts_csv_path)
 
             if load_result["success"]:
                 if load_result.get("skipped", False):
-                    logger.info(f"✅ Step 11: Prompt templates already exist - skipped loading")
+                    logger.info(
+                        f"✅ Step 11: Prompt templates already exist - skipped loading"
+                    )
                 else:
                     inserted = load_result.get("inserted_count", 0)
                     skipped = load_result.get("skipped_count", 0)
-                    logger.info(f"✅ Step 11: Prompt templates loaded successfully! "
-                               f"Inserted: {inserted}, Skipped: {skipped}")
+                    logger.info(
+                        f"✅ Step 11: Prompt templates loaded successfully! "
+                        f"Inserted: {inserted}, Skipped: {skipped}"
+                    )
             else:
-                logger.warning(f"⚠️  Step 11: Prompt templates loading completed with issues. "
-                             f"Error: {load_result.get('error', 'Unknown error')}")
+                logger.warning(
+                    f"⚠️  Step 11: Prompt templates loading completed with issues. "
+                    f"Error: {load_result.get('error', 'Unknown error')}"
+                )
         except Exception as e:
             logger.error(f"❌ Step 11: Failed to load prompt templates: {e}")
 
         # 12. 워크플로우 스토어 템플릿 로드
-        print_step_banner(12, "WORKFLOW STORE TEMPLATES", "Loading workflow store templates from JSON files")
+        print_step_banner(
+            12,
+            "WORKFLOW STORE TEMPLATES",
+            "Loading workflow store templates from JSON files",
+        )
         logger.info("⚙️  Step 12: Workflow store templates loading starting...")
 
         try:
-            constants_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "constants")
+            constants_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "constants"
+            )
             templates_dir = os.path.join(constants_dir, "workflow_store_template")
             load_result = load_workflow_templates(app.state.app_db, templates_dir)
 
             if load_result["success"]:
                 if load_result.get("skipped", False):
-                    logger.info(f"✅ Step 12: Workflow store templates already exist - skipped loading")
+                    logger.info(
+                        f"✅ Step 12: Workflow store templates already exist - skipped loading"
+                    )
                 else:
                     inserted = load_result.get("inserted_count", 0)
                     skipped = load_result.get("skipped_count", 0)
-                    logger.info(f"✅ Step 12: Workflow store templates loaded successfully! "
-                               f"Inserted: {inserted}, Skipped: {skipped}")
+                    logger.info(
+                        f"✅ Step 12: Workflow store templates loaded successfully! "
+                        f"Inserted: {inserted}, Skipped: {skipped}"
+                    )
             else:
-                logger.warning(f"⚠️  Step 12: Workflow store templates loading completed with issues. "
-                             f"Error: {load_result.get('error', 'Unknown error')}")
+                logger.warning(
+                    f"⚠️  Step 12: Workflow store templates loading completed with issues. "
+                    f"Error: {load_result.get('error', 'Unknown error')}"
+                )
         except Exception as e:
             logger.error(f"❌ Step 12: Failed to load workflow store templates: {e}")
 
-        print_step_banner("FINAL", "XGEN STARTUP COMPLETE", "All systems operational! 🎉")
+        print_step_banner(
+            "FINAL", "XGEN STARTUP COMPLETE", "All systems operational! 🎉"
+        )
         logger.info("🎉 XGEN application startup complete! Ready to serve requests.")
 
     except Exception as e:
@@ -739,50 +898,56 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("🛑 XGEN application shutdown...")
-    print("""
+    print(
+        """
     ┌─────────────────────────────────────────────────────┐
     │                XGEN SHUTDOWN                        │
     │           Gracefully stopping all services         │
     └─────────────────────────────────────────────────────┘
-    """)
+    """
+    )
     try:
-        if hasattr(app.state, 'db_sync_scheduler') and app.state.db_sync_scheduler:
+        if hasattr(app.state, "db_sync_scheduler") and app.state.db_sync_scheduler:
             logger.info("🔄 Shutting down DB Sync Scheduler...")
             from controller.helper.singletonHelper import shutdown_db_sync_scheduler
+
             shutdown_db_sync_scheduler(app.state)
             logger.info("✅ DB Sync Scheduler shutdown complete")
         # Data Manager Registry 정리
-        if hasattr(app.state, 'data_manager_registry') and app.state.data_manager_registry:
+        if (
+            hasattr(app.state, "data_manager_registry")
+            and app.state.data_manager_registry
+        ):
             logger.info("🔄 Cleaning up data manager registry...")
             app.state.data_manager_registry.cleanup()
             logger.info("✅ Data manager registry cleanup complete")
 
         # 워크플로우 실행 매니저 정리
-        if hasattr(app.state, 'execution_manager') and app.state.execution_manager:
+        if hasattr(app.state, "execution_manager") and app.state.execution_manager:
             logger.info("🔄 Shutting down workflow execution manager...")
             app.state.execution_manager.shutdown()
             logger.info("✅ Workflow execution manager shutdown complete")
 
         # STT 서비스 정리
-        if hasattr(app.state, 'stt_service') and app.state.stt_service:
+        if hasattr(app.state, "stt_service") and app.state.stt_service:
             logger.info("🔄 Cleaning up STT service...")
             await app.state.stt_service.cleanup()
             logger.info("✅ STT service cleanup complete")
 
         # TTS 서비스 정리
-        if hasattr(app.state, 'tts_service') and app.state.tts_service:
+        if hasattr(app.state, "tts_service") and app.state.tts_service:
             logger.info("🔄 Cleaning up TTS service...")
             await app.state.tts_service.cleanup()
             logger.info("✅ TTS service cleanup complete")
 
         # Guarder 서비스 정리
-        if hasattr(app.state, 'guarder_service') and app.state.guarder_service:
+        if hasattr(app.state, "guarder_service") and app.state.guarder_service:
             logger.info("🔄 Cleaning up Guarder service...")
             await app.state.guarder_service.cleanup()
             logger.info("✅ Guarder service cleanup complete")
 
         # 애플리케이션 데이터베이스 정리
-        if hasattr(app.state, 'app_db') and app.state.app_db:
+        if hasattr(app.state, "app_db") and app.state.app_db:
             app.state.app_db.close()
             logger.info("✅ Application database connection closed")
 
@@ -792,12 +957,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"💥 Error during shutdown: {e}")
 
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger("plateerag-backend")
 
@@ -805,8 +969,14 @@ app = FastAPI(
     title="PlateeRAG Backend",
     description="API for training models with customizable parameters - Enhanced with app.state",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -841,7 +1011,12 @@ if __name__ == "__main__":
     try:
         host = os.environ.get("APP_HOST", "0.0.0.0")
         port = int(os.environ.get("APP_PORT", "8000"))
-        debug = os.environ.get("DEBUG_MODE", "false").lower() in ('true', '1', 'yes', 'on')
+        debug = os.environ.get("DEBUG_MODE", "false").lower() in (
+            "true",
+            "1",
+            "yes",
+            "on",
+        )
 
         print(f"Starting server on {host}:{port} (debug={debug})")
         if debug:
