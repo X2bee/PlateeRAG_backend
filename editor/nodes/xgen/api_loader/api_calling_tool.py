@@ -131,6 +131,8 @@ class APICallingTool(Node):
                 if not kwargs:
                     kwargs = {}
                 request_data = kwargs if kwargs else {}
+                # Ensure any legacy/control keys are removed so they are not sent
+                request_data.pop('as_form', None)
 
                 if additional_params and additional_params != {}:
                     parsed_additional_params = {}
@@ -169,15 +171,25 @@ class APICallingTool(Node):
                     elif method_upper in ["POST", "PUT", "PATCH"]:
                         send_as_form = False
                         if isinstance(request_data, dict):
-                            # as_form을 먼저 확인 (기존 호환성)
-                            if 'as_form' in request_data and str(request_data.get('as_form')).lower() in ['true', 'ture', '1', 'yes']:
+                            # body_type이 request_data 또는 additional_params에 있으면 해당 값으로 결정
+                            body_type_val = ''
+                            try:
+                                body_type_val = (request_data.get('body_type') or additional_params.get('body_type') or '').upper()
+                            except Exception:
+                                body_type_val = (request_data.get('body_type') or '').upper()
+
+                            if body_type_val == 'FORM':
                                 send_as_form = True
-                            # body_type 확인
-                            elif 'body_type' in request_data and str(request_data.get('body_type')).upper() == 'FORM':
-                                send_as_form = True
-                            
+                            else:
+                                # 안전 기본값: .jsp 엔드포인트는 폼 전송으로 가정
+                                try:
+                                    if isinstance(endpoint, str) and endpoint.lower().endswith('.jsp'):
+                                        send_as_form = True
+                                except Exception:
+                                    pass
+
+                            # 제거하여 페이로드로 전송되지 않도록 함
                             request_data.pop('body_type', None)
-                            request_data.pop('as_form', None)
 
                         body = None
                         if isinstance(request_data, dict):

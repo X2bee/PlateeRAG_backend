@@ -66,7 +66,11 @@ class InputSchemaProviderNode(Node):
         for key_name, key_value in key_values.items():
             field_type = self._infer_type(key_value)
             description = key_descriptions.get(key_name, "")
-            fields[key_name] = (field_type, Field(description=description))
+            # body_type은 기본값을 강제로 포함시켜, 에이전트가 값을 누락해도 전송 방식이 유지되도록 함
+            if key_name == 'body_type':
+                fields[key_name] = (str, Field(default=str(key_value).upper(), description=description))
+            else:
+                fields[key_name] = (field_type, Field(description=description))
 
         ArgsSchema = create_model('DynamicArgsSchema', **fields)
         return ArgsSchema
