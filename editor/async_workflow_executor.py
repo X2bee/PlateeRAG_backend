@@ -933,6 +933,11 @@ class AsyncWorkflowExecutor:
                     # 제너레이터를 소비하여 큐에 결과 전송
                     for _ in self._execute_workflow_sync_streaming():
                         pass  # 결과는 큐를 통해 전달됨
+                except WorkflowCancelledError:
+                    logger.info(
+                        "Streaming workflow cancelled in background thread: %s",
+                        self.workflow_id,
+                    )
                 except Exception as e:
                     logger.error(f"스트리밍 워크플로우 실행 중 오류: {e}", exc_info=True)
                     self._streaming_queue.put(('error', str(e)))
@@ -989,6 +994,12 @@ class AsyncWorkflowExecutor:
                     for result in self._execute_workflow_sync():
                         results.append(result)
                     return results
+                except WorkflowCancelledError:
+                    logger.info(
+                        "Workflow cancelled in background thread: %s",
+                        self.workflow_id,
+                    )
+                    raise
                 except Exception as e:
                     logger.error(f"스레드 풀에서 워크플로우 실행 중 오류: {e}", exc_info=True)
                     raise

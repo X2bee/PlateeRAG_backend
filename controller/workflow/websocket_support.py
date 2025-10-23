@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
 import asyncio
+import logging
 import uuid
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -14,14 +15,28 @@ from service.database.execution_meta_service import update_execution_meta_count
 from editor.async_workflow_executor import execution_manager, WorkflowCancelledError
 
 
-async def safe_send_json(websocket: WebSocket, message: Dict[str, Any]) -> None:
-    """Ensure serialized sends are not interleaved across concurrent tasks."""
+async def safe_send_json(websocket: WebSocket, message: Dict[str, Any]) -> bool:
+    """Ensure serialized sends are not interleaved across concurrent tasks.
+
+    Returns False when the websocket is already closed so callers can stop sending.
+    """
     lock = getattr(websocket.state, "send_lock", None)
     if lock is None:
         lock = asyncio.Lock()
         websocket.state.send_lock = lock
     async with lock:
-        await websocket.send_json(message)
+        try:
+            await websocket.send_json(message)
+            return True
+        except WebSocketDisconnect:
+            logger = logging.getLogger("workflow-websocket")
+            logger.debug("WebSocket already disconnected; skipping send", exc_info=False)
+            return False
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger = logging.getLogger("workflow-websocket")
+            logger.warning("Failed to send websocket message gracefully: %s", exc, exc_info=False)
+            return False
+    return True
 
 SESSION_STORE_ATTR = "ws_sessions"
 
@@ -175,7 +190,7 @@ async def run_websocket_workflow(
         metadata=metadata_base,
     )
 
-    await safe_send_json(
+    if not await safe_send_json(
         websocket,
         {
             "type": "start",
@@ -186,7 +201,8 @@ async def run_websocket_workflow(
                 "is_interactive": context.execution_meta is not None,
             },
         },
-    )
+    ):
+        raise WebSocketDisconnect(code=1000)
 
     full_response_chunks: List[str] = []
     chunk_count = 0
@@ -198,9 +214,11 @@ async def run_websocket_workflow(
 
             chunk_count += 1
             full_response_chunks.append(str(chunk))
-            await safe_send_json(websocket, {"type": "data", "content": chunk})
+            if not await safe_send_json(websocket, {"type": "data", "content": chunk}):
+                raise WebSocketDisconnect(code=1000)
 
-        await safe_send_json(websocket, {"type": "end", "message": "Stream finished"})
+        if not await safe_send_json(websocket, {"type": "end", "message": "Stream finished"}):
+            raise WebSocketDisconnect(code=1000)
 
         backend_log.success(
             "Streaming workflow execution completed over WebSocket",
@@ -216,7 +234,7 @@ async def run_websocket_workflow(
             "Workflow execution cancelled over WebSocket",
             metadata={**metadata_base, "chunk_count": chunk_count},
         )
-        await safe_send_json(
+        send_ok = await safe_send_json(
             websocket,
             {
                 "type": "cancelled",
@@ -227,6 +245,8 @@ async def run_websocket_workflow(
                 },
             },
         )
+        if not send_ok:
+            raise WebSocketDisconnect(code=1000)
     except WebSocketDisconnect:
         backend_log.warn(
             "WebSocket disconnected during workflow streaming",
@@ -240,10 +260,12 @@ async def run_websocket_workflow(
             metadata={**metadata_base, "chunk_count": chunk_count},
         )
         try:
-            await safe_send_json(
+            send_ok = await safe_send_json(
                 websocket,
                 {"type": "error", "detail": f"Streaming error: {str(exc)}"},
             )
+            if not send_ok:
+                raise WebSocketDisconnect(code=1000)
         except Exception:
             pass
         raise

@@ -65,8 +65,23 @@ async def execute_workflow_with_id(request: Request, request_body: WorkflowReque
 
         # 비동기 실행 및 결과 수집
         final_outputs = []
-        async for output in context.executor.execute_workflow_async():
-            final_outputs.append(output)
+        try:
+            async for output in context.executor.execute_workflow_async():
+                final_outputs.append(output)
+        except WorkflowCancelledError:
+            backend_log.info(
+                "Workflow execution cancelled",
+                metadata={
+                    "workflow_name": request_body.workflow_name,
+                    "workflow_id": request_body.workflow_id,
+                    "interaction_id": request_body.interaction_id,
+                },
+            )
+            return {
+                "status": "cancelled",
+                "message": "워크플로우 실행이 취소되었습니다",
+                "outputs": [],
+            }
 
         ## 대화형 실행인 경우 count 증가
         if context.execution_meta:
@@ -261,7 +276,7 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
         websocket.state.active_task = None
         websocket.state.active_execution_id = None
 
-    await safe_send_json(
+    if not await safe_send_json(
         websocket,
         {
             "type": "ready",
@@ -272,7 +287,9 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                 "message": "WebSocket connection established",
             },
         },
-    )
+    ):
+        cleanup_websocket_session(websocket)
+        return
 
     try:
         while True:
@@ -300,10 +317,11 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                 continue
 
             if not isinstance(raw_message, dict):
-                await safe_send_json(
+                if not await safe_send_json(
                     websocket,
                     {"type": "error", "detail": "Message must be a JSON object"},
-                )
+                ):
+                    break
                 continue
 
             message_type = raw_message.get("type", "start")
@@ -317,10 +335,11 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                 break
 
             if message_type not in ("start", "run", "cancel"):
-                await safe_send_json(
+                if not await safe_send_json(
                     websocket,
                     {"type": "error", "detail": f"Unsupported message type: {message_type}"},
-                )
+                ):
+                    break
                 continue
 
             payload = raw_message.get("payload") or {
@@ -330,10 +349,11 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
             }
 
             if not isinstance(payload, dict):
-                await safe_send_json(
+                if not await safe_send_json(
                     websocket,
                     {"type": "error", "detail": "Payload must be a JSON object"},
-                )
+                ):
+                    break
                 continue
 
             if message_type == "cancel":
@@ -343,18 +363,19 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                     cancel_interaction_id = session_id
                 cancel_workflow_id = payload.get("workflow_id")
                 if not cancel_workflow_id:
-                    await safe_send_json(
+                    if not await safe_send_json(
                         websocket,
                         {
                             "type": "error",
                             "detail": "workflow_id is required for cancellation",
                         },
-                    )
+                    ):
+                        break
                     continue
 
                 execution_id = f"{cancel_interaction_id}_{cancel_workflow_id}_{login_user_id}"
                 cancelled = execution_manager.cancel_execution(execution_id)
-                await safe_send_json(
+                if not await safe_send_json(
                     websocket,
                     {
                         "type": "cancel_ack",
@@ -367,7 +388,8 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                             "reason": cancel_reason,
                         },
                     },
-                )
+                ):
+                    break
                 if not cancelled:
                     backend_log.warn(
                         "Cancellation requested but no active execution found",
@@ -382,26 +404,28 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
             if message_type in ("start", "run"):
                 active_task = getattr(websocket.state, "active_task", None)
                 if active_task and not active_task.done():
-                    await safe_send_json(
+                    if not await safe_send_json(
                         websocket,
                         {
                             "type": "error",
                             "detail": "Workflow execution already in progress. Please wait or cancel before starting a new one.",
                         },
-                    )
+                    ):
+                        break
                     continue
 
                 try:
                     request_body = WorkflowRequest(**payload)
                 except ValidationError as exc:
-                    await safe_send_json(
+                    if not await safe_send_json(
                         websocket,
                         {
                             "type": "error",
                             "detail": "Invalid workflow request",
                             "errors": exc.errors(),
                         },
-                    )
+                    ):
+                        break
                     continue
 
                 if (
