@@ -726,7 +726,7 @@ async def upload_document_sse(
     """문서 업로드 및 처리 (SSE 지원)
 
     세션 단위로 청크 처리 진행 상황을 Server-Sent Events로 스트리밍합니다.
-    
+
     병렬 처리 지원:
     - 각 세션은 독립적으로 처리됩니다.
     - 세션별 진행 상황은 격리된 큐를 통해 추적됩니다.
@@ -741,6 +741,11 @@ async def upload_document_sse(
     # 파일 내용을 미리 읽어서 메모리에 저장 (파일이 닫히기 전에)
     file_content = await file.read()
     filename = file.filename
+
+    # user_id 타입 확인 및 변환
+    user_id = int(user_id) if user_id else None
+
+    logger.info(f"Creating SSE session: session_id={session}, user_id={user_id} ({type(user_id)}), filename={filename}")
 
     # 세션 생성 (세션 관리자를 통해 격리)
     sse_session = await sse_session_manager.create_session(
@@ -861,7 +866,7 @@ async def upload_document_sse(
                 try:
                     # 타임아웃을 설정하여 주기적으로 체크
                     event_data = await sse_session.get_event(timeout=1.0)
-                    
+
                     if event_data is None:
                         # 타임아웃 시 계속 대기
                         continue
@@ -1362,7 +1367,7 @@ async def get_sessions_info(request: Request):
     user_id = extract_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
-    
+
     try:
         sessions_info = await sse_session_manager.get_all_sessions_info()
         return sessions_info
@@ -1376,16 +1381,22 @@ async def get_session_status(request: Request, session_id: str):
     user_id = extract_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
-    
+
     try:
         session = await sse_session_manager.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        
-        # 사용자 권한 확인
-        if session.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized to access this session")
-        
+
+        # 사용자 권한 확인 (타입 변환하여 비교)
+        session_user_id = int(session.user_id) if session.user_id else None
+        request_user_id = int(user_id) if user_id else None
+
+        logger.debug(f"Session access check: session_user_id={session_user_id} ({type(session_user_id)}), request_user_id={request_user_id} ({type(request_user_id)})")
+
+        if session_user_id != request_user_id:
+            logger.warning(f"Session access denied: session_user_id={session_user_id}, request_user_id={request_user_id}")
+            raise HTTPException(status_code=403, detail=f"Not authorized to access this session (session owner: {session_user_id}, requester: {request_user_id})")
+
         return {
             "session_id": session.session_id,
             "user_id": session.user_id,
@@ -1409,16 +1420,19 @@ async def cancel_session(request: Request, session_id: str):
     user_id = extract_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
-    
+
     try:
         session = await sse_session_manager.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        
-        # 사용자 권한 확인
-        if session.user_id != user_id:
+
+        # 사용자 권한 확인 (타입 변환하여 비교)
+        session_user_id = int(session.user_id) if session.user_id else None
+        request_user_id = int(user_id) if user_id else None
+
+        if session_user_id != request_user_id:
             raise HTTPException(status_code=403, detail="Not authorized to cancel this session")
-        
+
         success = await sse_session_manager.cancel_session(session_id)
         return {
             "success": success,
@@ -1436,16 +1450,19 @@ async def delete_session(request: Request, session_id: str):
     user_id = extract_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
-    
+
     try:
         session = await sse_session_manager.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        
-        # 사용자 권한 확인
-        if session.user_id != user_id:
+
+        # 사용자 권한 확인 (타입 변환하여 비교)
+        session_user_id = int(session.user_id) if session.user_id else None
+        request_user_id = int(user_id) if user_id else None
+
+        if session_user_id != request_user_id:
             raise HTTPException(status_code=403, detail="Not authorized to delete this session")
-        
+
         success = await sse_session_manager.remove_session(session_id)
         return {
             "success": success,
@@ -1463,7 +1480,7 @@ async def cleanup_expired_sessions(request: Request, timeout_minutes: int = 60):
     user_id = extract_user_id_from_request(request)
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
-    
+
     try:
         await sse_session_manager.cleanup_expired_sessions(timeout_minutes)
         sessions_info = await sse_session_manager.get_all_sessions_info()

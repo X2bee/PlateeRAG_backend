@@ -325,7 +325,7 @@ async def lifespan(app: FastAPI):
             logger.info("ℹ️  긴급 복구 스크립트는 비활성화되어 있습니다 (정상)")
         except Exception as e:
             logger.debug(f"긴급 복구 스크립트 로드 실패 (무시 가능): {e}")
-            
+
         print_xgen_logo()
         logger.info("🌟 Starting XGEN application lifespan...")
 
@@ -606,17 +606,17 @@ async def lifespan(app: FastAPI):
         # 7.8. DB Sync Scheduler 초기화
         print_step_banner(7.8, "DB SYNC SCHEDULER SETUP", "Setting up database synchronization scheduler")
         logger.info("⚙️  Step 7.8: DB Sync Scheduler initialization starting...")
-        
+
         try:
             from controller.helper.singletonHelper import initialize_db_sync_scheduler
-            
+
             # 스케줄러 초기화
             db_sync_scheduler = initialize_db_sync_scheduler(app.state)
-            
+
             logger.info(f"✅ Step 7.8: DB Sync Scheduler initialized successfully!")
             logger.info(f"  └─ Scheduler running: {db_sync_scheduler.scheduler.running}")
             logger.info(f"  └─ Loaded sync configs: {len(db_sync_scheduler.sync_configs)}")
-            
+
         except Exception as e:
             logger.error(f"❌ Step 7.8: Failed to initialize DB Sync Scheduler: {e}", exc_info=True)
             app.state.db_sync_scheduler = None
@@ -766,7 +766,7 @@ async def lifespan(app: FastAPI):
             logger.info("✅ SSE session manager cleanup task stopped")
         except Exception as e:
             logger.error(f"❌ Failed to stop SSE session manager: {e}")
-        
+
         if hasattr(app.state, 'db_sync_scheduler') and app.state.db_sync_scheduler:
             logger.info("🔄 Shutting down DB Sync Scheduler...")
             from controller.helper.singletonHelper import shutdown_db_sync_scheduler
