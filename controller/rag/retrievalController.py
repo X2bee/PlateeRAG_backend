@@ -6,6 +6,7 @@ RAG 시스템의 문서 및 컬렉션 관련 API 엔드포인트를 제공합니
 """
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 import logging
@@ -16,6 +17,7 @@ from pathlib import Path
 import datetime
 import uuid
 from zoneinfo import ZoneInfo
+import asyncio
 from service.database.models.vectordb import VectorDB, VectorDBFolders, VectorDBChunkMeta, VectorDBChunkEdge
 from service.database.models.user import User
 
@@ -414,6 +416,211 @@ async def upload_document(
                                  "process_type": process_type})
         logger.error("Document upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to upload document: {str(e)}")
+
+@router.post("/documents/upload-sse")
+async def upload_document_sse(
+    request: Request,
+    file: UploadFile = File(...),
+    collection_name: str = Form(...),
+    chunk_size: int = Form(1000),
+    chunk_overlap: int = Form(200),
+    user_id: int = Form(...),
+    session: str = Form(...),
+    metadata: Optional[str] = Form(None),
+    process_type: Optional[str] = Form("default")
+):
+    """문서 업로드 및 처리 (SSE 지원)
+
+    세션 단위로 청크 처리 진행 상황을 Server-Sent Events로 스트리밍합니다.
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    if not session:
+        raise HTTPException(status_code=400, detail="Session ID is required")
+
+    # 파일 내용을 미리 읽어서 메모리에 저장 (파일이 닫히기 전에)
+    file_content = await file.read()
+    filename = file.filename
+
+    async def event_generator():
+        app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
+        # process_type을 여기서 초기화
+        current_process_type = process_type
+
+        try:
+            file_extension = Path(filename).suffix[1:].lower() if filename else ""
+
+            # SSE 이벤트: 시작
+            yield f"data: {json.dumps({'event': 'start', 'session': session, 'filename': filename})}\n\n"
+            await asyncio.sleep(0)
+
+            backend_log.info("Starting document upload (SSE)",
+                            metadata={"filename": filename, "collection_name": collection_name,
+                                    "file_extension": file_extension, "chunk_size": chunk_size,
+                                    "chunk_overlap": chunk_overlap, "process_type": current_process_type,
+                                    "session": session})
+
+            rag_service = get_rag_service(request)
+
+            # 파일 유형에 따른 process_type 검증
+            if file_extension == 'pdf':
+                valid_process_types = ["default", "text", "ocr"]
+                if current_process_type not in valid_process_types:
+                    backend_log.warn("Invalid process_type for PDF",
+                                   metadata={"process_type": current_process_type, "valid_types": valid_process_types})
+                    yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': f'Invalid process_type for PDF files. Must be one of: {valid_process_types}'})}\n\n"
+                    return
+            elif file_extension in ['docx', 'doc']:
+                valid_process_types = ["default", "text", "html", "ocr", "html_pdf_ocr"]
+                if current_process_type not in valid_process_types:
+                    backend_log.warn("Invalid process_type for DOCX",
+                                   metadata={"process_type": current_process_type, "valid_types": valid_process_types})
+                    yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': f'Invalid process_type for DOCX files. Must be one of: {valid_process_types}'})}\n\n"
+                    return
+            else:
+                if current_process_type != "default":
+                    backend_log.warn("process_type not supported for file type, using default",
+                                   metadata={"file_extension": file_extension, "requested_process_type": current_process_type})
+                    logger.warning(f"process_type '{current_process_type}' is only supported for PDF and DOCX files. Using 'default' for {file_extension} files.")
+                    current_process_type = "default"
+
+            # SSE 이벤트: 파일 저장 시작
+            yield f"data: {json.dumps({'event': 'file_saving', 'session': session})}\n\n"
+            await asyncio.sleep(0)
+
+            # 파일 저장 (미리 읽어둔 내용 사용)
+            upload_dir = Path("downloads") / collection_name
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / filename
+
+            file_size = len(file_content)
+            async with aiofiles.open(file_path, 'wb') as f:
+                await f.write(file_content)
+
+            # SSE 이벤트: 파일 저장 완료
+            yield f"data: {json.dumps({'event': 'file_saved', 'session': session, 'file_size': file_size})}\n\n"
+            await asyncio.sleep(0)
+
+            # 메타데이터 파싱
+            doc_metadata = {}
+            if metadata:
+                try:
+                    doc_metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    backend_log.warn("Invalid metadata JSON provided",
+                                   metadata={"raw_metadata": metadata})
+                    logger.warning("Invalid metadata JSON: %s", metadata)
+
+            # SSE 이벤트: 문서 처리 시작
+            yield f"data: {json.dumps({'event': 'processing_start', 'session': session})}\n\n"
+            await asyncio.sleep(0)
+
+            # 진행 상황을 SSE로 전송하기 위한 큐
+            progress_queue = asyncio.Queue()
+
+            # 진행 상황 콜백 함수
+            async def progress_callback(event_data):
+                await progress_queue.put(event_data)
+
+            # 백그라운드에서 문서 처리 실행
+            async def process_task():
+                try:
+                    result = await rag_service.process_document_with_progress(
+                        user_id=user_id,
+                        app_db=app_db,
+                        file_path=str(file_path),
+                        collection_name=collection_name,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                        metadata=doc_metadata,
+                        use_llm_metadata=True,
+                        process_type=current_process_type,
+                        progress_callback=progress_callback
+                    )
+                    await progress_queue.put({'event': 'processing_complete', 'result': result})
+                except Exception as e:
+                    await progress_queue.put({'event': 'processing_error', 'error': str(e)})
+
+            # 문서 처리 태스크 시작
+            _ = asyncio.create_task(process_task())
+
+            # 진행 상황 이벤트를 SSE로 전송
+            result = None
+            while True:
+                try:
+                    # 타임아웃을 설정하여 주기적으로 체크
+                    event_data = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+
+                    if event_data['event'] == 'total_chunks':
+                        yield f"data: {json.dumps({'event': 'total_chunks', 'session': session, 'total_chunks': event_data['total_chunks']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'llm_metadata_start':
+                        # LLM 메타데이터 생성 시작
+                        yield f"data: {json.dumps({'event': 'llm_metadata_start', 'session': session, 'total_chunks': event_data['total_chunks']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'llm_chunk_processed':
+                        # 개별 LLM 청크 처리 완료
+                        llm_event = {
+                            'event': 'llm_chunk_processed',
+                            'session': session,
+                            'chunk_index': event_data['chunk_index'],
+                            'total_chunks': event_data['total_chunks']
+                        }
+                        if 'error' in event_data:
+                            llm_event['error'] = event_data['error']
+                        yield f"data: {json.dumps(llm_event)}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'llm_metadata_complete':
+                        # LLM 메타데이터 생성 완료
+                        yield f"data: {json.dumps({'event': 'llm_metadata_complete', 'session': session, 'total_chunks': event_data['total_chunks']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'llm_metadata_error':
+                        # LLM 메타데이터 생성 실패
+                        yield f"data: {json.dumps({'event': 'llm_metadata_error', 'session': session, 'error': event_data['error']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'chunk_processed':
+                        yield f"data: {json.dumps({'event': 'chunk_processed', 'session': session, 'chunk_index': event_data['chunk_index'], 'total_chunks': event_data['total_chunks']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'processing_complete':
+                        result = event_data['result']
+                        break
+                    elif event_data['event'] == 'processing_error':
+                        raise Exception(event_data['error'])
+
+                except asyncio.TimeoutError:
+                    # 타임아웃 시 계속 대기
+                    continue
+
+            # SSE 이벤트: 완료
+            backend_log.success("Document uploaded and processed successfully (SSE)",
+                              metadata={"filename": filename, "collection_name": collection_name,
+                                      "file_size": file_size, "file_extension": file_extension,
+                                      "chunk_size": chunk_size, "chunk_overlap": chunk_overlap,
+                                      "process_type": current_process_type, "result": result, "session": session})
+
+            yield f"data: {json.dumps({'event': 'complete', 'session': session, 'result': result})}\n\n"
+            await asyncio.sleep(0)
+
+        except HTTPException as he:
+            backend_log.error("Document upload failed (SSE)", exception=he,
+                             metadata={"filename": filename if 'filename' in locals() else None,
+                                     "collection_name": collection_name,
+                                     "process_type": process_type,
+                                     "session": session})
+            yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': he.detail})}\n\n"
+        except Exception as e:
+            backend_log.error("Document upload failed (SSE)", exception=e,
+                             metadata={"filename": filename if 'filename' in locals() else None,
+                                     "collection_name": collection_name,
+                                     "process_type": current_process_type,
+                                     "session": session})
+            logger.error("Document upload failed: %s", e)
+            yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': str(e)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.post("/documents/search")
 async def search_documents(request: Request, search_request: DocumentSearchRequest):
