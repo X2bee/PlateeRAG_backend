@@ -148,6 +148,7 @@ async def prepare_workflow_execution(
         interaction_id=request_body.interaction_id,
         user_id=login_user_id,
     )
+    setattr(executor, "app", app)
 
     return WorkflowExecutionContext(
         workflow_data=workflow_data,

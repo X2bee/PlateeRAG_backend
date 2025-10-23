@@ -21,6 +21,7 @@ from controller.workflow.websocket_support import (
     get_db_manager_from_websocket,
     run_websocket_workflow,
     cleanup_websocket_session,
+    get_session_entry,
     safe_send_json,
 )
 from service.database.logger_helper import create_logger
@@ -227,6 +228,7 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
     user_session = auth_context["user"]
     session_id = auth_context["session_id"]
     login_user_id = str(user_session["user_id"])
+    connection_id = auth_context.get("connection_id")
 
     try:
         app_db = get_db_manager_from_websocket(websocket)
@@ -287,6 +289,28 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                 continue
 
             message_type = raw_message.get("type", "start")
+
+            session_entry = get_session_entry(websocket.app, session_id) if session_id else None
+            if message_type == "mcp_capabilities":
+                if session_entry is not None:
+                    capabilities = session_entry.setdefault("capabilities", {})
+                    capabilities[connection_id] = raw_message.get("payload") or {}
+                await safe_send_json(websocket, {"type": "mcp_capabilities_ack"})
+                continue
+
+            if message_type in ("mcp_response", "mcp_error"):
+                payload = raw_message.get("payload") or {}
+                request_id = payload.get("request_id") if isinstance(payload, dict) else None
+                if session_entry is not None and request_id:
+                    pending = session_entry.setdefault("pending_requests", {})
+                    future = pending.pop(request_id, None)
+                    if future and not future.done():
+                        if message_type == "mcp_response":
+                            future.set_result(payload)
+                        else:
+                            error_msg = payload.get("error") or "MCP request failed"
+                            future.set_exception(RuntimeError(error_msg))
+                continue
 
             if message_type in ("ping", "pong"):
                 await safe_send_json(websocket, {"type": "pong"})

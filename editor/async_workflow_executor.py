@@ -453,6 +453,7 @@ class AsyncWorkflowExecutor:
         self._is_streaming = False
         self._cancel_event = threading.Event()
         self._cancelled = False
+        self.app = None
 
         if expected_output and expected_output.strip() != "":
             self.expected_output = expected_output
@@ -818,6 +819,13 @@ class AsyncWorkflowExecutor:
                 # 노드 인스턴스 생성 및 실행
                 instance = NodeClass()
                 node_name_for_logging: str = node_info['data']['nodeName']
+
+                # provide execution context to node instances
+                setattr(instance, "app", getattr(self, "app", None))
+                setattr(instance, "interaction_id", self.interaction_id)
+                setattr(instance, "user_id", self.user_id)
+                setattr(instance, "workflow_id", self.workflow_id)
+                setattr(instance, "executor", self)
 
                 result: Any = None
                 try:

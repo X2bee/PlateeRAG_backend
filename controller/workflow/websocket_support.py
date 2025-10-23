@@ -97,13 +97,26 @@ def authenticate_websocket(websocket: WebSocket) -> Dict[str, Any]:
     session_id = websocket.query_params.get("session_id") or str(uuid.uuid4())
     connection_id = str(uuid.uuid4())
 
+    event_loop = asyncio.get_running_loop()
     session_entry = session_store.setdefault(
         session_id,
-        {"users": set(), "connections": {}},
+        {
+            "users": set(),
+            "connections": {},
+            "websockets": {},
+            "pending_requests": {},
+            "capabilities": {},
+            "loop": event_loop,
+        },
     )
 
-    session_entry["users"].add(user_id)
-    session_entry["connections"][connection_id] = user_id
+    session_entry.setdefault("users", set()).add(user_id)
+    session_entry.setdefault("connections", {})[connection_id] = user_id
+    session_entry.setdefault("websockets", {})[connection_id] = websocket
+    session_entry.setdefault("pending_requests", {})
+    session_entry.setdefault("capabilities", {})
+    # store event loop reference if not already present
+    session_entry.setdefault("loop", event_loop)
 
     websocket.state.session_id = session_id
     websocket.state.connection_id = connection_id
@@ -114,6 +127,7 @@ def authenticate_websocket(websocket: WebSocket) -> Dict[str, Any]:
         "token": token,
         "connection_id": connection_id,
         "participants": list(session_entry["users"]),
+        "capabilities": session_entry["capabilities"].get(connection_id, {}),
     }
 
 
@@ -135,12 +149,21 @@ def cleanup_websocket_session(websocket: WebSocket) -> None:
         return
 
     user_id = session_entry["connections"].pop(connection_id, None)
+    if "websockets" in session_entry:
+        session_entry["websockets"].pop(connection_id, None)
+    if "capabilities" in session_entry:
+        session_entry["capabilities"].pop(connection_id, None)
 
     # Recompute active users based on remaining connections
     remaining_users = set(session_entry["connections"].values())
     session_entry["users"] = remaining_users
 
     if not session_entry["connections"]:
+        pending = session_entry.get("pending_requests", {})
+        for future in pending.values():
+            if future and not future.done():
+                future.set_exception(RuntimeError("WebSocket session closed"))
+        pending.clear()
         session_store.pop(session_id, None)
 
 
@@ -148,6 +171,137 @@ def get_db_manager_from_websocket(websocket: WebSocket):
     if hasattr(websocket.app.state, "app_db") and websocket.app.state.app_db:
         return websocket.app.state.app_db
     raise RuntimeError("Database connection not available")
+
+
+def get_session_entry(app, session_id: str) -> Optional[Dict[str, Any]]:
+    session_store = getattr(app.state, SESSION_STORE_ATTR, None)
+    if not isinstance(session_store, dict):
+        return None
+    return session_store.get(session_id)
+
+
+def _select_websocket_for_session(session_entry: Dict[str, Any], server_name: Optional[str] = None):
+    websockets = session_entry.get("websockets", {})
+    capabilities = session_entry.get("capabilities", {})
+
+    selected_ws = None
+    selected_connection_id = None
+    selected_server = server_name
+
+    for conn_id, websocket in websockets.items():
+        caps = capabilities.get(conn_id) or {}
+        servers = caps.get("servers") or []
+        if server_name:
+            for server in servers:
+                if server.get("name") == server_name or server.get("id") == server_name:
+                    selected_ws = websocket
+                    selected_connection_id = conn_id
+                    selected_server = server.get("name") or server.get("id")
+                    break
+            if selected_ws:
+                break
+        else:
+            selected_ws = websocket
+            selected_connection_id = conn_id
+            if servers:
+                selected_server = servers[0].get("name") or servers[0].get("id")
+            break
+
+    if not selected_ws and websockets and not server_name:
+        selected_connection_id, selected_ws = next(iter(websockets.items()))
+
+    if server_name and not selected_ws:
+        raise RuntimeError(f"Requested MCP server '{server_name}' is not available for this session")
+
+    return selected_connection_id, selected_ws, selected_server
+
+
+async def _dispatch_mcp_request(
+    session_entry: Dict[str, Any],
+    session_id: str,
+    payload: Dict[str, Any],
+    *,
+    server_name: Optional[str] = None,
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a dictionary")
+
+    connection_id, websocket, resolved_server = _select_websocket_for_session(session_entry, server_name)
+    if not websocket:
+        raise RuntimeError("No active WebSocket connection available for the session")
+
+    pending_requests: Dict[str, asyncio.Future] = session_entry.setdefault("pending_requests", {})
+    request_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future = loop.create_future()
+    pending_requests[request_id] = future
+
+    message_content = {
+        "request_id": request_id,
+        "session_id": session_id,
+        "connection_id": connection_id,
+        "payload": payload,
+    }
+    if resolved_server:
+        message_content["server"] = resolved_server
+
+    message = {
+        "type": "mcp_request",
+        "content": message_content,
+    }
+
+    send_success = await safe_send_json(websocket, message)
+    if not send_success:
+        pending_requests.pop(request_id, None)
+        raise RuntimeError("Failed to deliver MCP request to client")
+
+    try:
+        response = await asyncio.wait_for(future, timeout=timeout)
+        return response
+    except asyncio.TimeoutError as exc:
+        if not future.done():
+            future.set_exception(RuntimeError("Timed out waiting for client MCP response"))
+        raise RuntimeError("Timed out waiting for client MCP response") from exc
+    finally:
+        pending_requests.pop(request_id, None)
+
+
+def call_client_mcp(
+    app,
+    session_id: str,
+    payload: Dict[str, Any],
+    *,
+    server_name: Optional[str] = None,
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    """Synchronously request the connected client to execute an MCP call."""
+    session_store = getattr(app.state, SESSION_STORE_ATTR, None)
+    if not isinstance(session_store, dict):
+        raise RuntimeError("WebSocket session store is not initialized")
+
+    session_entry = session_store.get(session_id)
+    if not session_entry:
+        raise RuntimeError("Active WebSocket session not found for provided session_id")
+
+    loop = session_entry.get("loop")
+    if loop is None:
+        raise RuntimeError("Event loop reference missing for WebSocket session")
+
+    if server_name:
+        capabilities = session_entry.get("capabilities", {})
+        available = False
+        for caps in capabilities.values():
+            servers = (caps or {}).get("servers") or []
+            if any(s.get("name") == server_name or s.get("id") == server_name for s in servers):
+                available = True
+                break
+        if not available:
+            raise RuntimeError(f"Client does not advertise MCP server '{server_name}'")
+
+    coro = _dispatch_mcp_request(session_entry, session_id, payload, server_name=server_name, timeout=timeout)
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
 
 
 async def run_websocket_workflow(
