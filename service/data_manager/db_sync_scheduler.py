@@ -14,6 +14,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 # ⚠️ 순환 import 방지: 지연 import로 변경
 # from service.data_manager.encryption_helper import get_encryption_helper
 from service.database.models.db_sync_config import DBSyncConfig
+from service.data_manager.timezone_utils import now_kst, now_kst_iso
 
 logger = logging.getLogger("db-sync-scheduler")
 
@@ -30,11 +31,12 @@ class DBSyncScheduler:
         self.registry = data_manager_registry
         self.app_db = app_db_manager
         self.scheduler = BackgroundScheduler()
+        # ✨ 메모리 캐시 유지 (스케줄 작업 ID 추적용)
         self.sync_configs: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         self._encryption = None  # 지연 초기화
-        
-        logger.info("✅ DBSyncScheduler 초기화 완료")
+
+        logger.info("✅ DBSyncScheduler 초기화 완료 (Redis 통합)")
     
     @property
     def encryption(self):
@@ -59,6 +61,10 @@ class DBSyncScheduler:
             self.scheduler.shutdown()
             logger.info("⏹️  DBSyncScheduler 중지됨")
 
+    def shutdown(self) -> None:
+        """스케줄러 종료 (stop의 별칭)"""
+        self.stop()
+
     # ==================== CRUD 작업 ====================
     
     def add_db_sync(
@@ -67,7 +73,7 @@ class DBSyncScheduler:
         user_id: str,
         db_config: Dict[str, Any],
         sync_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    ) -> bool:
         """
         DB 자동 동기화 설정 추가 또는 업데이트
         
@@ -138,16 +144,12 @@ class DBSyncScheduler:
             
             # 메모리에 로드 및 스케줄 등록
             self._load_config_to_memory(config_model)
-            
-            return {
-                'success': True,
-                'manager_id': manager_id,
-                'message': 'DB 자동 동기화가 설정되었습니다'
-            }
-            
+
+            return True
+
         except Exception as e:
             logger.error(f"❌ DB 동기화 추가 실패: {e}", exc_info=True)
-            raise
+            return False
 
     def remove_db_sync(self, manager_id: str, user_id: str) -> bool:
         """DB 자동 동기화 설정 제거"""
@@ -157,26 +159,32 @@ class DBSyncScheduler:
                 {'manager_id': manager_id, 'user_id': user_id},
                 limit=1
             )
-            
+
             if not configs:
                 logger.warning(f"제거할 동기화 설정이 없습니다: {manager_id}")
                 return False
-            
+
             # DB에서 삭제
             self.app_db.delete(DBSyncConfig, configs[0].id)
-            
-            # 메모리 및 스케줄러에서 제거
+
+            # ✨ 메모리 캐시에서 제거
             with self._lock:
-                if manager_id in self.sync_configs:
-                    try:
-                        self.scheduler.remove_job(self.sync_configs[manager_id]['sync_id'])
-                    except Exception as e:
-                        logger.warning(f"스케줄 제거 실패: {e}")
-                    del self.sync_configs[manager_id]
-            
+                self.sync_configs.pop(manager_id, None)
+
+            # Redis에서 제거
+            redis_manager = self.registry.redis_manager
+            if redis_manager:
+                redis_manager.delete_sync_config(manager_id)
+
+            # 스케줄러에서 제거
+            try:
+                self.scheduler.remove_job(f"sync_{manager_id}")
+            except Exception as e:
+                logger.warning(f"스케줄 제거 실패: {e}")
+
             logger.info(f"✅ DB 동기화 제거: {manager_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ DB 동기화 제거 실패: {e}", exc_info=True)
             return False
@@ -191,22 +199,31 @@ class DBSyncScheduler:
                 {'manager_id': manager_id, 'user_id': user_id},
                 limit=1
             )
-            
+
             if not configs:
                 return False
-            
+
             config = configs[0]
             config.enabled = False
             self.app_db.update(config)
-            
-            with self._lock:
-                if manager_id in self.sync_configs:
-                    self.scheduler.pause_job(self.sync_configs[manager_id]['sync_id'])
-                    self.sync_configs[manager_id]['enabled'] = False
-            
+
+            # Redis 설정 업데이트
+            redis_manager = self.registry.redis_manager
+            if redis_manager:
+                redis_config = redis_manager.get_sync_config(manager_id)
+                if redis_config:
+                    redis_config['enabled'] = False
+                    redis_manager.save_sync_config(manager_id, redis_config)
+
+            # 스케줄러에서 일시 중지
+            try:
+                self.scheduler.pause_job(f"sync_{manager_id}")
+            except Exception as e:
+                logger.warning(f"스케줄 일시 중지 실패: {e}")
+
             logger.info(f"⏸️  DB 동기화 일시 중지: {manager_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ 동기화 일시 중지 실패: {e}", exc_info=True)
             return False
@@ -219,22 +236,31 @@ class DBSyncScheduler:
                 {'manager_id': manager_id, 'user_id': user_id},
                 limit=1
             )
-            
+
             if not configs:
                 return False
-            
+
             config = configs[0]
             config.enabled = True
             self.app_db.update(config)
-            
-            with self._lock:
-                if manager_id in self.sync_configs:
-                    self.scheduler.resume_job(self.sync_configs[manager_id]['sync_id'])
-                    self.sync_configs[manager_id]['enabled'] = True
-            
+
+            # Redis 설정 업데이트
+            redis_manager = self.registry.redis_manager
+            if redis_manager:
+                redis_config = redis_manager.get_sync_config(manager_id)
+                if redis_config:
+                    redis_config['enabled'] = True
+                    redis_manager.save_sync_config(manager_id, redis_config)
+
+            # 스케줄러에서 재개
+            try:
+                self.scheduler.resume_job(f"sync_{manager_id}")
+            except Exception as e:
+                logger.warning(f"스케줄 재개 실패: {e}")
+
             logger.info(f"▶️  DB 동기화 재개: {manager_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ 동기화 재개 실패: {e}", exc_info=True)
             return False
@@ -325,18 +351,21 @@ class DBSyncScheduler:
     # ==================== 수동 실행 ====================
     
     def trigger_manual_sync(self, manager_id: str, user_id: str) -> Dict[str, Any]:
-        """수동 동기화 즉시 실행"""
-        with self._lock:
-            if manager_id not in self.sync_configs:
-                raise ValueError("동기화 설정을 찾을 수 없습니다")
-            
-            config = self.sync_configs[manager_id]
-            if config['user_id'] != user_id:
-                raise ValueError("권한이 없습니다")
-        
+        """수동 동기화 즉시 실행 (Redis에서 설정 로드)"""
+        redis_manager = self.registry.redis_manager
+        if not redis_manager:
+            raise ValueError("Redis 연결이 필요합니다")
+
+        config = redis_manager.get_sync_config(manager_id)
+        if not config:
+            raise ValueError("동기화 설정을 찾을 수 없습니다")
+
+        if config['user_id'] != user_id:
+            raise ValueError("권한이 없습니다")
+
         logger.info(f"🔧 수동 동기화 트리거: {manager_id}")
         result = self._execute_sync(config)
-        
+
         return {
             'success': result['status'] in ['success', 'no_changes'],
             'message': '수동 동기화가 완료되었습니다',
@@ -363,9 +392,9 @@ class DBSyncScheduler:
                             f"{config.manager_id} (user: {config.user_id})"
                         )
                         
-                        # Manager 복원 시도
+                        # Manager 복원 시도 (get_manager가 자동으로 Redis/MinIO에서 복원)
                         try:
-                            manager = self.registry.load_manager(
+                            manager = self.registry.get_manager(
                                 config.manager_id,
                                 config.user_id
                             )
@@ -407,8 +436,8 @@ class DBSyncScheduler:
             logger.error(f"❌ 동기화 설정 복원 실패: {e}", exc_info=True)
 
     def _load_config_to_memory(self, config: DBSyncConfig) -> None:
-        """DB 모델을 메모리에 로드하고 스케줄러에 등록"""
-        
+        """DB 모델을 Redis 및 메모리 캐시에 저장하고 스케줄러에 등록"""
+
         # 비밀번호 복호화
         decrypted_password = None
         if config.db_password:
@@ -416,9 +445,9 @@ class DBSyncScheduler:
                 decrypted_password = self.encryption.decrypt(config.db_password)
             except Exception as e:
                 logger.error(f"❌ 비밀번호 복호화 실패: {e}")
-        
-        # 메모리 설정 구성
-        memory_config = {
+
+        # Redis 저장용 설정 구성
+        redis_config = {
             'sync_id': f"sync_{config.manager_id}",
             'manager_id': config.manager_id,
             'user_id': config.user_id,
@@ -442,13 +471,20 @@ class DBSyncScheduler:
             'last_checksum': config.last_checksum,
             'mlflow_enabled': config.mlflow_enabled
         }
-        
+
+        # ✨ 메모리 캐시에도 저장 (스케줄 작업 ID 추적용)
         with self._lock:
-            self.sync_configs[config.manager_id] = memory_config
-        
+            self.sync_configs[config.manager_id] = redis_config
+
+        # Redis에 저장
+        redis_manager = self.registry.redis_manager
+        if redis_manager:
+            redis_manager.save_sync_config(config.manager_id, redis_config)
+            logger.debug(f"✅ Sync 설정 Redis 저장: {config.manager_id}")
+
         # 활성화된 경우 스케줄러에 등록
         if config.enabled:
-            self._add_scheduler_job(memory_config)
+            self._add_scheduler_job(redis_config)
 
     def _add_scheduler_job(self, config: Dict[str, Any]) -> None:
         """스케줄러에 작업 추가"""
@@ -492,7 +528,7 @@ class DBSyncScheduler:
         """동기화 실행 (MLflow 자동 업로드 포함)"""
         manager_id = config['manager_id']
         user_id = config['user_id']
-        start_time = datetime.now()
+        start_time = now_kst()
         
         try:
             logger.info(f"🔄 DB 동기화 시작: manager={manager_id}, user={user_id}")
@@ -544,8 +580,8 @@ class DBSyncScheduler:
                         checksum=current_checksum,
                         start_time=start_time
                     )
-                    
-                    duration = (datetime.now() - start_time).total_seconds()
+
+                    duration = (now_kst() - start_time).total_seconds()
                     return {
                         'status': 'no_changes',
                         'message': '데이터 변경이 없습니다',
@@ -553,9 +589,11 @@ class DBSyncScheduler:
                         'num_rows': result.get('num_rows', 0),
                     }
                 
-                # 체크섬 업데이트
-                with self._lock:
-                    self.sync_configs[manager_id]['last_checksum'] = current_checksum
+                # 체크섬 업데이트 (Redis)
+                redis_manager = self.registry.redis_manager
+                if redis_manager:
+                    config['last_checksum'] = current_checksum
+                    redis_manager.save_sync_config(manager_id, config)
             
             # MLflow 자동 업로드 (변경사항이 있을 때만)
             mlflow_result = None
@@ -571,8 +609,8 @@ class DBSyncScheduler:
                 checksum=current_checksum or config.get('last_checksum'),
                 start_time=start_time
             )
-            
-            duration = (datetime.now() - start_time).total_seconds()
+
+            duration = (now_kst() - start_time).total_seconds()
             logger.info(f"✅ DB 동기화 완료: {duration:.2f}초")
             
             response = {
@@ -589,9 +627,9 @@ class DBSyncScheduler:
                 response['mlflow_upload'] = mlflow_result
             
             return response
-            
+
         except Exception as e:
-            duration = (datetime.now() - start_time).total_seconds()
+            duration = (now_kst() - start_time).total_seconds()
             error_message = str(e)
             
             logger.error(f"❌ DB 동기화 실패: {e}", exc_info=True)
@@ -637,7 +675,7 @@ class DBSyncScheduler:
             if start_time:
                 db_config.last_sync_at = start_time.isoformat()
             else:
-                db_config.last_sync_at = datetime.now().isoformat()
+                db_config.last_sync_at = now_kst_iso()
             
             db_config.last_sync_status = status
             
@@ -785,7 +823,7 @@ class DBSyncScheduler:
             if success:
                 db_config.mlflow_upload_count = (db_config.mlflow_upload_count or 0) + 1
                 db_config.mlflow_last_run_id = run_id
-                db_config.mlflow_last_upload_at = datetime.now().isoformat()
+                db_config.mlflow_last_upload_at = now_kst_iso()
                 db_config.mlflow_last_error = None
             else:
                 if error:

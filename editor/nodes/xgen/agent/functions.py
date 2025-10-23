@@ -118,11 +118,38 @@ def _validate_and_fix_tools(tools_list):
             # args_schema가 None인 경우 기본 스키마로 대체
             if tool.args_schema is None:
                 from pydantic import BaseModel, Field
-                class DefaultToolSchema(BaseModel):
-                    """Default schema for tools without explicit arguments"""
-                    pass
-                tool.args_schema = DefaultToolSchema
-                logger.info(f"Tool '{tool.name}' had no args_schema, assigned default schema")
+
+                # GitLabAction 도구에 대한 특별 처리
+                tool_class_name = type(tool).__name__
+                if tool_class_name == 'GitLabAction':
+                    # GitLabAction의 mode에 따라 적절한 스키마 생성
+                    mode = getattr(tool, 'mode', None)
+
+                    if mode in ['get_issues']:
+                        # Get Issues는 파라미터가 필요 없음
+                        class GitLabSchema(BaseModel):
+                            """Schema for GitLab Get Issues - no parameters needed"""
+                            instructions: str = Field(default="", description="Optional instructions (not used)")
+                        tool.args_schema = GitLabSchema
+                    elif mode in ['get_issue', 'comment_on_issue', 'create_pull_request',
+                                  'create_file', 'read_file', 'update_file', 'delete_file']:
+                        # 다른 도구들은 instructions 파라미터 필요
+                        class GitLabSchema(BaseModel):
+                            """Schema for GitLab tools"""
+                            instructions: str = Field(..., description="Instructions for the GitLab action")
+                        tool.args_schema = GitLabSchema
+                    else:
+                        class DefaultToolSchema(BaseModel):
+                            """Default schema for tools without explicit arguments"""
+                            pass
+                        tool.args_schema = DefaultToolSchema
+                    logger.info(f"Tool '{tool.name}' (GitLabAction, mode={mode}) assigned GitLab-specific schema")
+                else:
+                    class DefaultToolSchema(BaseModel):
+                        """Default schema for tools without explicit arguments"""
+                        pass
+                    tool.args_schema = DefaultToolSchema
+                    logger.info(f"Tool '{tool.name}' had no args_schema, assigned default schema")
 
         validated_tools.append(tool)
     return validated_tools
@@ -444,3 +471,4 @@ def create_context_prompt(additional_rag_context, default_prompt, strict_citatio
         ])
 
     return final_prompt
+

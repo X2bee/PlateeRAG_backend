@@ -12,6 +12,7 @@ from .docx_handler import extract_text_from_docx
 from .ppt_handler import extract_text_from_ppt
 from .table_data_handler import extract_text_from_excel, extract_text_from_csv
 from .text_handler import extract_text_from_text_file
+from .code_repository_handler import extract_text_from_code_repository
 
 logger = logging.getLogger("document-processor")
 
@@ -406,6 +407,54 @@ class DocumentProcessor:
     #         return status
     #     except Exception as e:
     #         return {"error": str(e)}
+
+    async def extract_text_from_repository(
+        self,
+        gitlab_url: str,
+        gitlab_token: str,
+        repository_path: str,
+        branch: str = "main",
+        enable_annotation: bool = False,
+        enable_api_extraction: bool = False,
+        progress_callback = None
+    ) -> Dict[str, Any]:
+        """
+        GitLab 레포지토리에서 코드를 추출하여 반환
+
+        Args:
+            gitlab_url: GitLab 인스턴스 URL
+            gitlab_token: Personal Access Token
+            repository_path: 레포지토리 경로 (예: group/project)
+            branch: 브랜치 이름
+            enable_annotation: LLM 기반 코드 주석 생성 여부
+            enable_api_extraction: API 엔드포인트 추출 여부
+            progress_callback: 진행 상황 콜백 함수 (Optional[Callable])
+
+        Returns:
+            {
+                'files': [{
+                    'path': str,
+                    'content': str,
+                    'annotated_content': str (optional),
+                    'language': str,
+                    'size': int
+                }],
+                'api_info': [...] (optional),
+                'metadata': {...}
+            }
+        """
+        cfg = self._get_current_image_text_config()
+
+        return await extract_text_from_code_repository(
+            gitlab_url=gitlab_url,
+            gitlab_token=gitlab_token,
+            repository_path=repository_path,
+            branch=branch,
+            config=cfg,
+            enable_annotation=enable_annotation,
+            enable_api_extraction=enable_api_extraction,
+            progress_callback=progress_callback
+        )
 
     def test(self):
         try:

@@ -30,12 +30,13 @@ class CustomHTTPEmbedding(BaseEmbedding):
             self.embeddings_endpoint = f"{self.base_url}/embeddings"
             self.base_root = self.base_url
         
-        # HTTP 설정
-        self.timeout = aiohttp.ClientTimeout(total=300)  # 5분
+        # HTTP 설정 (Connection pooling과 keepalive 개선)
+        self.timeout = aiohttp.ClientTimeout(total=300, connect=30, sock_read=60)
         self.headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Connection": "keep-alive"
         }
-        
+
         if self.api_key:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
         
@@ -44,10 +45,10 @@ class CustomHTTPEmbedding(BaseEmbedding):
     async def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """여러 문서를 임베딩으로 변환"""
         try:
-            # 배치 크기 제한
-            batch_size = 50
+            # 배치 크기 제한 (서버 과부하 방지를 위해 작게 설정)
+            batch_size = 10
             all_embeddings = []
-            
+
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 for i in range(0, len(texts), batch_size):
                     batch_texts = texts[i:i + batch_size]
@@ -79,41 +80,55 @@ class CustomHTTPEmbedding(BaseEmbedding):
             raise
     
     async def _create_embeddings(self, session: aiohttp.ClientSession, texts: List[str]) -> List[List[float]]:
-        """HTTP API를 통해 임베딩 생성"""
+        """HTTP API를 통해 임베딩 생성 (Retry 로직 포함)"""
         url = self.embeddings_endpoint
-        
+
         payload = {
             "model": self.model,
             "input": texts,
             "encoding_format": "float"
         }
-        
-        try:
-            async with session.post(url, headers=self.headers, json=payload) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise ValueError(f"HTTP {response.status}: {error_text}")
-                
-                result = await response.json()
-                
-                # OpenAI 호환 응답 형식 처리
-                if "data" in result:
-                    embeddings = [item["embedding"] for item in result["data"]]
-                elif "embeddings" in result:
-                    embeddings = result["embeddings"]
+
+        # Retry 설정
+        max_retries = 3
+        retry_delay = 2  # 초
+
+        for attempt in range(max_retries):
+            try:
+                async with session.post(url, headers=self.headers, json=payload) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise ValueError(f"HTTP {response.status}: {error_text}")
+
+                    result = await response.json()
+
+                    # OpenAI 호환 응답 형식 처리
+                    if "data" in result:
+                        embeddings = [item["embedding"] for item in result["data"]]
+                    elif "embeddings" in result:
+                        embeddings = result["embeddings"]
+                    else:
+                        raise ValueError(f"Unexpected response format: {result}")
+
+                    # 차원 수 업데이트
+                    if embeddings and not self._dimension:
+                        self._dimension = len(embeddings[0])
+
+                    return embeddings
+
+            except (aiohttp.ClientError, aiohttp.ServerDisconnectedError) as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Embedding request failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
                 else:
-                    raise ValueError(f"Unexpected response format: {result}")
-                
-                # 차원 수 업데이트
-                if embeddings and not self._dimension:
-                    self._dimension = len(embeddings[0])
-                
-                return embeddings
-                
-        except aiohttp.ClientError as e:
-            raise ValueError(f"HTTP client error: {e}")
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON response: {e}")
+                    logger.error(f"Embedding request failed after {max_retries} attempts: {e}")
+                    raise ValueError(f"HTTP client error after {max_retries} retries: {e}")
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON response: {e}")
+
+        raise ValueError("Failed to create embeddings after all retries")
     
     def get_embedding_dimension(self) -> int:
         """임베딩 차원 수 반환"""
@@ -159,7 +174,7 @@ class CustomHTTPEmbedding(BaseEmbedding):
         """Custom HTTP API 서비스 사용 가능성 확인"""
         try:
             timeout = aiohttp.ClientTimeout(total=5)  # 짧은 타임아웃
-            
+
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # 헬스 체크 먼저 시도 (우선 embeddings endpoint 기반의 health 경로를 확인)
                 health_endpoints = [
@@ -214,19 +229,19 @@ class CustomHTTPEmbedding(BaseEmbedding):
     async def cleanup(self):
         """Custom HTTP 클라이언트 리소스 정리"""
         logger.info("Cleaning up Custom HTTP embedding client: %s", self.embeddings_endpoint)
-        
+
         try:
             # 설정 초기화
             self._dimension = None
-            
+
             # 헤더 정리 (민감한 정보 제거)
             if "Authorization" in self.headers:
                 del self.headers["Authorization"]
-                
+
             logger.info("Custom HTTP client cleanup completed")
-            
+
         except Exception as e:
             logger.warning("Error during Custom HTTP client cleanup: %s", e)
-        
+
         # 부모 클래스 cleanup 호출
         await super().cleanup() 
