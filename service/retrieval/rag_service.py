@@ -612,7 +612,7 @@ class RAGService:
             llm_gen_chunk_metadatas = None
             if use_llm_metadata and await self.metadata_generator.is_enabled():
                 logger.info(f"Generating LLM metadata for {len(chunks)} chunks")
-                
+
                 # 콜백: LLM 메타데이터 생성 시작
                 if progress_callback:
                     await progress_callback({
@@ -623,11 +623,11 @@ class RAGService:
                 try:
                     # LLM 메타데이터 생성 (개별 진행 상황 추적)
                     llm_gen_chunk_metadatas = []
-                    
+
                     # max_concurrent=3으로 배치 처리하되, 개별 완료를 추적
                     import asyncio
                     from typing import List, Optional
-                    
+
                     async def process_chunk_with_callback(chunk_index: int, chunk_text: str):
                         """개별 청크 메타데이터 생성 및 콜백"""
                         try:
@@ -636,7 +636,7 @@ class RAGService:
                                 [chunk_text], None, max_concurrent=1
                             )
                             metadata = result[0] if result else {}
-                            
+
                             # 콜백: 개별 LLM 처리 완료
                             if progress_callback:
                                 await progress_callback({
@@ -644,7 +644,7 @@ class RAGService:
                                     'chunk_index': chunk_index,
                                     'total_chunks': len(chunks)
                                 })
-                            
+
                             return metadata
                         except Exception as e:
                             logger.warning(f"Failed to generate LLM metadata for chunk {chunk_index}: {e}")
@@ -656,32 +656,32 @@ class RAGService:
                                     'error': str(e)
                                 })
                             return {}
-                    
+
                     # 최대 3개씩 동시 처리
                     semaphore = asyncio.Semaphore(3)
-                    
+
                     async def bounded_process(chunk_index: int, chunk_text: str):
                         async with semaphore:
                             return await process_chunk_with_callback(chunk_index, chunk_text)
-                    
+
                     # 모든 청크를 비동기로 처리
                     tasks = [
-                        bounded_process(i, chunk) 
+                        bounded_process(i, chunk)
                         for i, chunk in enumerate(chunks)
                     ]
                     llm_gen_chunk_metadatas = await asyncio.gather(*tasks)
-                    
+
                     # 콜백: LLM 메타데이터 생성 완료
                     if progress_callback:
                         await progress_callback({
                             'event': 'llm_metadata_complete',
                             'total_chunks': len(chunks)
                         })
-                    
+
                 except Exception as e:
                     logger.error(f"Failed to generate LLM metadata: {e}")
                     llm_gen_chunk_metadatas = None
-                    
+
                     # 콜백: LLM 메타데이터 생성 실패
                     if progress_callback:
                         await progress_callback({
