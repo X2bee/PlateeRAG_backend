@@ -447,7 +447,7 @@ class AgentXgenNode(Node):
             system_prompt_text = default_prompt
             agent_summarization_middleware = SummarizationMiddleware(
                 model=llm,
-                max_tokens_before_summary=4000,
+                max_tokens_before_summary=25000,
                 messages_to_keep=10,
             )
 
@@ -571,7 +571,7 @@ class AgentXgenNode(Node):
             system_prompt_text = default_prompt
             agent_summarization_middleware = SummarizationMiddleware(
                 model=llm,
-                max_tokens_before_summary=4000,
+                max_tokens_before_summary=25000,
                 messages_to_keep=10,
             )
 

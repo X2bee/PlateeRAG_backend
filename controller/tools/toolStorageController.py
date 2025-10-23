@@ -200,6 +200,17 @@ async def save_tool(request: Request, tool_request: SaveToolRequest):
         api_header = tool_data.get('api_header', {})
         api_body = tool_data.get('api_body', {})
         metadata = tool_data.get('metadata', {})
+        static_body = tool_data.get('static_body', {})
+        body_type = tool_data.get('body_type', 'application/json')
+
+        # GET이 아닌 경우 body_type에 따라 Content-Type 헤더 자동 설정
+        if tool_data.get('api_method', 'GET').upper() != 'GET':
+            if not api_header:
+                api_header = {}
+
+            # body_type에 따라 Content-Type 설정 (multipart/form-data 제외)
+            if body_type != 'multipart/form-data' and body_type != 'url-params':
+                api_header['Content-Type'] = body_type
 
         tool_meta = Tools(
             user_id=user_id,
@@ -219,6 +230,9 @@ async def save_tool(request: Request, tool_request: SaveToolRequest):
             share_group=existing_data[0].share_group if existing_data and len(existing_data) > 0 else None,
             share_permissions=existing_data[0].share_permissions if existing_data and len(existing_data) > 0 else 'read',
             metadata=metadata,
+            body_type=body_type,
+            static_body=static_body,
+            is_query_string=tool_data.get('is_query_string', False)
         )
 
         if existing_data and len(existing_data) > 0:
@@ -294,6 +308,10 @@ async def update_tool(request: Request, tool_id: int, function_id: str, update_d
             tool.api_header = update_dict["api_header"]
         if "api_body" in update_dict:
             tool.api_body = update_dict["api_body"]
+        if "static_body" in update_dict:
+            tool.static_body = update_dict["static_body"]
+        if "body_type" in update_dict:
+            tool.body_type = update_dict["body_type"]
         if "api_url" in update_dict:
             tool.api_url = update_dict["api_url"]
         if "api_method" in update_dict:
@@ -316,6 +334,24 @@ async def update_tool(request: Request, tool_id: int, function_id: str, update_d
             tool.share_permissions = update_dict["share_permissions"]
         if "metadata" in update_dict:
             tool.metadata = update_dict["metadata"]
+        if "is_query_string" in update_dict:
+            tool.is_query_string = update_dict["is_query_string"]
+
+        # body_type이 변경되고 GET이 아닌 경우 Content-Type 헤더 자동 업데이트
+        if "body_type" in update_dict or "api_method" in update_dict:
+            api_method = tool.api_method or 'GET'
+            body_type = tool.body_type or 'application/json'
+
+            if api_method.upper() != 'GET':
+                if not tool.api_header:
+                    tool.api_header = {}
+
+                # body_type에 따라 Content-Type 설정 (multipart/form-data, url-params 제외)
+                if body_type != 'multipart/form-data' and body_type != 'url-params':
+                    tool.api_header['Content-Type'] = body_type
+                elif body_type == 'url-params' and 'Content-Type' in tool.api_header:
+                    # url-params인 경우 Content-Type 제거
+                    del tool.api_header['Content-Type']
 
         app_db.update(tool)
 
@@ -405,18 +441,39 @@ async def test_api(request: Request, test_request: dict):
         api_url = test_request.get('api_url', '')
         api_method = test_request.get('api_method', 'GET').upper()
         api_headers = test_request.get('api_headers', {})
-        api_body = test_request.get('api_body', {})
+        api_body = test_request.get('api_body', {})  # schema (사용 안 함)
+        static_body = test_request.get('static_body', {})  # 실제 key-value 데이터
+        body_type = test_request.get('body_type', 'application/json')
         api_timeout = test_request.get('api_timeout', 30)
+        is_query_string = test_request.get('is_query_string', False)
 
         if not api_url or not api_url.strip():
             raise HTTPException(status_code=400, detail="API URL is required")
+
+        # is_query_string이 True이면 URL의 query string placeholder를 실제 값으로 치환
+        import re
+        if is_query_string and static_body:
+            logger.info(f"Processing query string placeholders in URL: {api_url}")
+
+            # URL에서 {key} 패턴을 찾아서 static_body의 값으로 치환
+            for key, value in static_body.items():
+                placeholder = f"{{{key}}}"
+                if placeholder in api_url:
+                    api_url = api_url.replace(placeholder, str(value))
+                    logger.info(f"Replaced {placeholder} with {value}")
+
+            logger.info(f"Final URL with replaced query string: {api_url}")
+            # static_body는 이미 URL에 포함되었으므로 비움
+            static_body = {}
 
         backend_log.info("Testing API endpoint",
                         metadata={
                             "api_url": api_url,
                             "api_method": api_method,
                             "has_headers": bool(api_headers),
-                            "has_body": bool(api_body)
+                            "has_static_body": bool(static_body),
+                            "body_type": body_type,
+                            "is_query_string": is_query_string
                         })
 
         # httpx를 사용하여 요청 전송
@@ -427,15 +484,66 @@ async def test_api(request: Request, test_request: dict):
                     "headers": api_headers if api_headers else {},
                 }
 
-                # GET이 아니고 body가 있는 경우에만 추가
-                if api_method != 'GET' and api_body:
-                    # Content-Type이 명시되지 않은 경우 기본값 설정
-                    if 'content-type' not in {k.lower() for k in request_kwargs["headers"].keys()}:
+                # body_type에 따라 Content-Type과 데이터 처리
+                if api_method != 'GET':
+                    if body_type == 'application/json':
+                        # JSON 형식
                         request_kwargs["headers"]["Content-Type"] = "application/json"
-                    request_kwargs["json"] = api_body
+                        if static_body:
+                            request_kwargs["json"] = static_body
+
+                    elif body_type == 'application/xml':
+                        # XML 형식
+                        request_kwargs["headers"]["Content-Type"] = "application/xml"
+                        if static_body:
+                            request_kwargs["content"] = str(static_body) if not isinstance(static_body, str) else static_body
+
+                    elif body_type == 'application/x-www-form-urlencoded':
+                        # application/x-www-form-urlencoded
+                        request_kwargs["headers"]["Content-Type"] = "application/x-www-form-urlencoded"
+                        if static_body:
+                            request_kwargs["data"] = static_body
+
+                    elif body_type == 'multipart/form-data':
+                        # multipart/form-data (httpx가 자동으로 Content-Type 설정)
+                        if static_body:
+                            request_kwargs["files"] = {k: (None, str(v)) for k, v in static_body.items()}
+
+                    elif body_type == 'text/plain':
+                        # Plain text
+                        request_kwargs["headers"]["Content-Type"] = "text/plain"
+                        if static_body:
+                            request_kwargs["content"] = str(static_body) if not isinstance(static_body, str) else static_body
+
+                    elif body_type == 'text/html':
+                        # HTML
+                        request_kwargs["headers"]["Content-Type"] = "text/html"
+                        if static_body:
+                            request_kwargs["content"] = str(static_body) if not isinstance(static_body, str) else static_body
+
+                    elif body_type == 'text/csv':
+                        # CSV
+                        request_kwargs["headers"]["Content-Type"] = "text/csv"
+                        if static_body:
+                            request_kwargs["content"] = str(static_body) if not isinstance(static_body, str) else static_body
+
+                    elif body_type == 'url-params':
+                        # URL 파라미터로 추가 (GET 스타일, body 없음)
+                        if static_body:
+                            request_kwargs["params"] = static_body
+
+                    else:
+                        # 기본값: application/json
+                        request_kwargs["headers"]["Content-Type"] = "application/json"
+                        if static_body:
+                            request_kwargs["json"] = static_body
+
+                elif api_method == 'GET' and static_body:
+                    # GET 요청인 경우 항상 URL 파라미터로 처리
+                    request_kwargs["params"] = static_body
 
                 # 요청 전송
-                logger.info(f"Sending {api_method} request to {api_url}")
+                logger.info(f"Sending {api_method} request to {api_url} with body_type={body_type}")
                 response = await client.request(
                     method=api_method,
                     url=api_url,
@@ -449,9 +557,22 @@ async def test_api(request: Request, test_request: dict):
                 response_data = None
                 try:
                     if 'application/json' in content_type:
+                        # JSON 응답
                         response_data = response.json()
+                    elif 'text/html' in content_type or 'application/xhtml' in content_type:
+                        # HTML 응답 - 텍스트로 반환
+                        response_data = response.text
+                    elif 'text/xml' in content_type or 'application/xml' in content_type:
+                        # XML 응답 - 텍스트로 반환
+                        response_data = response.text
+                    elif 'text/plain' in content_type:
+                        # Plain text 응답
+                        response_data = response.text
+                    elif 'text/csv' in content_type:
+                        # CSV 응답
+                        response_data = response.text
                     else:
-                        # JSON이 아닌 경우 텍스트로 읽기
+                        # 기타 타입은 텍스트로 읽고 JSON 파싱 시도
                         text = response.text
                         try:
                             # JSON 파싱 시도
@@ -646,9 +767,22 @@ async def test_tool(request: Request, tool_id: int, function_id: str):
                 response_data = None
                 try:
                     if 'application/json' in content_type:
+                        # JSON 응답
                         response_data = response.json()
+                    elif 'text/html' in content_type or 'application/xhtml' in content_type:
+                        # HTML 응답 - 텍스트로 반환
+                        response_data = response.text
+                    elif 'text/xml' in content_type or 'application/xml' in content_type:
+                        # XML 응답 - 텍스트로 반환
+                        response_data = response.text
+                    elif 'text/plain' in content_type:
+                        # Plain text 응답
+                        response_data = response.text
+                    elif 'text/csv' in content_type:
+                        # CSV 응답
+                        response_data = response.text
                     else:
-                        # JSON이 아닌 경우 텍스트로 읽기
+                        # 기타 타입은 텍스트로 읽고 JSON 파싱 시도
                         text = response.text
                         try:
                             # JSON 파싱 시도

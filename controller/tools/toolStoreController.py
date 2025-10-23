@@ -170,6 +170,10 @@ async def upload_tool_store(request: Request, upload_request: UploadToolStoreReq
         if isinstance(tool_metadata, str):
             tool_metadata = json.loads(tool_metadata) if tool_metadata else {}
 
+        static_body = existing_tool.static_body
+        if isinstance(static_body, str):
+            static_body = json.loads(static_body) if static_body else {}
+
         # 전체 툴 데이터를 function_data로 구성
         function_data = {
             "function_name": existing_tool.function_name,
@@ -180,6 +184,8 @@ async def upload_tool_store(request: Request, upload_request: UploadToolStoreReq
             "api_url": existing_tool.api_url,
             "api_method": existing_tool.api_method,
             "api_timeout": existing_tool.api_timeout,
+            "static_body": static_body,
+            "body_type": existing_tool.body_type,
             "response_filter": existing_tool.response_filter,
             "response_filter_path": existing_tool.response_filter_path,
             "response_filter_field": existing_tool.response_filter_field,
@@ -393,6 +399,8 @@ async def download_tool_from_store(request: Request, store_tool_id: str, functio
             share_group=None,
             share_permissions='read',
             metadata={"downloaded_from": function_upload_id},
+            static_body=function_data.get("static_body", {}),
+            body_type=function_data.get("body_type", "application/json"),
         )
 
         insert_result = app_db.insert(new_tool)
