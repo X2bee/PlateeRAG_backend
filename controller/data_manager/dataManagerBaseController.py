@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from service.data_manager.timezone_utils import now_kst_iso
 from service.database.models.user import User
 from controller.helper.singletonHelper import get_db_manager, get_data_manager_registry
 from controller.helper.controllerHelper import extract_user_id_from_request
@@ -25,6 +26,7 @@ class GetManagerStatusRequest(BaseModel):
 class DeleteManagerRequest(BaseModel):
     """매니저 삭제 요청"""
     manager_id: str = Field(..., description="매니저 ID")
+    delete_data: bool = Field(True, description="MinIO/Redis 데이터도 함께 삭제 여부 (기본값: True)")
 
 class SetDatasetRequest(BaseModel):
     """데이터셋 설정 요청"""
@@ -132,7 +134,7 @@ async def create_manager(request: Request) -> Dict[str, Any]:
             "user_id": user_id,
             "user_name": user_name,
             "message": "Data Manager가 성공적으로 생성되었습니다",
-            "created_at": datetime.now().isoformat(),
+            "created_at": now_kst_iso(),
             "endpoints": {
                 "status": f"/api/data-manager/managers/{manager_id}/status",
                 "dataset": f"/api/data-manager/managers/{manager_id}/dataset"
@@ -295,12 +297,22 @@ def _get_manager_info_from_redis(registry, manager_id: str, user_id: str) -> Opt
         )
 
         logger.info(f"    └─ has_dataset: {has_dataset}")
-        
+
+        # ✨ Manager 상태에서 원본 created_at 가져오기
+        manager_state = registry.redis_manager.get_manager_state(manager_id)
+        created_at = 'Unknown'
+        if manager_state and 'created_at' in manager_state:
+            created_at = manager_state['created_at']
+        else:
+            # Fallback: latest_source의 loaded_at 사용
+            created_at = latest_source.get('loaded_at', 'Unknown')
+            logger.warning(f"    └─ ⚠️  Manager 상태에 created_at 없음, loaded_at 사용")
+
         return {
             'manager_id': manager_id,
             'user_id': user_id,
             'user_name': version_info.get('metadata', {}).get('user_name', 'Unknown'),
-            'created_at': latest_source.get('loaded_at', 'Unknown'),
+            'created_at': created_at,
             'is_active': has_dataset,  # ⭐ 데이터 있으면 활성!
             'current_instance_memory_mb': 0.0,
             'initial_instance_memory_mb': 0.0,
@@ -349,28 +361,35 @@ async def get_manager_status(request: Request, status_request: GetManagerStatusR
 
 @router.post("/managers/delete",
     summary="데이터 매니저 삭제",
-    description="지정된 Data Manager 인스턴스를 삭제하고 모든 리소스를 정리합니다.",
+    description="지정된 Data Manager 인스턴스를 삭제하고 모든 리소스를 정리합니다. delete_data=True면 MinIO/Redis 데이터도 완전 삭제됩니다.",
     response_model=Dict[str, Any])
 async def delete_manager(request: Request, delete_request: DeleteManagerRequest) -> Dict[str, Any]:
-    """데이터 매니저 삭제"""
+    """데이터 매니저 삭제 (MinIO/Redis 데이터 포함)"""
     try:
         user_id = extract_user_id_from_request(request)
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID가 제공되지 않았습니다")
 
         registry = get_data_manager_registry(request)
-        success = registry.remove_manager(delete_request.manager_id, user_id)
+        success = registry.remove_manager(
+            delete_request.manager_id,
+            user_id,
+            delete_data=delete_request.delete_data
+        )
 
         if not success:
             raise HTTPException(status_code=404, detail="매니저를 찾을 수 없거나 삭제 권한이 없습니다")
 
-        logger.info(f"Data Manager {delete_request.manager_id} 삭제됨 (사용자: {user_id})")
+        deletion_type = "완전 삭제" if delete_request.delete_data else "세션만 제거"
+        logger.info(f"Data Manager {delete_request.manager_id} {deletion_type} (사용자: {user_id})")
 
         return {
             "success": True,
             "manager_id": delete_request.manager_id,
-            "message": "Data Manager가 성공적으로 삭제되었습니다",
-            "deleted_at": datetime.now().isoformat()
+            "message": f"Data Manager가 성공적으로 {deletion_type}되었습니다",
+            "deleted_at": now_kst_iso(),
+            "deletion_type": deletion_type,
+            "data_deleted": delete_request.delete_data
         }
 
     except HTTPException:
@@ -392,7 +411,7 @@ async def get_total_stats(request: Request) -> Dict[str, Any]:
         return {
             "success": True,
             "stats": stats,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": now_kst_iso()
         }
 
     except Exception as e:
@@ -451,7 +470,7 @@ async def remove_dataset(request: Request, remove_request: RemoveDatasetRequest)
             "success": True,
             "manager_id": remove_request.manager_id,
             "message": "데이터셋이 성공적으로 제거되었습니다",
-            "removed_at": datetime.now().isoformat()
+            "removed_at": now_kst_iso()
         }
 
     except HTTPException:

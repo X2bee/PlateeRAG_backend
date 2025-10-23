@@ -19,8 +19,11 @@ class DataManagerRegistry:
     - API 재시작 시 자동 복원 (Lazy Loading)
     """
 
-    def __init__(self, app_db_manager=None):
+    def __init__(self, app_db_manager=None, max_in_memory_managers: int = 10):
+        # ⚠️ 메모리에 최대 N개의 manager만 유지 (나머지는 Redis에만 저장)
         self.managers: Dict[str, DataManager] = {}
+        self.max_in_memory_managers = max_in_memory_managers
+        self._manager_access_times: Dict[str, datetime] = {}  # LRU 추적
         self._lock = threading.Lock()
         
         try:
@@ -63,10 +66,10 @@ class DataManagerRegistry:
         # ========== API 시작 시 메타데이터 로드 (Lazy Loading) ==========
         self._load_metadata_on_startup()
 
-    def _load_metadata_on_startup(self, max_autoload_per_user: int = 3):
+    def _load_metadata_on_startup(self, max_autoload_per_user: int = 0):
         """
-        API 시작 시 Redis에서 메타데이터만 로드하되,
-        복원이 가능해 보이는 매니저는 최대 max_autoload_per_user 개수만 메모리로 자동 복원
+        API 시작 시 Redis에서 메타데이터만 로드 (메모리 복원 최소화)
+        ⚠️ 기본적으로 메모리 복원 안 함 (max_autoload_per_user=0)
         """
         if not self.redis_manager:
             logger.warning("⚠️  Redis가 없어 메타데이터를 로드할 수 없습니다")
@@ -88,6 +91,11 @@ class DataManagerRegistry:
                 total_managers += len(manager_ids)
 
                 logger.info(f"사용자 {user_id}: {len(dataset_ids)}개 데이터셋, {len(manager_ids)}개 활성 매니저 (Redis)")
+
+                # 메모리 복원 최소화 (필요 시에만)
+                if max_autoload_per_user == 0:
+                    logger.info(f"💡 메모리 복원 스킵 (Lazy Loading 전략): user={user_id}")
+                    continue
 
                 if not self.minio_storage:
                     logger.debug("MinIO 미초기화: 자동 복원 스킵")
@@ -114,48 +122,89 @@ class DataManagerRegistry:
                         logger.warning(f"자동 복원 중 오류: manager={manager_id}, error={e}")
 
             logger.info(f"✅ 메타데이터 로드 완료: users={len(all_users)}, datasets={total_datasets}, managers={total_managers}, restored={restored_count}")
-            logger.info("💡 실제 데이터는 (제한된 범위 내에서) 자동으로 메모리에 복원되었습니다")
+            if restored_count == 0:
+                logger.info("💡 메모리 복원 없음 - 필요 시 Lazy Loading으로 자동 복원됩니다")
+            else:
+                logger.info(f"💡 {restored_count}개 매니저가 메모리에 복원되었습니다")
 
         except Exception as e:
             logger.error(f"❌ 메타데이터 로드 실패: {e}", exc_info=True)
 
     def create_manager(self, user_id: str, user_name: str = "Unknown") -> str:
         """
-        새로운 DataManager 인스턴스 생성 및 등록
-        
+        새로운 DataManager 인스턴스 생성 및 등록 (LRU 메모리 관리)
+
         Args:
             user_id: 사용자 ID
             user_name: 사용자 이름
-            
+
         Returns:
             str: 생성된 매니저 ID
         """
+        # LRU 기반 메모리 관리
+        self._evict_lru_manager()
+
         with self._lock:
             # ✅ manager_id 없이 생성 (새 ID 자동 생성)
             manager = DataManager(
-                user_id, 
+                user_id,
                 user_name,
                 minio_storage=self.minio_storage,
                 redis_manager=self.redis_manager
             )
             self.managers[manager.manager_id] = manager
+            self._manager_access_times[manager.manager_id] = datetime.now()
 
             logger.info(f"✅ DataManager {manager.manager_id} created for user {user_name} ({user_id})")
+            logger.info(f"💾 현재 메모리 내 매니저: {len(self.managers)}/{self.max_in_memory_managers}")
             return manager.manager_id
+
+    def _evict_lru_manager(self) -> None:
+        """LRU 기반으로 가장 오래 사용되지 않은 매니저를 메모리에서 제거"""
+        if len(self.managers) < self.max_in_memory_managers:
+            return
+
+        # 가장 오래된 접근 시간을 가진 매니저 찾기
+        oldest_manager_id = None
+        oldest_time = datetime.now()
+
+        for manager_id, access_time in self._manager_access_times.items():
+            if access_time < oldest_time:
+                oldest_time = access_time
+                oldest_manager_id = manager_id
+
+        if oldest_manager_id and oldest_manager_id in self.managers:
+            logger.info(f"🧹 LRU 제거: {oldest_manager_id} (마지막 접근: {oldest_time})")
+            manager = self.managers[oldest_manager_id]
+
+            # Redis에 상태 저장 후 메모리에서 제거
+            try:
+                manager.cleanup(persist_to_redis=True)
+            except Exception as e:
+                logger.warning(f"매니저 cleanup 실패: {e}")
+
+            with self._lock:
+                del self.managers[oldest_manager_id]
+                if oldest_manager_id in self._manager_access_times:
+                    del self._manager_access_times[oldest_manager_id]
+
+            gc.collect()
 
     def get_manager(self, manager_id: str, user_id: str) -> Optional[DataManager]:
         """
-        매니저 조회 - 메모리에 없으면 Redis/MinIO에서 자동 복원 (Lazy Loading)
-        
+        매니저 조회 - 메모리에 없으면 Redis/MinIO에서 자동 복원 (Lazy Loading + LRU)
+
         Args:
             manager_id: Manager ID
             user_id: 사용자 ID
-            
+
         Returns:
             DataManager 또는 None
         """
         # ========== 1. 메모리에서 확인 ==========
         if manager_id in self.managers:
+            # 접근 시간 업데이트 (LRU)
+            self._manager_access_times[manager_id] = datetime.now()
             logger.debug(f"✅ 메모리에서 매니저 조회: {manager_id}")
             return self.managers[manager_id]
         
@@ -260,25 +309,31 @@ class DataManagerRegistry:
             except Exception as e:
                 logger.warning(f"⚠️  Redis 연결 확인 실패: {e}")
             
+            # ========== LRU 기반 메모리 관리 ==========
+            self._evict_lru_manager()
+
             # 메모리에 등록
             with self._lock:
                 self.managers[manager_id] = manager
-            
+                self._manager_access_times[manager_id] = datetime.now()
+
             logger.info(f"✅ Manager 복원 완료: {manager_id} (dataset: {dataset_id}, version: {current_version - 1})")
+            logger.info(f"💾 현재 메모리 내 매니저: {len(self.managers)}/{self.max_in_memory_managers}")
             return manager
             
         except Exception as e:
             logger.error(f"❌ Manager 복원 실패: {manager_id}, {e}", exc_info=True)
             return None
 
-    def remove_manager(self, manager_id: str, user_id: str) -> bool:
+    def remove_manager(self, manager_id: str, user_id: str, delete_data: bool = True) -> bool:
         """
-        매니저 제거 (메모리 + Redis 모두 처리)
-        
+        매니저 제거 (메모리 + Redis + MinIO 완전 삭제)
+
         Args:
             manager_id: Manager ID
             user_id: 사용자 ID
-            
+            delete_data: True면 MinIO/Redis 데이터도 삭제, False면 세션만 해제
+
         Returns:
             bool: 성공 여부
         """
@@ -287,47 +342,91 @@ class DataManagerRegistry:
             if not self.redis_manager:
                 logger.error("❌ Redis가 연결되지 않음")
                 return False
-            
+
             # Redis에서 소유자 확인
             owner = self.redis_manager.get_manager_owner(manager_id)
             if not owner:
                 logger.warning(f"⚠️  Manager {manager_id}를 찾을 수 없습니다 (Redis)")
                 return False
-            
+
             if str(owner) != str(user_id):
                 logger.warning(f"⚠️  소유권 없음: owner={owner}, user_id={user_id}")
                 return False
-            
+
             logger.info(f"✅ 소유권 확인: Manager {manager_id} (owner: {owner})")
-            
-            # ========== 2. 메모리에서 제거 (있으면) ==========
+
+            # ========== 2. Dataset ID 조회 (삭제용) ==========
+            dataset_id = self.redis_manager.get_manager_dataset_id(manager_id)
+            logger.info(f"💾 연결된 Dataset ID: {dataset_id}")
+
+            # ========== 3. 메모리에서 제거 (있으면) ==========
             if manager_id in self.managers:
                 with self._lock:
                     manager = self.managers[manager_id]
-                    
-                    # Manager cleanup
+
+                    # Manager cleanup (persist 안 함)
                     try:
                         manager.is_active = False
                         manager._monitoring = False
                         manager.dataset = None
                     except Exception as e:
                         logger.warning(f"Manager cleanup 실패: {e}")
-                    
+
                     del self.managers[manager_id]
+                    if manager_id in self._manager_access_times:
+                        del self._manager_access_times[manager_id]
                     logger.info(f"🗑️  메모리에서 Manager 제거: {manager_id}")
             else:
                 logger.info(f"💡 Manager {manager_id}는 메모리에 없음 (Redis에만 존재)")
-            
-            # ========== 3. Redis에서 Manager 세션 해제 ==========
+
+            # ========== 4. 데이터 완전 삭제 (옵션) ==========
+            if delete_data and dataset_id:
+                logger.info(f"🗑️  데이터 완전 삭제 시작: dataset_id={dataset_id}")
+
+                # 4-1. MinIO에서 데이터 삭제
+                if self.minio_storage:
+                    try:
+                        # 원본 데이터셋 삭제
+                        deleted_files = self.minio_storage.delete_dataset(dataset_id, user_id)
+                        logger.info(f"  ✅ MinIO 삭제 완료: {deleted_files}개 파일")
+                    except Exception as e:
+                        logger.warning(f"  ⚠️  MinIO 삭제 실패: {e}")
+
+                # 4-2. Redis에서 메타데이터 삭제
+                try:
+                    self.redis_manager.delete_dataset_metadata(dataset_id, user_id)
+                    logger.info(f"  ✅ Redis 메타데이터 삭제 완료")
+                except Exception as e:
+                    logger.warning(f"  ⚠️  Redis 메타데이터 삭제 실패: {e}")
+
+                # 4-3. Redis에서 Manager 관련 추가 데이터 삭제
+                try:
+                    # Resource stats 삭제
+                    stats_key = f"manager:{manager_id}:resource_stats"
+                    self.redis_manager.redis_client.delete(stats_key)
+
+                    # Manager state 삭제
+                    state_key = f"manager:{manager_id}:state"
+                    self.redis_manager.redis_client.delete(state_key)
+
+                    # Sync config 삭제 (있으면)
+                    self.redis_manager.delete_sync_config(manager_id)
+
+                    logger.info(f"  ✅ Manager 추가 데이터 삭제 완료")
+                except Exception as e:
+                    logger.warning(f"  ⚠️  Manager 추가 데이터 삭제 실패: {e}")
+
+            # ========== 5. Redis에서 Manager 세션 해제 ==========
             try:
                 self.redis_manager.unlink_manager(manager_id, user_id)
                 logger.info(f"✅ Redis에서 Manager 세션 해제: {manager_id}")
             except Exception as e:
                 logger.warning(f"⚠️  Redis Manager 해제 실패: {e}")
-            
-            logger.info(f"✅ Manager {manager_id} 제거 완료")
+
+            logger.info(f"✅ Manager {manager_id} {'완전 삭제' if delete_data else '제거'} 완료")
+            gc.collect()
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Manager 제거 실패: {manager_id}, {e}", exc_info=True)
             return False

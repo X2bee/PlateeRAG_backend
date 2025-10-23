@@ -1,6 +1,7 @@
 # /service/storage/redis_version_manager.py
 import redis
 import json
+import os
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import logging
@@ -9,9 +10,15 @@ logger = logging.getLogger(__name__)
 
 class RedisVersionManager:
     """Redis를 사용한 버전 메타데이터 관리 (Dataset-Centric)"""
-    
-    def __init__(self, host: str = "192.168.2.242", port: int = 6379,
-                 db: int = 0, password: Optional[str] = 'redis_secure_password123!'):
+
+    def __init__(self, host: Optional[str] = None, port: Optional[int] = None,
+                 db: Optional[int] = None, password: Optional[str] = None):
+        # 환경변수에서 읽기 (기본값 제공)
+        host = host or os.getenv('REDIS_HOST', '192.168.2.242')
+        port = port or int(os.getenv('REDIS_PORT', '6379'))
+        db = db or int(os.getenv('REDIS_DB', '0'))
+        password = password or os.getenv('REDIS_PASSWORD', 'redis_secure_password123!')
+
         self.redis_client = redis.Redis(
             host=host,
             port=port,
@@ -215,14 +222,15 @@ class RedisVersionManager:
             if dataset_id:
                 mapping_key = f"{self.manager_prefix}:{manager_id}:dataset_id"
                 self.redis_client.set(mapping_key, dataset_id)
-            
+
             # manager → user 매핑
             owner_key = f"{self.manager_prefix}:{manager_id}:owner"
             self.redis_client.set(owner_key, user_id)
-            
-            # 생성 시간
+
+            # 생성 시간 (이미 존재하면 덮어쓰지 않음 - 원본 시간 보존)
             created_key = f"{self.manager_prefix}:{manager_id}:created_at"
-            self.redis_client.set(created_key, datetime.now().isoformat())
+            if not self.redis_client.exists(created_key):
+                self.redis_client.set(created_key, datetime.now().isoformat())
             
             # 사용자의 활성 매니저 목록
             active_key = f"{self.user_prefix}:{user_id}:active_managers"
@@ -450,14 +458,90 @@ class RedisVersionManager:
             lineage = self.get_lineage(dataset_id) or {
                 "mlflow_runs": []
             }
-            
+
             lineage["mlflow_runs"].append({
                 "run_id": run_id,
                 "uploaded_at": datetime.now().isoformat(),
                 **run_info
             })
-            
+
             self.save_lineage(dataset_id, lineage)
-            
+
         except redis.RedisError as e:
             logger.error(f"MLflow Run 정보 추가 실패: {e}")
+
+    # ========== Manager State 관리 (메모리 최소화) ==========
+
+    def save_manager_state(self, manager_id: str, state: Dict[str, Any]) -> None:
+        """Manager 상태를 Redis에 저장 (dataset 제외)"""
+        try:
+            state_key = f"{self.manager_prefix}:{manager_id}:state"
+            # TTL 설정 (7일)
+            self.redis_client.setex(state_key, 604800, json.dumps(state))
+            logger.debug(f"Manager 상태 저장: {manager_id}")
+        except redis.RedisError as e:
+            logger.error(f"Manager 상태 저장 실패: {e}")
+
+    def get_manager_state(self, manager_id: str) -> Optional[Dict[str, Any]]:
+        """Manager 상태를 Redis에서 조회"""
+        try:
+            state_key = f"{self.manager_prefix}:{manager_id}:state"
+            data = self.redis_client.get(state_key)
+            if data:
+                return json.loads(data)
+            return None
+        except (redis.RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Manager 상태 조회 실패: {e}")
+            return None
+
+    def save_resource_stats(self, manager_id: str, stats: Dict[str, Any]) -> None:
+        """리소스 통계를 Redis에 저장"""
+        try:
+            stats_key = f"{self.manager_prefix}:{manager_id}:resource_stats"
+            # 최근 50개만 유지하도록 리스트 크기 제한
+            serialized = json.dumps(stats)
+            self.redis_client.setex(stats_key, 3600, serialized)  # 1시간 TTL
+        except redis.RedisError as e:
+            logger.error(f"리소스 통계 저장 실패: {e}")
+
+    def get_resource_stats(self, manager_id: str) -> Optional[Dict[str, Any]]:
+        """리소스 통계를 Redis에서 조회"""
+        try:
+            stats_key = f"{self.manager_prefix}:{manager_id}:resource_stats"
+            data = self.redis_client.get(stats_key)
+            if data:
+                return json.loads(data)
+            return None
+        except (redis.RedisError, json.JSONDecodeError) as e:
+            logger.error(f"리소스 통계 조회 실패: {e}")
+            return None
+
+    def save_sync_config(self, manager_id: str, config: Dict[str, Any]) -> None:
+        """DB Sync 설정을 Redis에 저장"""
+        try:
+            config_key = f"{self.manager_prefix}:{manager_id}:sync_config"
+            self.redis_client.set(config_key, json.dumps(config))
+            logger.debug(f"Sync 설정 저장: {manager_id}")
+        except redis.RedisError as e:
+            logger.error(f"Sync 설정 저장 실패: {e}")
+
+    def get_sync_config(self, manager_id: str) -> Optional[Dict[str, Any]]:
+        """DB Sync 설정을 Redis에서 조회"""
+        try:
+            config_key = f"{self.manager_prefix}:{manager_id}:sync_config"
+            data = self.redis_client.get(config_key)
+            if data:
+                return json.loads(data)
+            return None
+        except (redis.RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Sync 설정 조회 실패: {e}")
+            return None
+
+    def delete_sync_config(self, manager_id: str) -> None:
+        """DB Sync 설정을 Redis에서 삭제"""
+        try:
+            config_key = f"{self.manager_prefix}:{manager_id}:sync_config"
+            self.redis_client.delete(config_key)
+            logger.debug(f"Sync 설정 삭제: {manager_id}")
+        except redis.RedisError as e:
+            logger.error(f"Sync 설정 삭제 실패: {e}")
