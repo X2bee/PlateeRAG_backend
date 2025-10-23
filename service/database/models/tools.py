@@ -22,6 +22,8 @@ class Tools(BaseModel):
         self.share_group: Optional[str] = kwargs.get('share_group', None)
         self.share_permissions: Optional[str] = kwargs.get('share_permissions', 'read')
         self.metadata: Optional[Dict] = kwargs.get('metadata', {})
+        self.body_type: Optional[str] = kwargs.get('body_type', 'application/json')
+        self.static_body: Optional[dict] = kwargs.get('static_body', {})
 
     def get_table_name(self) -> str:
         return "tools"
@@ -44,7 +46,9 @@ class Tools(BaseModel):
             'is_shared': 'BOOLEAN DEFAULT FALSE',
             'share_group': 'VARCHAR(50)',
             'share_permissions': 'VARCHAR(50)',
-            'metadata': 'TEXT'
+            'metadata': 'TEXT',
+            'body_type': 'VARCHAR(50)',
+            'static_body': 'TEXT',
         }
 
 class ToolStoreMeta(BaseModel):
