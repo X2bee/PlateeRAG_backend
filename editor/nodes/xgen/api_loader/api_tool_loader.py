@@ -109,11 +109,49 @@ class APICallingTool(Node):
         api_endpoint = tool_data.api_url
         method = tool_data.api_method or 'GET'
         timeout = tool_data.api_timeout or 30
+        body_type = tool_data.body_type or 'application/json'
+        is_query_string = tool_data.is_query_string or False
 
-        # api_header와 api_body 파싱
+        # api_header 파싱
         api_headers = tool_data.api_header
         if isinstance(api_headers, str):
             api_headers = json.loads(api_headers) if api_headers else {}
+        if not api_headers:
+            api_headers = {}
+
+        # static_body 파싱
+        static_body = tool_data.static_body
+        if isinstance(static_body, str):
+            static_body = json.loads(static_body) if static_body else {}
+        if not static_body:
+            static_body = {}
+
+        # body_type에 따라 Content-Type 헤더 정합성 검증 및 설정
+        method_upper = method.upper()
+        if method_upper != 'GET':
+            expected_content_type = None
+
+            # body_type에 따른 예상 Content-Type 결정
+            if body_type not in ['multipart/form-data', 'url-params']:
+                expected_content_type = body_type
+
+            # 헤더 정합성 검증 및 수정
+            current_content_type = api_headers.get('Content-Type') or api_headers.get('content-type')
+
+            if expected_content_type:
+                if current_content_type != expected_content_type:
+                    logger.warning(
+                        f"Content-Type mismatch for tool '{tool_name}': "
+                        f"header has '{current_content_type}', but body_type is '{body_type}'. "
+                        f"Setting Content-Type to '{expected_content_type}'"
+                    )
+                    # 기존 Content-Type 제거 (대소문자 구분 없이)
+                    api_headers = {k: v for k, v in api_headers.items() if k.lower() != 'content-type'}
+                    # 새 Content-Type 설정
+                    api_headers['Content-Type'] = expected_content_type
+            elif body_type == 'url-params':
+                # url-params인 경우 Content-Type 제거
+                api_headers = {k: v for k, v in api_headers.items() if k.lower() != 'content-type'}
 
         # response filter 정보
         enable_response_filtering = tool_data.response_filter or False
@@ -185,43 +223,69 @@ class APICallingTool(Node):
 
             @tool(tool_name, description=description, args_schema=actual_args_schema)
             def api_tool(return_dict: bool = False, **tool_kwargs) -> str:
-                logger.info(f"Creating API tool with name: {tool_name}, endpoint: {api_endpoint}, method: {method}, timeout: {timeout}")
+                logger.info(f"Calling API tool: {tool_name}, endpoint: {api_endpoint}, method: {method}, body_type: {body_type}")
 
-                if not tool_kwargs:
-                    tool_kwargs = {}
-                request_data = tool_kwargs if tool_kwargs else {}
+                # AI가 제공한 파라미터 추출
+                ai_provided_params = tool_kwargs if tool_kwargs else {}
 
+                # static_body를 기본값으로 사용하고 AI 파라미터를 추가/병합
+                merged_data = dict(static_body)  # static_body 복사
+                merged_data.update(ai_provided_params)  # AI 파라미터로 업데이트
+
+                logger.info(f"Static body: {static_body}")
+                logger.info(f"AI provided params: {ai_provided_params}")
+                logger.info(f"Merged data: {merged_data}")
+
+                # additional_params 병합
                 if additional_params and additional_params != {}:
                     parsed_additional_params = {}
                     for key, value in additional_params.items():
                         parsed_additional_params[key] = parse_param_value(value)
-                    request_data.update(parsed_additional_params)
+                    merged_data.update(parsed_additional_params)
+                    logger.info(f"After additional params: {merged_data}")
 
+                # URL placeholder 처리
                 endpoint = api_endpoint
-                if request_data:
+
+                # is_query_string이 True인 경우, URL의 placeholder를 merged_data로 교체
+                if is_query_string and merged_data:
+                    logger.info(f"Processing query string placeholders in URL: {endpoint}")
+
+                    # URL에서 {key} 패턴을 찾아서 merged_data의 값으로 치환
+                    for key, value in list(merged_data.items()):
+                        placeholder = f"{{{key}}}"
+                        if placeholder in endpoint:
+                            endpoint = endpoint.replace(placeholder, str(value))
+                            logger.info(f"Replaced {placeholder} with {value}")
+                            # URL에 포함되었으므로 merged_data에서 제거
+                            merged_data.pop(key)
+
+                    logger.info(f"Final URL with replaced query string: {endpoint}")
+
+                # 일반적인 URL placeholder 처리 (is_query_string이 False인 경우)
+                elif merged_data:
                     placeholder_pattern = r'\{([^}]+)\}'
                     placeholders = re.findall(placeholder_pattern, endpoint)
 
                     for placeholder in placeholders:
-                        if placeholder in request_data:
-                            value = request_data.pop(placeholder)
+                        if placeholder in merged_data:
+                            value = merged_data.pop(placeholder)
                             endpoint = endpoint.replace(f'{{{placeholder}}}', str(value))
+                            logger.info(f"Replaced placeholder '{placeholder}' with '{value}' in URL")
 
                 try:
-                    # HTTP 메서드에 따라 요청 방식 결정
-                    method_upper = method.upper()
+                    # 헤더 준비 (api_headers 복사)
+                    headers = dict(api_headers)
+                    if not headers.get('User-Agent'):
+                        headers['User-Agent'] = 'PlateeRAG-APICallingTool/1.0'
 
-                    # 공통 헤더 설정 (api_headers와 병합)
-                    headers = {
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'PlateeRAG-APICallingTool/1.0'
-                    }
-                    if api_headers:
-                        headers.update(api_headers)
+                    logger.info(f"Request headers: {headers}")
+                    logger.info(f"Request method: {method_upper}, body_type: {body_type}")
 
-                    # API 호출
+                    # body_type에 따라 요청 방식 결정
                     if method_upper == "GET":
-                        params = request_data if request_data else None
+                        # GET 요청: URL 파라미터로 전송
+                        params = merged_data if merged_data else None
                         logger.info(f"Making GET request to {endpoint} with params: {params}")
                         response = requests.get(
                             endpoint,
@@ -229,28 +293,78 @@ class APICallingTool(Node):
                             headers=headers,
                             timeout=timeout
                         )
-                        logger.info(f"GET request to {endpoint} completed with status code: {response.status_code}")
-                    elif method_upper in ["POST", "PUT", "PATCH"]:
-                        json_data = request_data if request_data else None
-                        logger.info(f"Making {method_upper} request to {endpoint} with data: {json_data}")
-                        response = requests.request(
-                            method_upper,
-                            endpoint,
-                            json=json_data,
-                            headers=headers,
-                            timeout=timeout
-                        )
-                    elif method_upper == "DELETE":
-                        params = request_data if request_data else None
-                        logger.info(f"Making DELETE request to {endpoint} with params: {params}")
-                        response = requests.delete(
-                            endpoint,
-                            params=params,
-                            headers=headers,
-                            timeout=timeout
-                        )
                     else:
-                        return f"Unsupported HTTP method: {method}"
+                        # GET이 아닌 경우: body_type에 따라 처리
+                        if body_type == 'application/json':
+                            # JSON 형식
+                            logger.info(f"Making {method_upper} request (JSON) to {endpoint} with data: {merged_data}")
+                            response = requests.request(
+                                method_upper,
+                                endpoint,
+                                json=merged_data if merged_data else None,
+                                headers=headers,
+                                timeout=timeout
+                            )
+
+                        elif body_type == 'application/x-www-form-urlencoded':
+                            # Form URL encoded
+                            logger.info(f"Making {method_upper} request (form-urlencoded) to {endpoint} with data: {merged_data}")
+                            response = requests.request(
+                                method_upper,
+                                endpoint,
+                                data=merged_data if merged_data else None,
+                                headers=headers,
+                                timeout=timeout
+                            )
+
+                        elif body_type == 'multipart/form-data':
+                            # Multipart form data
+                            # Content-Type은 requests가 자동으로 설정하므로 제거
+                            headers_without_ct = {k: v for k, v in headers.items() if k.lower() != 'content-type'}
+                            files = {k: (None, str(v)) for k, v in merged_data.items()} if merged_data else None
+                            logger.info(f"Making {method_upper} request (multipart) to {endpoint} with files: {files}")
+                            response = requests.request(
+                                method_upper,
+                                endpoint,
+                                files=files,
+                                headers=headers_without_ct,
+                                timeout=timeout
+                            )
+
+                        elif body_type == 'url-params':
+                            # URL 파라미터로 전송 (body 없음)
+                            params = merged_data if merged_data else None
+                            logger.info(f"Making {method_upper} request (url-params) to {endpoint} with params: {params}")
+                            response = requests.request(
+                                method_upper,
+                                endpoint,
+                                params=params,
+                                headers=headers,
+                                timeout=timeout
+                            )
+
+                        elif body_type in ['application/xml', 'text/plain', 'text/html', 'text/csv']:
+                            # 텍스트 기반 형식 (data로 전송)
+                            data_str = str(merged_data) if merged_data else None
+                            logger.info(f"Making {method_upper} request ({body_type}) to {endpoint} with data: {data_str}")
+                            response = requests.request(
+                                method_upper,
+                                endpoint,
+                                data=data_str,
+                                headers=headers,
+                                timeout=timeout
+                            )
+
+                        else:
+                            # 기본값: JSON
+                            logger.info(f"Making {method_upper} request (default JSON) to {endpoint} with data: {merged_data}")
+                            response = requests.request(
+                                method_upper,
+                                endpoint,
+                                json=merged_data if merged_data else None,
+                                headers=headers,
+                                timeout=timeout
+                            )
 
                     # 응답 상태 코드 확인
                     if response.status_code == 200:

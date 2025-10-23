@@ -24,6 +24,7 @@ class Tools(BaseModel):
         self.metadata: Optional[Dict] = kwargs.get('metadata', {})
         self.body_type: Optional[str] = kwargs.get('body_type', 'application/json')
         self.static_body: Optional[dict] = kwargs.get('static_body', {})
+        self.is_query_string: bool = kwargs.get('is_query_string', False)
 
     def get_table_name(self) -> str:
         return "tools"
@@ -49,6 +50,7 @@ class Tools(BaseModel):
             'metadata': 'TEXT',
             'body_type': 'VARCHAR(50)',
             'static_body': 'TEXT',
+            'is_query_string': 'BOOLEAN DEFAULT FALSE',
         }
 
 class ToolStoreMeta(BaseModel):

@@ -238,13 +238,16 @@ def prepare_chat_history(
     """
     LangChain 1.0.0 메모리 형식 처리 - List[BaseMessage] 직접 반환
 
+    create_agent에서 system_prompt를 별도로 설정하므로,
+    메모리에서 가져온 SystemMessage는 모두 제거합니다.
+
     Args:
         memory: List[BaseMessage] 또는 None
-        current_input: 현재 사용자 입력
-        llm: LLM 객체 (요약 생성용, 선택사항)
+        current_input: 현재 사용자 입력 (현재 사용되지 않음)
+        llm: LLM 객체 (현재 사용되지 않음)
 
     Returns:
-        List[BaseMessage]: 대화 기록 메시지 리스트
+        List[BaseMessage]: 대화 기록 메시지 리스트 (SystemMessage 제외)
     """
     if not memory:
         return []
@@ -261,20 +264,21 @@ def prepare_chat_history(
         if not chat_history:
             return []
 
-        # LLM이 제공되고 현재 입력이 있으면 요약 메시지 추가
-        if llm and current_input:
-            try:
-                summary_message = _summarize_chat_history_with_llm(
-                    chat_history,
-                    current_input,
-                    llm,
-                )
-                if summary_message:
-                    return list(chat_history) + [summary_message]
-            except Exception as summarize_error:
-                logger.warning(f"Failed to summarize chat history: {summarize_error}")
+        # create_agent에서 system_prompt를 별도로 설정하므로
+        # 메모리의 SystemMessage는 중복을 방지하기 위해 모두 제거
+        from langchain_core.messages import SystemMessage
+        filtered_history = [
+            msg for msg in chat_history
+            if not isinstance(msg, SystemMessage)
+        ]
 
-        return chat_history
+        if len(filtered_history) != len(chat_history):
+            logger.info(
+                f"Filtered {len(chat_history) - len(filtered_history)} SystemMessage(s) from chat history "
+                f"(create_agent already sets system_prompt)"
+            )
+
+        return filtered_history
 
     except Exception as e:
         logger.error(f"Error in prepare_chat_history: {e}")

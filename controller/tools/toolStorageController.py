@@ -232,6 +232,7 @@ async def save_tool(request: Request, tool_request: SaveToolRequest):
             metadata=metadata,
             body_type=body_type,
             static_body=static_body,
+            is_query_string=tool_data.get('is_query_string', False)
         )
 
         if existing_data and len(existing_data) > 0:
@@ -333,6 +334,8 @@ async def update_tool(request: Request, tool_id: int, function_id: str, update_d
             tool.share_permissions = update_dict["share_permissions"]
         if "metadata" in update_dict:
             tool.metadata = update_dict["metadata"]
+        if "is_query_string" in update_dict:
+            tool.is_query_string = update_dict["is_query_string"]
 
         # body_type이 변경되고 GET이 아닌 경우 Content-Type 헤더 자동 업데이트
         if "body_type" in update_dict or "api_method" in update_dict:
@@ -442,9 +445,26 @@ async def test_api(request: Request, test_request: dict):
         static_body = test_request.get('static_body', {})  # 실제 key-value 데이터
         body_type = test_request.get('body_type', 'application/json')
         api_timeout = test_request.get('api_timeout', 30)
+        is_query_string = test_request.get('is_query_string', False)
 
         if not api_url or not api_url.strip():
             raise HTTPException(status_code=400, detail="API URL is required")
+
+        # is_query_string이 True이면 URL의 query string placeholder를 실제 값으로 치환
+        import re
+        if is_query_string and static_body:
+            logger.info(f"Processing query string placeholders in URL: {api_url}")
+
+            # URL에서 {key} 패턴을 찾아서 static_body의 값으로 치환
+            for key, value in static_body.items():
+                placeholder = f"{{{key}}}"
+                if placeholder in api_url:
+                    api_url = api_url.replace(placeholder, str(value))
+                    logger.info(f"Replaced {placeholder} with {value}")
+
+            logger.info(f"Final URL with replaced query string: {api_url}")
+            # static_body는 이미 URL에 포함되었으므로 비움
+            static_body = {}
 
         backend_log.info("Testing API endpoint",
                         metadata={
@@ -452,7 +472,8 @@ async def test_api(request: Request, test_request: dict):
                             "api_method": api_method,
                             "has_headers": bool(api_headers),
                             "has_static_body": bool(static_body),
-                            "body_type": body_type
+                            "body_type": body_type,
+                            "is_query_string": is_query_string
                         })
 
         # httpx를 사용하여 요청 전송
