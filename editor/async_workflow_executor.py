@@ -528,6 +528,126 @@ class AsyncWorkflowExecutor:
 
         return False
 
+    def _get_active_output_ports(self, node_info: Dict[str, Any], parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        노드의 파라미터 값을 기반으로 활성화된 출력 포트 목록을 반환합니다.
+        dependency와 dependencyValue를 확인하여 조건을 만족하는 포트만 반환합니다.
+
+        Args:
+            node_info: 노드 정보 (data 필드 포함)
+            parameters: 현재 노드의 파라미터 값들
+
+        Returns:
+            활성화된 출력 포트 목록
+        """
+        outputs = node_info['data'].get('outputs', [])
+        if not outputs:
+            return []
+
+        active_ports = []
+
+        for output in outputs:
+            output_id = output.get('id', 'unknown')
+
+            # dependency가 없으면 항상 활성화
+            if 'dependency' not in output:
+                logger.debug(f" -> 출력 포트 '{output_id}': dependency 없음, 활성화")
+                active_ports.append(output)
+                continue
+
+            dependency_param = output.get('dependency')
+            dependency_value = output.get('dependencyValue')
+
+            # dependency 파라미터가 없거나 값이 없으면 비활성화
+            if not dependency_param:
+                logger.debug(f" -> 출력 포트 '{output_id}': dependency 파라미터 없음, 비활성화")
+                continue
+
+            # 파라미터 값 확인
+            actual_value = parameters.get(dependency_param)
+
+            # dependencyValue가 지정되지 않았으면 실제 값의 truthiness만 확인
+            if dependency_value is None:
+                if actual_value:
+                    logger.debug(f" -> 출력 포트 '{output_id}': dependency='{dependency_param}' (값={actual_value}), truthiness=True, 활성화")
+                    active_ports.append(output)
+                else:
+                    logger.debug(f" -> 출력 포트 '{output_id}': dependency='{dependency_param}' (값={actual_value}), truthiness=False, 비활성화")
+                continue
+
+            # dependencyValue와 실제 값을 비교
+            # 타입에 따라 적절히 비교
+            if self._compare_dependency_values(actual_value, dependency_value):
+                logger.debug(f" -> 출력 포트 '{output_id}': dependency='{dependency_param}' (실제={actual_value}, 기대={dependency_value}), 일치, 활성화")
+                active_ports.append(output)
+            else:
+                logger.debug(f" -> 출력 포트 '{output_id}': dependency='{dependency_param}' (실제={actual_value}, 기대={dependency_value}), 불일치, 비활성화")
+
+        logger.info(f" -> 활성화된 출력 포트: {[port.get('id') for port in active_ports]} (총 {len(active_ports)}/{len(outputs)}개)")
+
+        return active_ports
+
+    def _compare_dependency_values(self, actual_value: Any, expected_value: Any) -> bool:
+        """
+        dependency 값을 비교합니다.
+        다양한 타입에 대해 강건한 비교를 제공합니다.
+
+        Args:
+            actual_value: 실제 파라미터 값
+            expected_value: 기대되는 dependency 값
+
+        Returns:
+            값이 일치하면 True
+        """
+        # None 처리
+        if actual_value is None:
+            return expected_value is None or expected_value == "null" or expected_value == ""
+
+        # Boolean 타입 비교
+        if isinstance(actual_value, bool) and isinstance(expected_value, bool):
+            return actual_value == expected_value
+
+        # Boolean과 문자열 비교
+        if isinstance(actual_value, bool):
+            if isinstance(expected_value, str):
+                expected_lower = expected_value.lower().strip()
+                if actual_value:
+                    return expected_lower in ["true", "1", "yes", "on", "enabled", "t", "y"]
+                else:
+                    return expected_lower in ["false", "0", "no", "off", "disabled", "f", "n"]
+
+        # 문자열로 변환하여 비교 (대소문자 무시)
+        try:
+            actual_str = str(actual_value).lower().strip()
+            expected_str = str(expected_value).lower().strip()
+
+            # 직접 비교
+            if actual_str == expected_str:
+                return True
+
+            # 숫자 비교
+            try:
+                actual_num = float(actual_value)
+                expected_num = float(expected_value)
+                return actual_num == expected_num
+            except (ValueError, TypeError):
+                pass
+
+            # Boolean-like 문자열 비교
+            true_variants = ["true", "1", "yes", "on", "enabled", "t", "y"]
+            false_variants = ["false", "0", "no", "off", "disabled", "f", "n"]
+
+            if actual_str in true_variants and expected_str in true_variants:
+                return True
+            if actual_str in false_variants and expected_str in false_variants:
+                return True
+
+        except Exception:
+            pass
+
+        # 마지막으로 직접 비교
+        return actual_value == expected_value
+
     def _exclude_node_and_descendants(self, node_id: str, excluded_nodes: set) -> None:
         """
         RouterNode에서 선택되지 않은 경로의 노드와 그 후속 노드들을 제외합니다.
@@ -846,13 +966,69 @@ class AsyncWorkflowExecutor:
 
                         logger.info(" -> 라우팅 완료: %s", node_outputs[node_id])
                     else:
-                        # 일반 노드의 기존 처리 로직
-                        if not node_info['data']['outputs'][0].get('id'):
-                            raise ValueError(f"노드 '{node_info['data']['nodeName']}'의 첫 번째 출력 포트에 ID가 정의되어 있지 않습니다.")
+                        # 일반 노드의 출력 처리: dependency 기반 필터링 적용
+                        # 파라미터 값들을 수집 (dependency 확인용)
+                        current_parameters = {}
+                        if 'parameters' in node_info['data'] and node_info['data']['parameters']:
+                            for param in node_info['data']['parameters']:
+                                param_key = param.get('id')
+                                param_value = param.get('value')
+                                if param_key:
+                                    current_parameters[param_key] = param_value
 
-                        output_port_id: str = node_info['data']['outputs'][0]['id']
-                        node_outputs[node_id] = {output_port_id: result}
-                        logger.info(" -> 출력: %s", node_outputs[node_id])
+                        # 활성화된 출력 포트 확인
+                        active_ports = self._get_active_output_ports(node_info, current_parameters)
+
+                        if not active_ports:
+                            logger.warning(" -> dependency 조건을 만족하는 출력 포트가 없습니다.")
+                            node_outputs[node_id] = {}
+                            continue
+
+                        # 활성화된 포트가 하나인 경우 (가장 일반적)
+                        if len(active_ports) == 1:
+                            output_port_id = active_ports[0].get('id')
+                            if not output_port_id:
+                                raise ValueError(f"노드 '{node_info['data']['nodeName']}'의 출력 포트에 ID가 정의되어 있지 않습니다.")
+
+                            node_outputs[node_id] = {output_port_id: result}
+                            logger.info(" -> 출력 (활성 포트: %s): %s", output_port_id, node_outputs[node_id])
+
+                        # 활성화된 포트가 여러 개인 경우 (모든 활성 포트로 데이터 전달)
+                        else:
+                            logger.info(" -> 다중 활성 포트 감지 (%d개): %s",
+                                       len(active_ports),
+                                       [port.get('id') for port in active_ports])
+
+                            node_outputs[node_id] = {}
+                            for port in active_ports:
+                                port_id = port.get('id')
+                                if port_id:
+                                    node_outputs[node_id][port_id] = result
+
+                            logger.info(" -> 다중 출력 완료: %s", list(node_outputs[node_id].keys()))
+
+                        # 비활성 포트와 연결된 노드들을 제외 처리
+                        all_output_ports = node_info['data']['outputs']
+                        inactive_ports = [port for port in all_output_ports if port not in active_ports]
+
+                        if inactive_ports:
+                            logger.info(" -> 비활성 포트 감지 (%d개): %s",
+                                       len(inactive_ports),
+                                       [port.get('id') for port in inactive_ports])
+
+                            for port in inactive_ports:
+                                port_id = port.get('id')
+                                if port_id:
+                                    # 이 포트와 연결된 모든 다음 노드들을 찾아서 제외
+                                    connected_edges = [edge for edge in self.edges
+                                                     if edge['source']['nodeId'] == node_id and edge['source']['portId'] == port_id]
+
+                                    for edge in connected_edges:
+                                        target_node_id = edge['target']['nodeId']
+                                        # 해당 노드와 그 후속 노드들을 모두 제외
+                                        self._exclude_node_and_descendants(target_node_id, excluded_nodes)
+                                        logger.info(" -> dependency 조건으로 인해 노드 '%s' 및 후속 노드들 제외 (비활성 포트: %s)",
+                                                   target_node_id, port_id)
 
             if self.is_cancelled():
                 logger.info("Workflow execution cancelled after node processing for workflow %s", self.workflow_id)

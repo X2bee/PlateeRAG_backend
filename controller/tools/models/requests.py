@@ -11,6 +11,8 @@ class ToolData(BaseModel):
     description: str = ""
     api_header: Optional[Dict[str, Any]] = {}
     api_body: Optional[Dict[str, Any]] = {}
+    static_body: Optional[Dict[str, Any]] = {}
+    body_type: Optional[str] = "application/json"
     api_url: str
     api_method: str = "GET"
     api_timeout: int = 30

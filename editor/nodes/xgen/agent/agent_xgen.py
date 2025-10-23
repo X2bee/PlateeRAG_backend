@@ -64,7 +64,10 @@ class AgentXgenNode(Node):
         {"id": "args_schema", "name": "ArgsSchema", "type": "OutputSchema"},
         {"id": "plan", "name": "Plan", "type": "PLAN", "required": False},
     ]
-    outputs = [{"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True}]
+    outputs = [
+        {"id": "stream", "name": "Stream", "type": "STREAM STR", "stream": True, "dependency": "streaming", "dependencyValue": True},
+        {"id": "result", "name": "Result", "type": "STR", "dependency": "streaming", "dependencyValue": False},
+    ]
     parameters = [
         {
             "id": "provider",
@@ -233,6 +236,87 @@ class AgentXgenNode(Node):
         config_composer = get_config_composer(request)
         return config_composer.get_config_by_name("VLLM_API_BASE_URL").value
 
+    def _normalize_text_input(self, text: Any) -> str:
+        """
+        text 입력을 정규화하여 문자열로 변환합니다.
+        LangChain 1.0.0의 HumanMessage는 content가 str 또는 list[str|dict]만 허용하므로
+        딕셔너리나 다른 타입이 들어오면 적절히 변환합니다.
+
+        Args:
+            text: 입력 텍스트 (str, dict, list 등 다양한 타입 가능)
+
+        Returns:
+            정규화된 문자열
+        """
+        import json
+
+        # 이미 문자열인 경우 그대로 반환
+        if isinstance(text, str):
+            return text
+
+        # None인 경우 빈 문자열 반환
+        if text is None:
+            logger.warning("[NORMALIZE_TEXT] text가 None입니다. 빈 문자열로 변환합니다.")
+            return ""
+
+        # 딕셔너리인 경우
+        if isinstance(text, dict):
+            logger.info(f"[NORMALIZE_TEXT] 딕셔너리 입력 감지: {text}")
+
+            # 일반적인 키들 우선순위로 확인
+            priority_keys = [
+                'user_text', 'text', 'content', 'message', 'user_message', 'input',
+            ]
+
+            for key in priority_keys:
+                if key in text:
+                    value = text[key]
+                    if isinstance(value, str) and value.strip():
+                        logger.info(f"[NORMALIZE_TEXT] '{key}' 키에서 텍스트 추출: {value}")
+                        return value
+
+            # 우선순위 키에서 찾지 못한 경우, 첫 번째 문자열 값 찾기
+            for key, value in text.items():
+                if isinstance(value, str) and value.strip():
+                    logger.info(f"[NORMALIZE_TEXT] '{key}' 키에서 텍스트 추출: {value}")
+                    return value
+
+            # 문자열 값이 없으면 JSON 문자열로 변환
+            try:
+                json_str = json.dumps(text, ensure_ascii=False, indent=2)
+                logger.info(f"[NORMALIZE_TEXT] 딕셔너리를 JSON 문자열로 변환")
+                return json_str
+            except (TypeError, ValueError) as e:
+                logger.warning(f"[NORMALIZE_TEXT] JSON 변환 실패: {e}, str()로 변환")
+                return str(text)
+
+        # 리스트인 경우
+        if isinstance(text, (list, tuple)):
+            logger.info(f"[NORMALIZE_TEXT] 리스트/튜플 입력 감지: {type(text)}")
+
+            # 문자열 리스트인 경우 결합
+            if all(isinstance(item, str) for item in text):
+                result = ' '.join(text)
+                logger.info(f"[NORMALIZE_TEXT] 문자열 리스트를 공백으로 결합")
+                return result
+
+            # JSON 문자열로 변환
+            try:
+                json_str = json.dumps(text, ensure_ascii=False, indent=2)
+                logger.info(f"[NORMALIZE_TEXT] 리스트를 JSON 문자열로 변환")
+                return json_str
+            except (TypeError, ValueError) as e:
+                logger.warning(f"[NORMALIZE_TEXT] JSON 변환 실패: {e}, str()로 변환")
+                return str(text)
+
+        # 기타 타입 (int, float, bool 등)
+        logger.info(f"[NORMALIZE_TEXT] 기타 타입 입력 ({type(text)}): {text}")
+        try:
+            return str(text)
+        except Exception as e:
+            logger.error(f"[NORMALIZE_TEXT] 문자열 변환 실패: {e}, 빈 문자열 반환")
+            return ""
+
     def execute(
         self,
         text: str,
@@ -261,6 +345,9 @@ class AgentXgenNode(Node):
         Args:
             streaming: True일 경우 Generator 반환, False일 경우 str 반환
         """
+        # text 입력 전처리: 딕셔너리, 리스트 등 다양한 타입을 문자열로 변환
+        text = self._normalize_text_input(text)
+
         if provider == "openai":
             model = openai_model
             base_url = None
@@ -360,7 +447,7 @@ class AgentXgenNode(Node):
             system_prompt_text = default_prompt
             agent_summarization_middleware = SummarizationMiddleware(
                 model=llm,
-                max_tokens_before_summary=4000,
+                max_tokens_before_summary=25000,
                 messages_to_keep=10,
             )
 
@@ -484,7 +571,7 @@ class AgentXgenNode(Node):
             system_prompt_text = default_prompt
             agent_summarization_middleware = SummarizationMiddleware(
                 model=llm,
-                max_tokens_before_summary=4000,
+                max_tokens_before_summary=25000,
                 messages_to_keep=10,
             )
 
