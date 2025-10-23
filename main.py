@@ -316,11 +316,15 @@ def load_workflow_templates(app_db, templates_dir: str):
 async def lifespan(app: FastAPI):
     """애플리케이션 라이프사이클 관리"""
     try:
+        # ⚠️ 주의: 이 자동 복구는 긴급 상황용입니다.
+        # 정상적으로는 Step 7.6의 자동 로드가 Manager를 복원합니다.
+        # fix_existing_managers는 Redis 데이터 손상 시에만 필요합니다.
         try:
             from fix_existing_managers import recover_all_managers
-            recover_all_managers()
+            # recover_all_managers()  # 기본적으로 비활성화 (필요 시 주석 해제)
+            logger.info("ℹ️  긴급 복구 스크립트는 비활성화되어 있습니다 (정상)")
         except Exception as e:
-            logger.error(f"⚠️ 매니저 자동 복구 실패: {e}")
+            logger.debug(f"긴급 복구 스크립트 로드 실패 (무시 가능): {e}")
             
         print_xgen_logo()
         logger.info("🌟 Starting XGEN application lifespan...")
@@ -461,117 +465,115 @@ async def lifespan(app: FastAPI):
         app.state.data_manager_registry = DataManagerRegistry(app_db_manager=app.state.app_db)
         logger.info("✅ Step 7.5: Data manager registry initialized successfully!")
 
-        # ⭐ 7.6. 저장된 매니저 자동 로드 추가
-        print_step_banner(7.6, "AUTO-LOAD STORED MANAGERS", "Loading managers from storage to memory")
-        logger.info("⚙️  Step 7.6: Auto-loading stored managers...")
+        # ⭐ 7.6. 저장된 매니저 메타데이터 초기화
+        print_step_banner(7.6, "MANAGER METADATA INIT", "Initializing manager metadata (Lazy Loading)")
+        logger.info("⚙️  Step 7.6: Manager metadata initialization...")
 
         try:
-            import io
-            import pandas as pd
-            from service.data_manager.data_manager import DataManager
-            
             registry = app.state.data_manager_registry
-            loaded_count = 0
-            failed_count = 0
-            
-            # Redis에서 모든 매니저 조회
+
+            # 🧹 고아 Manager 자동 정리 (선택 사항)
+            AUTO_CLEANUP_ORPHANED = os.getenv("AUTO_CLEANUP_ORPHANED_MANAGERS", "false").lower() == "true"
+
+            if AUTO_CLEANUP_ORPHANED:
+                logger.info("🧹 고아 Manager 자동 정리 시작...")
+                orphaned_count = 0
+                orphaned_manager_ids = []
+
+                cursor = 0
+                all_manager_ids = set()
+
+                # 모든 Manager ID 수집
+                while True:
+                    cursor, keys = registry.redis_manager.redis_client.scan(
+                        cursor=cursor,
+                        match="manager:*:*",
+                        count=100
+                    )
+                    for key in keys:
+                        if isinstance(key, bytes):
+                            key = key.decode('utf-8')
+                        parts = key.split(':')
+                        if len(parts) >= 3:
+                            all_manager_ids.add(parts[1])
+                    if cursor == 0:
+                        break
+
+                # 고아 Manager 찾아서 정리
+                for manager_id in all_manager_ids:
+                    owner = registry.redis_manager.get_manager_owner(manager_id)
+                    if not owner:
+                        # Owner 없으면 관련 키 전부 삭제
+                        try:
+                            patterns = [
+                                f"manager:{manager_id}:owner",
+                                f"manager:{manager_id}:dataset_id",
+                                f"manager:{manager_id}:state",
+                                f"manager:{manager_id}:created_at",
+                                f"manager:{manager_id}:resource_stats",
+                            ]
+                            for pattern in patterns:
+                                registry.redis_manager.redis_client.delete(pattern)
+                            orphaned_manager_ids.append(manager_id)
+                            orphaned_count += 1
+                            logger.debug(f"  └─ 🗑️  고아 Manager 삭제: {manager_id}")
+                        except Exception as e:
+                            logger.warning(f"  └─ ⚠️  삭제 실패: {manager_id} - {e}")
+
+                # DB Sync Config에서도 정리
+                if orphaned_manager_ids:
+                    try:
+                        from service.database.models.db_sync_config import DBSyncConfig
+                        deleted_db_configs = 0
+                        for manager_id in orphaned_manager_ids:
+                            configs = app.state.app_db.find_by_condition(
+                                DBSyncConfig,
+                                {'manager_id': manager_id},
+                                limit=10
+                            )
+                            for config in configs:
+                                app.state.app_db.delete(DBSyncConfig, config.id)
+                                deleted_db_configs += 1
+
+                        if deleted_db_configs > 0:
+                            logger.info(f"  └─ 🗑️  DB Sync Config {deleted_db_configs}개 정리")
+                    except Exception as e:
+                        logger.warning(f"  └─ ⚠️  DB Sync Config 정리 실패: {e}")
+
+                if orphaned_count > 0:
+                    logger.info(f"  └─ 🧹 고아 Manager {orphaned_count}개 정리 완료")
+                else:
+                    logger.info(f"  └─ ✅ 고아 Manager 없음")
+
+            # Redis에서 유효한 매니저 수 확인
             cursor = 0
-            all_manager_ids = set()
-            
+            valid_manager_ids = set()
+
             while True:
                 cursor, keys = registry.redis_manager.redis_client.scan(
                     cursor=cursor,
                     match="manager:*:owner",
                     count=100
                 )
-                
+
                 for key in keys:
                     if isinstance(key, bytes):
                         key = key.decode('utf-8')
-                    
+
                     parts = key.split(':')
                     if len(parts) >= 3:
                         manager_id = parts[1]
-                        all_manager_ids.add(manager_id)
-                
+                        valid_manager_ids.add(manager_id)
+
                 if cursor == 0:
                     break
-            
-            logger.info(f"  └─ 발견된 매니저: {len(all_manager_ids)}개")
-            
-            # 각 매니저를 메모리에 로드
-            for manager_id in all_manager_ids:
-                try:
-                    # 소유자 조회
-                    owner = registry.redis_manager.redis_client.get(f"manager:{manager_id}:owner")
-                    if not owner:
-                        continue
-                    
-                    # 현재 버전 조회
-                    current_version = registry.redis_manager.get_current_version(manager_id)
-                    if current_version == 0:
-                        logger.debug(f"  ⏭️  스킵: {manager_id} (버전 없음)")
-                        continue
-                    
-                    # 버전 메타데이터 조회
-                    version_info = registry.redis_manager.get_version_metadata(
-                        manager_id, current_version - 1
-                    )
-                    
-                    if not version_info or version_info.get('num_rows', 0) == 0:
-                        logger.debug(f"  ⏭️  스킵: {manager_id} (데이터 없음)")
-                        continue
-                    
-                    # MinIO에서 Parquet 로드
-                    try:
-                        # versions 버킷 시도
-                        version_key = f"{manager_id}/version_{current_version - 1}.parquet"
-                        response = registry.minio_storage.client.get_object(
-                            registry.minio_storage.versions_bucket,
-                            version_key
-                        )
-                        
-                        buffer = io.BytesIO(response.read())
-                        response.close()
-                        response.release_conn()
-                        
-                        df = pd.read_parquet(buffer)
-                        
-                    except Exception as e:
-                        # raw-datasets 버킷 시도
-                        try:
-                            original_key = f"{owner}/{manager_id}/original.parquet"
-                            response = registry.minio_storage.client.get_object(
-                                registry.minio_storage.raw_datasets_bucket,
-                                original_key
-                            )
-                            
-                            buffer = io.BytesIO(response.read())
-                            response.close()
-                            response.release_conn()
-                            
-                            df = pd.read_parquet(buffer)
-                            
-                        except Exception as e2:
-                            logger.warning(f"  ⚠️  실패: {manager_id} - {e2}")
-                            failed_count += 1
-                            continue
-                    
-                    # 메모리에 DataManager 생성 및 등록
-                    new_manager = DataManager(manager_id, df)
-                    registry.register_manager(manager_id, new_manager, owner)
-                    
-                    loaded_count += 1
-                    logger.debug(f"  ✅ 로드: {manager_id} ({len(df)} rows)")
-                    
-                except Exception as e:
-                    logger.error(f"  ❌ 오류: {manager_id} - {e}")
-                    failed_count += 1
-            
-            logger.info(f"✅ Step 7.6: 자동 로드 완료! 성공: {loaded_count}개, 실패: {failed_count}개")
-            
+
+            logger.info(f"✅ Step 7.6: 발견된 매니저: {len(valid_manager_ids)}개")
+            logger.info(f"  └─ 💡 Lazy Loading 전략: API 호출 시 자동 복원됩니다")
+            logger.info(f"  └─ 자동 복원 경로: DataManagerRegistry.get_manager()")
+
         except Exception as e:
-            logger.error(f"❌ Step 7.6: 자동 로드 실패: {e}", exc_info=True)
+            logger.error(f"❌ Step 7.6: 메타데이터 초기화 실패: {e}", exc_info=True)
         # 7.7. MLflow artifact service initialization
         print_step_banner(7.7, "MLFLOW ARTIFACT SERVICE", "Integrating MLflow tracking and artifacts")
         mlflow_tracking_uri = os.getenv("MLFLOW_URL", "").strip()

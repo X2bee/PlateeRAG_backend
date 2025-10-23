@@ -3,6 +3,7 @@ from minio import Minio
 from minio.error import S3Error
 import io
 import json
+import os
 from datetime import datetime
 import logging
 from typing import Dict, Any, Optional
@@ -10,11 +11,18 @@ import pyarrow.parquet as pq
 import pyarrow as pa
 
 logger = logging.getLogger(__name__)
+
 class MinioDataStorage:
-    def __init__(self, endpoint: str = "minio.x2bee.com",
-                access_key: str = "minioadmin",
-                secret_key: str = "minioadmin123",
-                secure: bool = True):
+    def __init__(self, endpoint: Optional[str] = None,
+                access_key: Optional[str] = None,
+                secret_key: Optional[str] = None,
+                secure: Optional[bool] = None):
+        # 환경변수에서 읽기 (기본값 제공)
+        endpoint = endpoint or os.getenv('MINIO_ENDPOINT', 'minio.x2bee.com')
+        access_key = access_key or os.getenv('MINIO_DATA_ACCESS_KEY', 'minioadmin')
+        secret_key = secret_key or os.getenv('MINIO_DATA_SECRET_KEY', 'minioadmin123')
+        secure = secure if secure is not None else os.getenv('MINIO_SECURE', 'true').lower() == 'true'
+
         self.client = Minio(
             endpoint,
             access_key=access_key,
@@ -139,30 +147,57 @@ class MinioDataStorage:
             logger.error(f"버전 목록 조회 실패: {e}")
             return []
 
-    def delete_dataset(self, user_id: str, dataset_id: str):
-        """데이터셋 완전 삭제"""
+    def delete_dataset(self, dataset_id: str, user_id: str) -> int:
+        """
+        데이터셋 완전 삭제 (원본 + 모든 버전)
+
+        Args:
+            dataset_id: 데이터셋 ID
+            user_id: 사용자 ID (소유권 확인용)
+
+        Returns:
+            int: 삭제된 파일 개수
+        """
+        deleted_count = 0
+
         try:
-            # 원본 삭제
-            original = f"{user_id}/{dataset_id}/original.parquet"
+            # 1. 원본 삭제 (raw-datasets bucket)
+            original_path = f"{user_id}/{dataset_id}/original.parquet"
             try:
-                self.client.remove_object(self.raw_datasets_bucket, original)
-            except:
-                pass
-            
-            # 모든 버전 삭제
-            objects = self.client.list_objects(
-                self.versions_bucket,
-                prefix=f"{dataset_id}/",
-                recursive=True
-            )
-            
-            for obj in objects:
-                self.client.remove_object(self.versions_bucket, obj.object_name)
-            
-            logger.info(f"데이터셋 삭제: {dataset_id}")
-            
+                self.client.remove_object(self.raw_datasets_bucket, original_path)
+                deleted_count += 1
+                logger.info(f"  ✅ 원본 삭제: {original_path}")
+            except Exception as e:
+                logger.debug(f"  원본 없음 또는 삭제 실패: {original_path}, {e}")
+
+            # 2. 모든 버전 삭제 (dataset-versions bucket)
+            try:
+                objects = self.client.list_objects(
+                    self.versions_bucket,
+                    prefix=f"{dataset_id}/",
+                    recursive=True
+                )
+
+                for obj in objects:
+                    try:
+                        self.client.remove_object(self.versions_bucket, obj.object_name)
+                        deleted_count += 1
+                        logger.debug(f"  ✅ 버전 삭제: {obj.object_name}")
+                    except Exception as e:
+                        logger.warning(f"  ⚠️  버전 삭제 실패: {obj.object_name}, {e}")
+
+            except Exception as e:
+                logger.warning(f"  ⚠️  버전 목록 조회 실패: {e}")
+
+            logger.info(f"✅ 데이터셋 삭제 완료: {dataset_id} ({deleted_count}개 파일)")
+            return deleted_count
+
         except S3Error as e:
-            logger.error(f"삭제 실패: {e}")
+            logger.error(f"❌ MinIO 삭제 실패: {dataset_id}, {e}")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"❌ 예상치 못한 삭제 오류: {dataset_id}, {e}")
+            return deleted_count
 
     def delete_manager_data(self, manager_id: str):
         """매니저의 모든 버전 데이터 삭제"""

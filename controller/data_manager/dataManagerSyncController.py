@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from controller.helper.singletonHelper import get_db_sync_scheduler  # ✨ 변경
 from controller.helper.controllerHelper import extract_user_id_from_request, validate_db_config
+from service.data_manager.timezone_utils import now_kst_iso
 
 router = APIRouter(prefix="/sync", tags=["data-manager-sync"])
 logger = logging.getLogger("data-manager-sync-controller")
@@ -311,17 +312,13 @@ async def trigger_manual_sync(request: Request, sync_request: ManualSyncRequest)
         scheduler = get_db_sync_scheduler(request)
         
         result = scheduler.trigger_manual_sync(sync_request.manager_id, user_id)
-        
+
         logger.info(f"✅ 수동 동기화 실행: manager={sync_request.manager_id}")
-        
-        # ✨ 실행 결과 상세 정보 추가
-        return {
-            'success': True,
-            'message': '수동 동기화가 완료되었습니다',
-            'manager_id': sync_request.manager_id,
-            'sync_result': result,  # status, message, duration_seconds 등
-            'timestamp': datetime.now().isoformat()  # ✨ 추가
-        }
+
+        # ✨ 실행 결과 반환 (trigger_manual_sync가 이미 올바른 형식으로 반환)
+        result['manager_id'] = sync_request.manager_id
+        result['timestamp'] = now_kst_iso()
+        return result
         
     except HTTPException:
         raise
@@ -393,7 +390,7 @@ async def update_mlflow_config(request: Request, update_request: UpdateMLflowCon
         db_config.mlflow_enabled = update_request.mlflow_enabled
         db_config.mlflow_experiment_name = update_request.mlflow_experiment_name
         db_config.mlflow_tracking_uri = update_request.mlflow_tracking_uri
-        db_config.updated_at = datetime.now().isoformat()
+        db_config.updated_at = now_kst_iso()
         
         app_db.update(db_config)
         

@@ -5,7 +5,7 @@ RAG 시스템의 문서 및 컬렉션 관련 API 엔드포인트를 제공합니
 문서 업로드, 검색, 컬렉션 관리 등의 기능을 담당합니다.
 """
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
@@ -305,6 +305,299 @@ async def get_collection_info(request: Request, collection_name: str):
         raise HTTPException(status_code=500, detail=f"Failed to get collection info: {str(e)}")
 
 # Document Management Endpoints
+async def _process_repository_upload_background(
+    task_id: str,
+    gitlab_url: str,
+    gitlab_token: str,
+    repository_path: str,
+    branch: str,
+    collection_name: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    user_id: int,
+    metadata_str: Optional[str],
+    enable_annotation: bool,
+    enable_api_extraction: bool,
+    request: Request
+):
+    """백그라운드에서 레포지토리 업로드 처리"""
+    from service.retrieval.upload_progress_manager import upload_progress_manager
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    try:
+        backend_log.info("Starting repository upload",
+                        metadata={"gitlab_url": gitlab_url, "repository_path": repository_path,
+                                "branch": branch, "collection_name": collection_name,
+                                "chunk_size": chunk_size, "chunk_overlap": chunk_overlap,
+                                "enable_annotation": enable_annotation,
+                                "enable_api_extraction": enable_api_extraction,
+                                "task_id": task_id})
+
+        rag_service = get_rag_service(request)
+        document_processor = rag_service.document_processor
+
+        # Define progress callback with cancel check
+        def progress_callback(**kwargs):
+            # Check if task is cancelled
+            if upload_progress_manager.is_cancelled(task_id):
+                raise Exception("Upload cancelled by user")
+            upload_progress_manager.update_progress(task_id, **kwargs)
+
+        # 레포지토리에서 코드 추출
+        backend_log.info("Extracting code from repository")
+
+        # Check cancellation before starting
+        if upload_progress_manager.is_cancelled(task_id):
+            logger.info(f"Task {task_id} cancelled before extraction")
+            return
+
+        upload_progress_manager.update_progress(
+            task_id,
+            status='extracting',
+            progress=5.0,
+            current_step='Starting code extraction from repository...',
+            current_step_number=1,
+            message='Preparing to extract code'
+        )
+
+        extraction_result = await document_processor.extract_text_from_repository(
+            gitlab_url=gitlab_url,
+            gitlab_token=gitlab_token,
+            repository_path=repository_path,
+            branch=branch,
+            enable_annotation=enable_annotation,
+            enable_api_extraction=enable_api_extraction,
+            progress_callback=progress_callback
+        )
+
+        # extraction_result는 dict: {'files': [...], 'api_info': ..., 'metadata': ...}
+        files_data = extraction_result.get('files', [])
+
+        if not files_data:
+            upload_progress_manager.update_progress(
+                task_id,
+                status='error',
+                error="No code files found or repository is empty"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="No code files found or repository is empty"
+            )
+
+        backend_log.info("Code extracted successfully",
+                        metadata={"total_files": len(files_data)})
+
+        # Update progress: extraction complete, start processing files
+        upload_progress_manager.update_progress(
+            task_id,
+            status='chunking',
+            progress=55.0,
+            current_step='Processing files...',
+            current_step_number=5,
+            message=f'Processing {len(files_data)} files individually',
+            total_files=len(files_data),
+            processed_files=0
+        )
+
+        # 공통 메타데이터
+        base_metadata = {
+            "source_type": "gitlab_repository",
+            "gitlab_url": gitlab_url,
+            "repository_path": repository_path,
+            "branch": branch,
+            "enable_annotation": enable_annotation,
+            "enable_api_extraction": enable_api_extraction
+        }
+
+        if metadata_str:
+            try:
+                user_metadata = json.loads(metadata_str)
+                base_metadata.update(user_metadata)
+            except json.JSONDecodeError:
+                backend_log.warn("Invalid metadata JSON provided",
+                               metadata={"raw_metadata": metadata_str})
+
+        # 각 파일을 개별 문서로 처리
+        upload_dir = Path("downloads") / collection_name
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        processed_count = 0
+        total_files = len(files_data)
+
+        for idx, file_info in enumerate(files_data):
+            # Check cancellation
+            if upload_progress_manager.is_cancelled(task_id):
+                logger.info(f"Task {task_id} cancelled during file processing")
+                return
+
+            file_path = file_info.get('path', 'unknown')
+            file_content = file_info.get('content', '')
+
+            # Skip empty files
+            if not file_content or len(file_content.strip()) < 10:
+                logger.info(f"Skipping empty file: {file_path}")
+                continue
+
+            # Progress update
+            progress_pct = 55.0 + (40.0 * (idx + 1) / total_files)
+            upload_progress_manager.update_progress(
+                task_id,
+                status='chunking',
+                progress=progress_pct,
+                current_step=f'Processing file {idx + 1}/{total_files}',
+                current_step_number=5,
+                message=f'Processing {file_path}',
+                total_files=total_files,
+                processed_files=idx + 1,
+                current_file=file_path
+            )
+
+            # 파일별 메타데이터
+            file_metadata = {
+                **base_metadata,
+                "file_path": file_path,
+                "file_language": file_info.get('language', 'unknown'),
+                "file_size": file_info.get('size', 0),
+                "original_filename": os.path.basename(file_path)
+            }
+
+            # 임시 파일 저장
+            safe_filename = file_path.replace('/', '_').replace('\\', '_')
+            temp_file_path = upload_dir / f"{safe_filename}"
+
+            async with aiofiles.open(temp_file_path, 'w', encoding='utf-8') as f:
+                await f.write(file_content)
+
+            # 개별 파일 처리
+            try:
+                await rag_service.process_document(
+                    user_id,
+                    app_db,
+                    str(temp_file_path),
+                    collection_name,
+                    chunk_size,
+                    chunk_overlap,
+                    file_metadata,
+                    use_llm_metadata=True,
+                    process_type="default"
+                )
+                processed_count += 1
+
+                # 임시 파일 삭제
+                temp_file_path.unlink()
+
+            except Exception as e:
+                logger.error(f"Failed to process file {file_path}: {e}")
+                # 계속 진행
+
+        # Update progress: storing complete
+        upload_progress_manager.update_progress(
+            task_id,
+            status='storing',
+            progress=95.0,
+            current_step='Finalizing storage...',
+            current_step_number=6,
+            message=f'Processed {processed_count}/{total_files} files successfully'
+        )
+
+        # Mark as completed
+        upload_progress_manager.update_progress(
+            task_id,
+            status='completed',
+            progress=100.0,
+            current_step='Repository upload completed successfully',
+            current_step_number=7,
+            message=f'Successfully processed {processed_count} files from {repository_path} ({branch})'
+        )
+
+        backend_log.success("Repository uploaded and processed successfully",
+                          metadata={"repository_path": repository_path, "branch": branch,
+                                  "collection_name": collection_name,
+                                  "total_files": total_files,
+                                  "processed_files": processed_count,
+                                  "chunk_size": chunk_size, "chunk_overlap": chunk_overlap,
+                                  "enable_annotation": enable_annotation,
+                                  "enable_api_extraction": enable_api_extraction,
+                                  "task_id": task_id})
+
+    except Exception as e:
+        backend_log.error("Repository upload failed", exception=e,
+                         metadata={"repository_path": repository_path,
+                                 "branch": branch,
+                                 "collection_name": collection_name,
+                                 "task_id": task_id})
+        logger.error("Repository upload failed: %s", e)
+
+        # Update progress with error
+        upload_progress_manager.update_progress(
+            task_id,
+            status='error',
+            error=str(e)
+        )
+
+
+@router.post("/documents/upload/repository")
+async def upload_repository(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    gitlab_url: str = Form(...),
+    gitlab_token: str = Form(...),
+    repository_path: str = Form(...),
+    branch: str = Form("main"),
+    collection_name: str = Form(...),
+    chunk_size: int = Form(4000),
+    chunk_overlap: int = Form(1000),
+    user_id: int = Form(...),
+    metadata: Optional[str] = Form(None),
+    enable_annotation: bool = Form(False),
+    enable_api_extraction: bool = Form(False)
+):
+    """GitLab 레포지토리 업로드 및 처리 (비동기)"""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    # Import progress manager
+    from service.retrieval.upload_progress_manager import upload_progress_manager
+
+    # Create progress tracking task
+    task_id = upload_progress_manager.create_task(
+        user_id=user_id,
+        collection_name=collection_name,
+        repository_path=repository_path,
+        branch=branch
+    )
+
+    # 백그라운드에서 처리 시작
+    background_tasks.add_task(
+        _process_repository_upload_background,
+        task_id=task_id,
+        gitlab_url=gitlab_url,
+        gitlab_token=gitlab_token,
+        repository_path=repository_path,
+        branch=branch,
+        collection_name=collection_name,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        user_id=user_id,
+        metadata_str=metadata,
+        enable_annotation=enable_annotation,
+        enable_api_extraction=enable_api_extraction,
+        request=request
+    )
+
+    logger.info(f"Repository upload started in background: task_id={task_id}")
+
+    # 즉시 task_id 반환
+    return {
+        "success": True,
+        "task_id": task_id,
+        "message": "Repository upload started. Use task_id to track progress.",
+        "repository_path": repository_path,
+        "branch": branch
+    }
+
 @router.post("/documents/upload")
 async def upload_document(
     request: Request,
