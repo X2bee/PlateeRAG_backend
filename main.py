@@ -734,6 +734,16 @@ async def lifespan(app: FastAPI):
         print_step_banner("FINAL", "XGEN STARTUP COMPLETE", "All systems operational! 🎉")
         logger.info("🎉 XGEN application startup complete! Ready to serve requests.")
 
+        # SSE 세션 관리자 자동 정리 태스크 시작
+        print_step_banner("SSE", "SSE SESSION MANAGER", "Starting SSE session cleanup task")
+        logger.info("⚙️  SSE Session Manager: Starting cleanup task...")
+        try:
+            from service.retrieval.sse_session_manager import sse_session_manager
+            sse_session_manager.start_cleanup_task(interval_minutes=10)
+            logger.info("✅ SSE Session Manager: Cleanup task started (10 min interval)")
+        except Exception as e:
+            logger.error(f"❌ SSE Session Manager: Failed to start cleanup task: {e}")
+
     except Exception as e:
         logger.error(f"💥 Error during startup: {e}")
         logger.info("🔄 Application will continue despite startup error")
@@ -748,6 +758,15 @@ async def lifespan(app: FastAPI):
     └─────────────────────────────────────────────────────┘
     """)
     try:
+        # SSE 세션 관리자 정리
+        try:
+            from service.retrieval.sse_session_manager import sse_session_manager
+            logger.info("🔄 Stopping SSE session manager cleanup task...")
+            sse_session_manager.stop_cleanup_task()
+            logger.info("✅ SSE session manager cleanup task stopped")
+        except Exception as e:
+            logger.error(f"❌ Failed to stop SSE session manager: {e}")
+        
         if hasattr(app.state, 'db_sync_scheduler') and app.state.db_sync_scheduler:
             logger.info("🔄 Shutting down DB Sync Scheduler...")
             from controller.helper.singletonHelper import shutdown_db_sync_scheduler

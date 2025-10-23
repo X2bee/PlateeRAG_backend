@@ -30,6 +30,7 @@ from service.embedding.embedding_factory import EmbeddingFactory
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
+from service.retrieval.sse_session_manager import sse_session_manager
 
 logger = logging.getLogger("retrieval-controller")
 router = APIRouter(prefix="/retrieval", tags=["retrieval"])
@@ -725,6 +726,11 @@ async def upload_document_sse(
     """문서 업로드 및 처리 (SSE 지원)
 
     세션 단위로 청크 처리 진행 상황을 Server-Sent Events로 스트리밍합니다.
+    
+    병렬 처리 지원:
+    - 각 세션은 독립적으로 처리됩니다.
+    - 세션별 진행 상황은 격리된 큐를 통해 추적됩니다.
+    - 여러 세션이 동시에 실행될 수 있습니다.
     """
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID not found in request")
@@ -736,6 +742,14 @@ async def upload_document_sse(
     file_content = await file.read()
     filename = file.filename
 
+    # 세션 생성 (세션 관리자를 통해 격리)
+    sse_session = await sse_session_manager.create_session(
+        session_id=session,
+        user_id=user_id,
+        collection_name=collection_name,
+        filename=filename
+    )
+
     async def event_generator():
         app_db = get_db_manager(request)
         backend_log = create_logger(app_db, user_id, request)
@@ -744,6 +758,7 @@ async def upload_document_sse(
         current_process_type = process_type
 
         try:
+            sse_session.update_status("processing")
             file_extension = Path(filename).suffix[1:].lower() if filename else ""
 
             # SSE 이벤트: 시작
@@ -811,12 +826,12 @@ async def upload_document_sse(
             yield f"data: {json.dumps({'event': 'processing_start', 'session': session})}\n\n"
             await asyncio.sleep(0)
 
-            # 진행 상황을 SSE로 전송하기 위한 큐
-            progress_queue = asyncio.Queue()
+            # 진행 상황을 SSE로 전송하기 위한 큐 (세션별로 격리됨)
+            progress_queue = sse_session.progress_queue
 
             # 진행 상황 콜백 함수
             async def progress_callback(event_data):
-                await progress_queue.put(event_data)
+                await sse_session.put_event(event_data)
 
             # 백그라운드에서 문서 처리 실행
             async def process_task():
@@ -833,19 +848,23 @@ async def upload_document_sse(
                         process_type=current_process_type,
                         progress_callback=progress_callback
                     )
-                    await progress_queue.put({'event': 'processing_complete', 'result': result})
+                    await sse_session.put_event({'event': 'processing_complete', 'result': result})
                 except Exception as e:
-                    await progress_queue.put({'event': 'processing_error', 'error': str(e)})
+                    await sse_session.put_event({'event': 'processing_error', 'error': str(e)})
 
-            # 문서 처리 태스크 시작
-            _ = asyncio.create_task(process_task())
+            # 문서 처리 태스크 시작 (세션에 태스크 저장)
+            sse_session.task = asyncio.create_task(process_task())
 
             # 진행 상황 이벤트를 SSE로 전송
             result = None
             while True:
                 try:
                     # 타임아웃을 설정하여 주기적으로 체크
-                    event_data = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+                    event_data = await sse_session.get_event(timeout=1.0)
+                    
+                    if event_data is None:
+                        # 타임아웃 시 계속 대기
+                        continue
 
                     if event_data['event'] == 'total_chunks':
                         yield f"data: {json.dumps({'event': 'total_chunks', 'session': session, 'total_chunks': event_data['total_chunks']})}\n\n"
@@ -879,13 +898,22 @@ async def upload_document_sse(
                         await asyncio.sleep(0)
                     elif event_data['event'] == 'processing_complete':
                         result = event_data['result']
+                        sse_session.result = result
+                        sse_session.update_status("completed")
                         break
                     elif event_data['event'] == 'processing_error':
+                        sse_session.error = event_data['error']
+                        sse_session.update_status("error")
                         raise Exception(event_data['error'])
 
                 except asyncio.TimeoutError:
                     # 타임아웃 시 계속 대기
                     continue
+                except Exception as e:
+                    # 에러 발생 시 세션 상태 업데이트
+                    sse_session.update_status("error")
+                    sse_session.error = str(e)
+                    raise
 
             # SSE 이벤트: 완료
             backend_log.success("Document uploaded and processed successfully (SSE)",
@@ -898,6 +926,8 @@ async def upload_document_sse(
             await asyncio.sleep(0)
 
         except HTTPException as he:
+            sse_session.update_status("error")
+            sse_session.error = he.detail
             backend_log.error("Document upload failed (SSE)", exception=he,
                              metadata={"filename": filename if 'filename' in locals() else None,
                                      "collection_name": collection_name,
@@ -905,6 +935,8 @@ async def upload_document_sse(
                                      "session": session})
             yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': he.detail})}\n\n"
         except Exception as e:
+            sse_session.update_status("error")
+            sse_session.error = str(e)
             backend_log.error("Document upload failed (SSE)", exception=e,
                              metadata={"filename": filename if 'filename' in locals() else None,
                                      "collection_name": collection_name,
@@ -912,6 +944,9 @@ async def upload_document_sse(
                                      "session": session})
             logger.error("Document upload failed: %s", e)
             yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': str(e)})}\n\n"
+        finally:
+            # 세션 정리 (1시간 후 자동 정리됨)
+            logger.info(f"Session {session} generator completed. Status: {sse_session.status}")
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -1318,3 +1353,124 @@ async def remake_collection(request: Request, remake_request: CollectionRemakeRe
     except Exception as e:
         logger.error(f"Failed to remake collection '{remake_request.collection_name}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to remake collection: {str(e)}")
+
+
+# SSE 세션 관리 API
+@router.get("/sessions/info")
+async def get_sessions_info(request: Request):
+    """모든 SSE 세션 정보 조회"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    
+    try:
+        sessions_info = await sse_session_manager.get_all_sessions_info()
+        return sessions_info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get sessions info: {str(e)}")
+
+
+@router.get("/sessions/{session_id}/status")
+async def get_session_status(request: Request, session_id: str):
+    """특정 SSE 세션 상태 조회"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    
+    try:
+        session = await sse_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # 사용자 권한 확인
+        if session.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access this session")
+        
+        return {
+            "session_id": session.session_id,
+            "user_id": session.user_id,
+            "filename": session.filename,
+            "collection_name": session.collection_name,
+            "status": session.status,
+            "created_at": session.created_at.isoformat(),
+            "updated_at": session.updated_at.isoformat(),
+            "result": session.result,
+            "error": session.error
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get session status: {str(e)}")
+
+
+@router.post("/sessions/{session_id}/cancel")
+async def cancel_session(request: Request, session_id: str):
+    """SSE 세션 취소"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    
+    try:
+        session = await sse_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # 사용자 권한 확인
+        if session.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to cancel this session")
+        
+        success = await sse_session_manager.cancel_session(session_id)
+        return {
+            "success": success,
+            "message": "Session cancelled successfully" if success else "Failed to cancel session"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cancel session: {str(e)}")
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(request: Request, session_id: str):
+    """SSE 세션 삭제"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    
+    try:
+        session = await sse_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # 사용자 권한 확인
+        if session.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this session")
+        
+        success = await sse_session_manager.remove_session(session_id)
+        return {
+            "success": success,
+            "message": "Session deleted successfully" if success else "Failed to delete session"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
+
+
+@router.post("/sessions/cleanup")
+async def cleanup_expired_sessions(request: Request, timeout_minutes: int = 60):
+    """만료된 SSE 세션 정리"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+    
+    try:
+        await sse_session_manager.cleanup_expired_sessions(timeout_minutes)
+        sessions_info = await sse_session_manager.get_all_sessions_info()
+        return {
+            "success": True,
+            "message": "Expired sessions cleaned up successfully",
+            "remaining_sessions": sessions_info
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cleanup sessions: {str(e)}")
