@@ -18,6 +18,116 @@ from service.database.logger_helper import create_logger
 logger = logging.getLogger("tool-storage")
 router = APIRouter()
 
+def html_element_to_dict(element):
+    """
+    BeautifulSoup element를 간단한 dict로 변환합니다.
+    태그 이름을 key로, 자식 요소와 content를 value로 하는 계층 구조를 생성합니다.
+    스타일, 클래스, id 등은 제거하고 content만 포함합니다.
+
+    Args:
+        element: BeautifulSoup element
+
+    Returns:
+        dict 형태로 변환된 element
+    """
+    from bs4 import NavigableString, Comment
+
+    # 주석은 무시
+    if isinstance(element, Comment):
+        return None
+
+    # 텍스트 노드
+    if isinstance(element, NavigableString):
+        text = str(element).strip()
+        return text if text else None
+
+    # 요소 노드 - 태그 이름을 key로 사용
+    tag_name = element.name
+    result = {}
+
+    # 자식 노드들을 수집
+    children = []
+    text_content = []
+
+    for child in element.children:
+        if isinstance(child, NavigableString):
+            text = str(child).strip()
+            if text:
+                text_content.append(text)
+        elif not isinstance(child, Comment):
+            child_dict = html_element_to_dict(child)
+            if child_dict is not None:
+                if isinstance(child_dict, dict):
+                    children.append(child_dict)
+                elif isinstance(child_dict, str):
+                    text_content.append(child_dict)
+
+    # content가 있으면 추가
+    if text_content:
+        result["content"] = " ".join(text_content)
+
+    # 자식 태그들을 태그 이름으로 그룹화
+    for child_dict in children:
+        if isinstance(child_dict, dict):
+            for key, value in child_dict.items():
+                if key in result:
+                    # 같은 태그가 여러 개면 리스트로
+                    if not isinstance(result[key], list):
+                        result[key] = [result[key]]
+                    result[key].append(value)
+                else:
+                    result[key] = value
+
+    # 결과가 비어있으면 None 반환
+    if not result:
+        return None
+
+    return {tag_name: result} if result else None
+
+
+def parse_html_response(html_text: str) -> dict:
+    """
+    HTML 응답을 간단한 계층 구조의 dict로 변환합니다.
+    스크립트와 스타일은 제거하고, 태그 계층 구조와 content만 포함합니다.
+
+    Args:
+        html_text: 원본 HTML 문자열
+
+    Returns:
+        계층 구조의 dict
+    """
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html_text, 'html.parser')
+
+        # script, style 태그 제거
+        for script in soup(["script", "style"]):
+            script.decompose()
+
+        # HTML을 dict 구조로 변환
+        html_dict = None
+        if soup.html:
+            html_dict = html_element_to_dict(soup.html)
+        elif soup.body:
+            html_dict = html_element_to_dict(soup.body)
+        else:
+            # html, body 태그가 없으면 첫 번째 요소 사용
+            first_element = next((child for child in soup.children if hasattr(child, 'name')), None)
+            if first_element:
+                html_dict = html_element_to_dict(first_element)
+
+        logger.info("Successfully parsed HTML response to dict structure")
+
+        return html_dict if html_dict else {}
+
+    except ImportError:
+        logger.warning("BeautifulSoup not available, returning error")
+        return {"error": "BeautifulSoup not installed"}
+    except Exception as html_parse_error:
+        logger.warning(f"Failed to parse HTML: {str(html_parse_error)}")
+        return {"error": str(html_parse_error)}
+
+
 @router.get("/simple-list")
 async def simple_list_tools(request: Request):
     """
@@ -223,6 +333,7 @@ async def save_tool(request: Request, tool_request: SaveToolRequest):
             api_method=tool_data.get('api_method', 'GET'),
             api_timeout=tool_data.get('api_timeout', 30),
             response_filter=tool_data.get('response_filter', False),
+            html_parser=tool_data.get('html_parser', False),
             response_filter_path=tool_data.get('response_filter_path', ''),
             response_filter_field=tool_data.get('response_filter_field', ''),
             status=tool_data.get('status', ''),
@@ -320,6 +431,8 @@ async def update_tool(request: Request, tool_id: int, function_id: str, update_d
             tool.api_timeout = update_dict["api_timeout"]
         if "response_filter" in update_dict:
             tool.response_filter = update_dict["response_filter"]
+        if "html_parser" in update_dict:
+            tool.html_parser = update_dict["html_parser"]
         if "response_filter_path" in update_dict:
             tool.response_filter_path = update_dict["response_filter_path"]
         if "response_filter_field" in update_dict:
@@ -446,6 +559,7 @@ async def test_api(request: Request, test_request: dict):
         body_type = test_request.get('body_type', 'application/json')
         api_timeout = test_request.get('api_timeout', 30)
         is_query_string = test_request.get('is_query_string', False)
+        html_parser = test_request.get('html_parser', True)  # HTML 파싱 여부 (기본값: True)
 
         if not api_url or not api_url.strip():
             raise HTTPException(status_code=400, detail="API URL is required")
@@ -473,7 +587,8 @@ async def test_api(request: Request, test_request: dict):
                             "has_headers": bool(api_headers),
                             "has_static_body": bool(static_body),
                             "body_type": body_type,
-                            "is_query_string": is_query_string
+                            "is_query_string": is_query_string,
+                            "html_parser": html_parser
                         })
 
         # httpx를 사용하여 요청 전송
@@ -559,8 +674,11 @@ async def test_api(request: Request, test_request: dict):
                     if 'application/json' in content_type:
                         # JSON 응답
                         response_data = response.json()
+                    elif ('text/html' in content_type or 'application/xhtml' in content_type) and html_parser:
+                        # HTML 응답 - html_parser가 True일 때만 파싱
+                        response_data = parse_html_response(response.text)
                     elif 'text/html' in content_type or 'application/xhtml' in content_type:
-                        # HTML 응답 - 텍스트로 반환
+                        # HTML 응답 - html_parser가 False면 텍스트 그대로
                         response_data = response.text
                     elif 'text/xml' in content_type or 'application/xml' in content_type:
                         # XML 응답 - 텍스트로 반환
@@ -770,8 +888,8 @@ async def test_tool(request: Request, tool_id: int, function_id: str):
                         # JSON 응답
                         response_data = response.json()
                     elif 'text/html' in content_type or 'application/xhtml' in content_type:
-                        # HTML 응답 - 텍스트로 반환
-                        response_data = response.text
+                        # HTML 응답 - 파싱하여 구조화된 데이터로 반환
+                        response_data = parse_html_response(response.text)
                     elif 'text/xml' in content_type or 'application/xml' in content_type:
                         # XML 응답 - 텍스트로 반환
                         response_data = response.text
