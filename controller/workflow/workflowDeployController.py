@@ -21,6 +21,7 @@ from controller.workflow.websocket_support import (
     get_db_manager_from_websocket,
     run_websocket_workflow,
     cleanup_websocket_session,
+    safe_send_json,
 )
 from service.database.logger_helper import create_logger
 
@@ -230,7 +231,12 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
     backend_log = create_logger(app_db, login_user_id, request=None)
 
     await websocket.accept()
-    await websocket.send_json(
+    if not hasattr(websocket.state, "active_task"):
+        websocket.state.active_task = None
+        websocket.state.active_execution_id = None
+
+    await safe_send_json(
+        websocket,
         {
             "type": "ready",
             "content": {
@@ -239,7 +245,7 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                 "participants": auth_context.get("participants", []),
                 "message": "WebSocket connection established",
             },
-        }
+        },
     )
 
     try:
@@ -255,23 +261,25 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
             except Exception as exc:
                 logger.error("Failed to decode WebSocket message: %s", exc, exc_info=True)
                 try:
-                    await websocket.send_json(
-                        {"type": "error", "detail": "Invalid message format"}
+                    await safe_send_json(
+                        websocket,
+                        {"type": "error", "detail": "Invalid message format"},
                     )
                 except Exception:
                     pass
                 continue
 
             if not isinstance(raw_message, dict):
-                await websocket.send_json(
-                    {"type": "error", "detail": "Message must be a JSON object"}
+                await safe_send_json(
+                    websocket,
+                    {"type": "error", "detail": "Message must be a JSON object"},
                 )
                 continue
 
             message_type = raw_message.get("type", "start")
 
             if message_type in ("ping", "pong"):
-                await websocket.send_json({"type": "pong"})
+                await safe_send_json(websocket, {"type": "pong"})
                 continue
 
             if message_type == "close":
@@ -279,8 +287,9 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                 break
 
             if message_type not in ("start", "run", "cancel"):
-                await websocket.send_json(
-                    {"type": "error", "detail": f"Unsupported message type: {message_type}"}
+                await safe_send_json(
+                    websocket,
+                    {"type": "error", "detail": f"Unsupported message type: {message_type}"},
                 )
                 continue
 
@@ -291,27 +300,32 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
             }
 
             if not isinstance(payload, dict):
-                await websocket.send_json(
-                    {"type": "error", "detail": "Payload must be a JSON object"}
+                await safe_send_json(
+                    websocket,
+                    {"type": "error", "detail": "Payload must be a JSON object"},
                 )
                 continue
 
             if message_type == "cancel":
                 cancel_reason = raw_message.get("reason")
-                cancel_interaction_id = payload.get("interaction_id") or session_id
+                cancel_interaction_id = payload.get("interaction_id")
+                if not cancel_interaction_id or str(cancel_interaction_id).lower() in ("default", "", "none"):
+                    cancel_interaction_id = session_id
                 cancel_workflow_id = payload.get("workflow_id")
                 if not cancel_workflow_id:
-                    await websocket.send_json(
+                    await safe_send_json(
+                        websocket,
                         {
                             "type": "error",
                             "detail": "workflow_id is required for cancellation",
-                        }
+                        },
                     )
                     continue
 
                 execution_id = f"{cancel_interaction_id}_{cancel_workflow_id}_{login_user_id}"
                 cancelled = execution_manager.cancel_execution(execution_id)
-                await websocket.send_json(
+                await safe_send_json(
+                    websocket,
                     {
                         "type": "cancel_ack",
                         "content": {
@@ -322,7 +336,7 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                             "cancelled": cancelled,
                             "reason": cancel_reason,
                         },
-                    }
+                    },
                 )
                 if not cancelled:
                     logger.warning(
@@ -335,29 +349,79 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
                     )
                 continue
 
-            try:
-                request_body = WorkflowRequest(**payload)
-            except ValidationError as exc:
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "detail": "Invalid workflow request",
-                        "errors": exc.errors(),
-                    }
-                )
-                continue
+            if message_type in ("start", "run"):
+                active_task = getattr(websocket.state, "active_task", None)
+                if active_task and not active_task.done():
+                    await safe_send_json(
+                        websocket,
+                        {
+                            "type": "error",
+                            "detail": "Workflow execution already in progress. Please wait or cancel before starting a new one.",
+                        },
+                    )
+                    continue
 
-            try:
-                await run_websocket_workflow(
-                    websocket,
-                    app_db=app_db,
-                    login_user_id=login_user_id,
-                    request_body=request_body,
-                    backend_log=backend_log,
+                try:
+                    request_body = WorkflowRequest(**payload)
+                except ValidationError as exc:
+                    await safe_send_json(
+                        websocket,
+                        {
+                            "type": "error",
+                            "detail": "Invalid workflow request",
+                            "errors": exc.errors(),
+                        },
+                    )
+                    continue
+
+                if (
+                    not request_body.interaction_id
+                    or str(request_body.interaction_id).lower() in ("default", "", "none")
+                ) and session_id:
+                    request_body.interaction_id = session_id
+
+                execution_id = f"{request_body.interaction_id}_{request_body.workflow_id}_{login_user_id}"
+
+                task = asyncio.create_task(
+                    run_websocket_workflow(
+                        websocket=websocket,
+                        app_db=app_db,
+                        login_user_id=login_user_id,
+                        request_body=request_body,
+                        backend_log=backend_log,
+                    )
                 )
-            except WebSocketDisconnect:
-                break
-            except Exception:
+
+                websocket.state.active_task = task
+                websocket.state.active_execution_id = execution_id
+
+                def _clear_task(done_task: asyncio.Task, logger=logger):
+                    try:
+                        exception = done_task.exception()
+                        if exception:
+                            logger.error(
+                                "Workflow execution task terminated with exception (deploy)",
+                                exc_info=True,
+                            )
+                    except asyncio.CancelledError:
+                        logger.info(
+                            "Workflow execution task cancelled by server (deploy)",
+                            extra={"session_id": session_id, "user_id": login_user_id},
+                        )
+                    finally:
+                        websocket.state.active_task = None
+                        websocket.state.active_execution_id = None
+
+                task.add_done_callback(_clear_task)
                 continue
     finally:
+        active_execution_id = getattr(websocket.state, "active_execution_id", None)
+        active_task = getattr(websocket.state, "active_task", None)
+        if active_execution_id:
+            execution_manager.cancel_execution(active_execution_id)
+        if active_task and not active_task.done():
+            try:
+                await asyncio.wait_for(active_task, timeout=1.0)
+            except Exception:
+                active_task.cancel()
         cleanup_websocket_session(websocket)
