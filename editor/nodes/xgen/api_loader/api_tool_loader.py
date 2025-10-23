@@ -10,7 +10,7 @@ import re
 from editor.utils.helper.async_helper import sync_run_async
 from editor.utils.helper.service_helper import AppServiceManager
 from fastapi import Request
-from controller.tools.toolStorageController import simple_list_tools
+from controller.tools.toolStorageController import simple_list_tools, parse_html_response
 from service.database.models.tools import Tools
 
 logger = logging.getLogger(__name__)
@@ -64,13 +64,60 @@ class APICallingTool(Node):
         if filter_fields and isinstance(filter_fields, str):
             fields = [field.strip() for field in filter_fields.split(',') if field.strip()]
 
-        # 필터 경로로 데이터 추출
+        # 필터 경로로 데이터 추출 (배열 인덱스 지원)
         extracted_data = response_data
         if filter_path and filter_path.strip():
-            extracted_data = APICallingTool.get_nested_value(response_data, filter_path)
-            if extracted_data is None:
-                logger.warning(f"Filter path '{filter_path}' not found in response")
-                extracted_data = response_data
+            path_keys = filter_path.split('.')
+
+            for key in path_keys:
+                if extracted_data is None:
+                    logger.warning(f"Filter path '{filter_path}' not found in response")
+                    extracted_data = response_data
+                    break
+
+                # 배열 인덱스 처리: key[0], key[1] 등의 형식 지원
+                import re
+                array_match = re.match(r'^(.+?)\[(\d+)\]$', key)
+
+                if array_match:
+                    # 배열 접근: key[index] 형식
+                    array_key = array_match.group(1)
+                    array_index = int(array_match.group(2))
+
+                    if isinstance(extracted_data, dict) and array_key in extracted_data:
+                        extracted_data = extracted_data[array_key]
+                        if isinstance(extracted_data, list) and 0 <= array_index < len(extracted_data):
+                            extracted_data = extracted_data[array_index]
+                        else:
+                            # 배열이 아니거나 인덱스가 범위를 벗어나면 원본 반환
+                            logger.warning(f"Array index {array_index} out of range for key '{array_key}'")
+                            extracted_data = response_data
+                            break
+                    else:
+                        # key를 찾지 못하면 원본 반환
+                        logger.warning(f"Key '{array_key}' not found in response")
+                        extracted_data = response_data
+                        break
+
+                elif re.match(r'^\d+$', key):
+                    # 순수 숫자인 경우 (배열 인덱스만)
+                    index = int(key)
+                    if isinstance(extracted_data, list) and 0 <= index < len(extracted_data):
+                        extracted_data = extracted_data[index]
+                    else:
+                        logger.warning(f"Array index {index} out of range")
+                        extracted_data = response_data
+                        break
+
+                else:
+                    # 일반 객체 키 접근
+                    if isinstance(extracted_data, dict) and key in extracted_data:
+                        extracted_data = extracted_data[key]
+                    else:
+                        # 경로를 찾지 못하면 원본 반환
+                        logger.warning(f"Key '{key}' not found in response")
+                        extracted_data = response_data
+                        break
 
         # 필터 필드가 없으면 추출된 데이터 그대로 반환
         if not fields:
@@ -157,6 +204,9 @@ class APICallingTool(Node):
         enable_response_filtering = tool_data.response_filter or False
         response_filter_path = tool_data.response_filter_path or ""
         response_filter_fields = tool_data.response_filter_field or ""
+
+        # HTML parser 설정
+        html_parser = tool_data.html_parser if hasattr(tool_data, 'html_parser') else True
 
         # api_body를 기반으로 ArgsSchema 동적 생성
         api_body_schema = tool_data.api_body
@@ -368,8 +418,21 @@ class APICallingTool(Node):
 
                     # 응답 상태 코드 확인
                     if response.status_code == 200:
+                        # Content-Type 확인
+                        content_type = response.headers.get('content-type', '').lower()
+
                         try:
-                            result = response.json()
+                            # HTML 응답인 경우 html_parser 설정에 따라 파싱
+                            if ('text/html' in content_type or 'application/xhtml' in content_type) and html_parser:
+                                logger.info(f"Parsing HTML response from {endpoint}")
+                                result = parse_html_response(response.text)
+                            elif 'text/html' in content_type or 'application/xhtml' in content_type:
+                                # html_parser가 False면 텍스트 그대로
+                                logger.info(f"HTML parser disabled, returning raw HTML from {endpoint}")
+                                result = response.text
+                            else:
+                                # JSON 응답 시도
+                                result = response.json()
 
                             # 응답 필터링 적용 (filter가 활성화되어 있고, path 또는 fields 중 하나라도 있으면 적용)
                             if enable_response_filtering and (response_filter_path or response_filter_fields):

@@ -15,6 +15,7 @@ class Tools(BaseModel):
         self.api_method: str = kwargs.get('api_method', '')
         self.api_timeout: int = kwargs.get('api_timeout', 30)
         self.response_filter: bool = kwargs.get('response_filter', False)
+        self.html_parser: bool = kwargs.get('html_parser', False)
         self.response_filter_path: Optional[str] = kwargs.get('response_filter_path', '')
         self.response_filter_field: Optional[str] = kwargs.get('response_filter_field', '')
         self.status: Optional[str] = kwargs.get('status', '')
@@ -41,6 +42,7 @@ class Tools(BaseModel):
             'api_method': 'VARCHAR(10) NOT NULL',
             'api_timeout': 'INTEGER DEFAULT 30',
             'response_filter': 'BOOLEAN DEFAULT FALSE',
+            'html_parser': 'BOOLEAN DEFAULT FALSE',
             'response_filter_path': 'VARCHAR(200)',
             'response_filter_field': 'VARCHAR(100)',
             'status': 'VARCHAR(50)',
