@@ -12,13 +12,14 @@ from controller.helper.controllerHelper import extract_user_id_from_request
 from controller.helper.singletonHelper import get_db_manager
 from controller.workflow.models.requests import WorkflowRequest
 from service.database.execution_meta_service import update_execution_meta_count
-from editor.async_workflow_executor import execution_manager
+from editor.async_workflow_executor import execution_manager, WorkflowCancelledError
 from service.database.logger_helper import create_logger
 from controller.workflow.execution_runtime import prepare_workflow_execution, persist_stream_results
 from controller.workflow.websocket_support import (
     authenticate_websocket,
     get_db_manager_from_websocket,
     run_websocket_workflow,
+    cleanup_websocket_session,
 )
 
 logger = logging.getLogger("execution-endpoints")
@@ -133,6 +134,7 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
         """결과 제너레이터를 SSE 형식으로 변환하는 비동기 제너레이터"""
         full_response_chunks = []
         chunk_count = 0
+        cancelled = False
         try:
             async for chunk in async_result_generator:
                 chunk_count += 1
@@ -151,6 +153,27 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
                                       "chunk_count": chunk_count,
                                       "total_output_length": len("".join(full_response_chunks))})
 
+        except WorkflowCancelledError:
+            cancelled = True
+            cancel_message = {
+                "type": "cancelled",
+                "content": {
+                    "workflow_name": workflow_req.workflow_name,
+                    "workflow_id": workflow_req.workflow_id,
+                    "interaction_id": workflow_req.interaction_id,
+                },
+            }
+            await asyncio.sleep(0)
+            yield f"data: {json.dumps(cancel_message)}\n\n"
+            backend_log.info(
+                "Streaming workflow execution cancelled",
+                metadata={
+                    "workflow_name": workflow_req.workflow_name,
+                    "workflow_id": workflow_req.workflow_id,
+                    "interaction_id": workflow_req.interaction_id,
+                    "chunk_count": chunk_count,
+                },
+            )
         except Exception as e:
             backend_log.error("Streaming workflow execution failed", exception=e,
                             metadata={"workflow_name": workflow_req.workflow_name,
@@ -161,8 +184,10 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
             error_message = {"type": "error", "detail": f"스트리밍 중 오류가 발생했습니다: {str(e)}"}
             yield f"data: {json.dumps(error_message)}\n\n"
         finally:
-            final_text = "".join(full_response_chunks)
-            await persist_stream_results(db_manager, user_id, workflow_req, final_text, backend_log)
+            final_text = "".join(full_response_chunks) if not cancelled else ""
+            if not cancelled:
+                await persist_stream_results(db_manager, user_id, workflow_req, final_text, backend_log)
+            execution_manager.cleanup_completed_executions()
 
     try:
         context = await prepare_workflow_execution(
@@ -212,17 +237,20 @@ async def execute_workflow_with_id_stream(request: Request, request_body: Workfl
 @router.websocket("/ws")
 async def execute_workflow_via_websocket(websocket: WebSocket):
     try:
-        user_session = authenticate_websocket(websocket)
+        auth_context = authenticate_websocket(websocket)
     except ValueError as auth_error:
         await websocket.close(code=1008, reason=str(auth_error))
         return
 
+    user_session = auth_context["user"]
+    session_id = auth_context["session_id"]
     login_user_id = str(user_session["user_id"])
 
     try:
         app_db = get_db_manager_from_websocket(websocket)
     except RuntimeError as db_error:
         await websocket.close(code=1011, reason=str(db_error))
+        cleanup_websocket_session(websocket)
         return
 
     backend_log = create_logger(app_db, login_user_id, request=None)
@@ -233,93 +261,136 @@ async def execute_workflow_via_websocket(websocket: WebSocket):
             "type": "ready",
             "content": {
                 "user_id": login_user_id,
+                "session_id": session_id,
+                "participants": auth_context.get("participants", []),
                 "message": "WebSocket connection established",
             },
         }
     )
 
-    while True:
-        try:
-            raw_message = await websocket.receive_json()
-        except WebSocketDisconnect:
-            backend_log.info(
-                "WebSocket disconnected by client",
-                metadata={"user_id": login_user_id},
-            )
-            break
-        except Exception as exc:
-            backend_log.error(
-                "Failed to decode WebSocket message",
-                exception=exc,
-                metadata={"user_id": login_user_id},
-            )
+    try:
+        while True:
             try:
-                await websocket.send_json(
-                    {"type": "error", "detail": "Invalid message format"}
+                raw_message = await websocket.receive_json()
+            except WebSocketDisconnect:
+                backend_log.info(
+                    "WebSocket disconnected by client",
+                    metadata={"user_id": login_user_id, "session_id": session_id},
                 )
+                break
+            except Exception as exc:
+                backend_log.error(
+                    "Failed to decode WebSocket message",
+                    exception=exc,
+                    metadata={"user_id": login_user_id, "session_id": session_id},
+                )
+                try:
+                    await websocket.send_json(
+                        {"type": "error", "detail": "Invalid message format"}
+                    )
+                except Exception:
+                    pass
+                continue
+
+            if not isinstance(raw_message, dict):
+                await websocket.send_json(
+                    {"type": "error", "detail": "Message must be a JSON object"}
+                )
+                continue
+
+            message_type = raw_message.get("type", "start")
+
+            if message_type in ("ping", "pong"):
+                await websocket.send_json({"type": "pong"})
+                continue
+
+            if message_type == "close":
+                await websocket.close(code=1000)
+                break
+
+            if message_type not in ("start", "run", "cancel"):
+                await websocket.send_json(
+                    {"type": "error", "detail": f"Unsupported message type: {message_type}"}
+                )
+                continue
+
+            payload = raw_message.get("payload") or {
+                key: value
+                for key, value in raw_message.items()
+                if key not in ("type", "payload")
+            }
+
+            if not isinstance(payload, dict):
+                await websocket.send_json(
+                    {"type": "error", "detail": "Payload must be a JSON object"}
+                )
+                continue
+
+            if message_type == "cancel":
+                cancel_reason = raw_message.get("reason")
+                cancel_interaction_id = payload.get("interaction_id") or session_id
+                cancel_workflow_id = payload.get("workflow_id")
+                if not cancel_workflow_id:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "detail": "workflow_id is required for cancellation",
+                        }
+                    )
+                    continue
+
+                execution_id = f"{cancel_interaction_id}_{cancel_workflow_id}_{login_user_id}"
+                cancelled = execution_manager.cancel_execution(execution_id)
+                await websocket.send_json(
+                    {
+                        "type": "cancel_ack",
+                        "content": {
+                            "workflow_id": cancel_workflow_id,
+                            "workflow_name": payload.get("workflow_name"),
+                            "interaction_id": cancel_interaction_id,
+                            "session_id": session_id,
+                            "cancelled": cancelled,
+                            "reason": cancel_reason,
+                        },
+                    }
+                )
+                if not cancelled:
+                    backend_log.warn(
+                        "Cancellation requested but no active execution found",
+                        metadata={
+                            "workflow_id": cancel_workflow_id,
+                            "interaction_id": cancel_interaction_id,
+                            "user_id": login_user_id,
+                        },
+                    )
+                continue
+
+            try:
+                request_body = WorkflowRequest(**payload)
+            except ValidationError as exc:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "detail": "Invalid workflow request",
+                        "errors": exc.errors(),
+                    }
+                )
+                continue
+
+            try:
+                await run_websocket_workflow(
+                    websocket,
+                    app_db=app_db,
+                    login_user_id=login_user_id,
+                    request_body=request_body,
+                    backend_log=backend_log,
+                )
+            except WebSocketDisconnect:
+                break
             except Exception:
-                pass
-            continue
-
-        if not isinstance(raw_message, dict):
-            await websocket.send_json(
-                {"type": "error", "detail": "Message must be a JSON object"}
-            )
-            continue
-
-        message_type = raw_message.get("type", "start")
-
-        if message_type in ("ping", "pong"):
-            await websocket.send_json({"type": "pong"})
-            continue
-
-        if message_type == "close":
-            await websocket.close(code=1000)
-            break
-
-        if message_type not in ("start", "run"):
-            await websocket.send_json(
-                {"type": "error", "detail": f"Unsupported message type: {message_type}"}
-            )
-            continue
-
-        payload = raw_message.get("payload") or {
-            key: value
-            for key, value in raw_message.items()
-            if key not in ("type", "payload")
-        }
-
-        if not isinstance(payload, dict):
-            await websocket.send_json(
-                {"type": "error", "detail": "Payload must be a JSON object"}
-            )
-            continue
-
-        try:
-            request_body = WorkflowRequest(**payload)
-        except ValidationError as exc:
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "detail": "Invalid workflow request",
-                    "errors": exc.errors(),
-                }
-            )
-            continue
-
-        try:
-            await run_websocket_workflow(
-                websocket,
-                app_db=app_db,
-                login_user_id=login_user_id,
-                request_body=request_body,
-                backend_log=backend_log,
-            )
-        except WebSocketDisconnect:
-            break
-        except Exception:
-            # 에러는 이미 로깅 및 클라이언트 통지됨. 연결 유지 후 다음 메시지 대기.
-            continue
+                continue
+    finally:
+        cleanup_websocket_session(websocket)
 
 @router.get("/status")
 async def get_all_execution_status(request: Request):

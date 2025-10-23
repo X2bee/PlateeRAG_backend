@@ -1,4 +1,5 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+import uuid
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
@@ -9,11 +10,32 @@ from controller.workflow.execution_runtime import (
     persist_stream_results,
 )
 from service.database.execution_meta_service import update_execution_meta_count
+from editor.async_workflow_executor import execution_manager, WorkflowCancelledError
+
+SESSION_STORE_ATTR = "ws_sessions"
 
 
-def authenticate_websocket(websocket: WebSocket) -> Dict[str, Any]:
-    """Validate the websocket connection using headers or query parameters."""
-    token = None
+def _get_ws_session_store(websocket: WebSocket) -> Dict[str, Any]:
+    """
+    Retrieve (or lazily create) the session store dictionary on app state.
+    Structure:
+        {
+            session_id: {
+                "users": Set[str],          # participating user IDs
+                "connections": {conn_id: user_id}
+            }
+        }
+    """
+    if not hasattr(websocket.app.state, SESSION_STORE_ATTR):
+        setattr(websocket.app.state, SESSION_STORE_ATTR, {})
+    return getattr(websocket.app.state, SESSION_STORE_ATTR)
+
+
+def _extract_token_and_user(websocket: WebSocket) -> tuple[str, Optional[str]]:
+    """
+    Extract token and optional user identifier from headers or query parameters.
+    """
+    token: Optional[str] = None
 
     authorization = websocket.headers.get("authorization")
     if authorization and authorization.startswith("Bearer "):
@@ -25,18 +47,75 @@ def authenticate_websocket(websocket: WebSocket) -> Dict[str, Any]:
     if not token:
         raise ValueError("Authorization token is missing")
 
+    user_candidate = websocket.headers.get("x-user-id") or websocket.query_params.get("user_id")
+    return token, user_candidate
+
+
+def authenticate_websocket(websocket: WebSocket) -> Dict[str, Any]:
+    """
+    Validate the websocket connection, create or reuse a chat session, and
+    return context containing user and session information.
+    Multiple users can share the same session.
+    """
+    token, user_candidate = _extract_token_and_user(websocket)
+
     user_session = get_user_by_token(websocket.app.state, token)
     if not user_session:
         raise ValueError("Invalid or expired token")
 
-    user_id_header = websocket.headers.get("x-user-id")
-    user_id_query = websocket.query_params.get("user_id")
-    user_id_candidate = user_id_header or user_id_query
-
-    if user_id_candidate and str(user_session["user_id"]) != str(user_id_candidate):
+    user_id = str(user_session["user_id"])
+    if user_candidate and str(user_candidate) != user_id:
         raise ValueError("User ID does not match token")
 
-    return user_session
+    session_store = _get_ws_session_store(websocket)
+    session_id = websocket.query_params.get("session_id") or str(uuid.uuid4())
+    connection_id = str(uuid.uuid4())
+
+    session_entry = session_store.setdefault(
+        session_id,
+        {"users": set(), "connections": {}},
+    )
+
+    session_entry["users"].add(user_id)
+    session_entry["connections"][connection_id] = user_id
+
+    websocket.state.session_id = session_id
+    websocket.state.connection_id = connection_id
+
+    return {
+        "user": user_session,
+        "session_id": session_id,
+        "token": token,
+        "connection_id": connection_id,
+        "participants": list(session_entry["users"]),
+    }
+
+
+def cleanup_websocket_session(websocket: WebSocket) -> None:
+    """
+    Remove the websocket session record when the connection is closed.
+    """
+    session_id = getattr(websocket.state, "session_id", None)
+    connection_id = getattr(websocket.state, "connection_id", None)
+    if not session_id or not connection_id:
+        return
+
+    session_store = getattr(websocket.app.state, SESSION_STORE_ATTR, None)
+    if not isinstance(session_store, dict):
+        return
+
+    session_entry = session_store.get(session_id)
+    if not session_entry:
+        return
+
+    user_id = session_entry["connections"].pop(connection_id, None)
+
+    # Recompute active users based on remaining connections
+    remaining_users = set(session_entry["connections"].values())
+    session_entry["users"] = remaining_users
+
+    if not session_entry["connections"]:
+        session_store.pop(session_id, None)
 
 
 def get_db_manager_from_websocket(websocket: WebSocket):
@@ -53,6 +132,11 @@ async def run_websocket_workflow(
     request_body: WorkflowRequest,
     backend_log,
 ) -> None:
+    cancelled = False
+    session_id = getattr(websocket.state, "session_id", None)
+    if (not request_body.interaction_id or request_body.interaction_id == "default") and session_id:
+        request_body.interaction_id = session_id
+
     context = await prepare_workflow_execution(
         app=websocket.app,
         app_db=app_db,
@@ -114,6 +198,22 @@ async def run_websocket_workflow(
                 "total_output_length": len("".join(full_response_chunks)),
             },
         )
+    except WorkflowCancelledError:
+        cancelled = True
+        backend_log.info(
+            "Workflow execution cancelled over WebSocket",
+            metadata={**metadata_base, "chunk_count": chunk_count},
+        )
+        await websocket.send_json(
+            {
+                "type": "cancelled",
+                "content": {
+                    "workflow_id": request_body.workflow_id,
+                    "workflow_name": request_body.workflow_name,
+                    "interaction_id": request_body.interaction_id,
+                },
+            }
+        )
     except WebSocketDisconnect:
         backend_log.warn(
             "WebSocket disconnected during workflow streaming",
@@ -134,5 +234,7 @@ async def run_websocket_workflow(
             pass
         raise
     finally:
-        final_text = "".join(full_response_chunks)
-        await persist_stream_results(app_db, login_user_id, request_body, final_text, backend_log)
+        final_text = "".join(full_response_chunks) if not cancelled else ""
+        if not cancelled:
+            await persist_stream_results(app_db, login_user_id, request_body, final_text, backend_log)
+        execution_manager.cleanup_completed_executions()

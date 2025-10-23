@@ -406,6 +406,11 @@ def get_route_key_from_data(data: Any, routing_criteria: str, logger_instance=No
 
 logger = logging.getLogger('Async-Workflow-Executor')
 
+
+class WorkflowCancelledError(Exception):
+    """Raised when a workflow execution is cancelled by the client."""
+    pass
+
 # 환경변수에서 타임존 가져오기 (기본값: 서울 시간)
 TIMEZONE = ZoneInfo(os.getenv('TIMEZONE', 'Asia/Seoul'))
 
@@ -446,6 +451,8 @@ class AsyncWorkflowExecutor:
         # 스트리밍을 위한 큐 (스레드 간 통신용)
         self._streaming_queue = queue.Queue()
         self._is_streaming = False
+        self._cancel_event = threading.Event()
+        self._cancelled = False
 
         if expected_output and expected_output.strip() != "":
             self.expected_output = expected_output
@@ -544,6 +551,13 @@ class AsyncWorkflowExecutor:
         """
         self._execution_status = "running"
         self._start_time = self._get_current_time()
+        if self.is_cancelled():
+            self._cancelled = True
+            self._execution_status = "cancelled"
+            self._end_time = self._get_current_time()
+            raise WorkflowCancelledError("Workflow cancelled before start")
+
+        self._cancelled = False
 
         try:
             self._build_graph()
@@ -560,6 +574,13 @@ class AsyncWorkflowExecutor:
             streaming_output_started = False
 
             for node_id in execution_order:
+                if self.is_cancelled():
+                    logger.info("Workflow execution cancelled before processing node %s", node_id)
+                    self._cancelled = True
+                    self._execution_status = "cancelled"
+                    self._end_time = self._get_current_time()
+                    raise WorkflowCancelledError("Workflow cancelled during execution")
+
                 # 라우팅으로 인해 제외된 노드는 건너뛰기
                 if node_id in excluded_nodes:
                     logger.info(" -> 노드 '%s'는 라우팅으로 인해 제외되어 건너뜁니다.", node_id)
@@ -721,6 +742,12 @@ class AsyncWorkflowExecutor:
                         streaming_output_started = True
                         collected_output = []
                         for chunk in result:
+                            if self.is_cancelled():
+                                logger.info("Workflow execution cancelled during streaming output of node %s", node_id)
+                                self._cancelled = True
+                                self._execution_status = "cancelled"
+                                self._end_time = self._get_current_time()
+                                raise WorkflowCancelledError("Workflow cancelled during streaming output")
                             collected_output.append(str(chunk))
                             yield chunk
 
@@ -827,6 +854,13 @@ class AsyncWorkflowExecutor:
                         node_outputs[node_id] = {output_port_id: result}
                         logger.info(" -> 출력: %s", node_outputs[node_id])
 
+            if self.is_cancelled():
+                logger.info("Workflow execution cancelled after node processing for workflow %s", self.workflow_id)
+                self._cancelled = True
+                self._execution_status = "cancelled"
+                self._end_time = self._get_current_time()
+                raise WorkflowCancelledError("Workflow cancelled before completion")
+
             if not streaming_output_started:
                 logger.info("\n--- 워크플로우 실행 완료 ---")
                 final_output = None
@@ -845,6 +879,9 @@ class AsyncWorkflowExecutor:
             self._execution_status = "completed"
             self._end_time = self._get_current_time()
 
+        except WorkflowCancelledError:
+            logger.info("Workflow execution flagged as cancelled for workflow %s", self.workflow_id)
+            raise
         except Exception as e:
             self._execution_status = "error"
             self._error_message = str(e)
@@ -858,18 +895,28 @@ class AsyncWorkflowExecutor:
         결과를 큐에 넣어 실시간 전송이 가능하도록 합니다.
         """
         self._is_streaming = True
+        cancelled = False
 
         try:
             for result in self._execute_workflow_sync():
+                if self.is_cancelled():
+                    cancelled = True
+                    raise WorkflowCancelledError("Workflow cancelled during streaming execution")
+
                 # 결과를 큐에 넣어 비동기 제너레이터에서 사용할 수 있도록 함
                 self._streaming_queue.put(('data', result))
                 yield result
+        except WorkflowCancelledError:
+            cancelled = True
+            self._streaming_queue.put(('cancelled', None))
+            raise
         except Exception as e:
             self._streaming_queue.put(('error', str(e)))
             raise
         finally:
             # 스트림 종료 신호
-            self._streaming_queue.put(('end', None))
+            if not cancelled and not self.is_cancelled():
+                self._streaming_queue.put(('end', None))
 
     async def execute_workflow_async_streaming(self) -> AsyncGenerator[Any, None]:
         """
@@ -904,6 +951,8 @@ class AsyncWorkflowExecutor:
                             yield item_data
                         elif item_type == 'error':
                             raise Exception(item_data)
+                        elif item_type == 'cancelled':
+                            raise WorkflowCancelledError("Workflow cancelled during streaming")
                         elif item_type == 'end':
                             break
 
@@ -915,6 +964,8 @@ class AsyncWorkflowExecutor:
                 # 백그라운드 작업 완료 대기
                 await future
 
+            except WorkflowCancelledError:
+                raise
             except Exception as e:
                 logger.error(f"스트리밍 실행 중 오류: {e}", exc_info=True)
                 raise
@@ -948,6 +999,8 @@ class AsyncWorkflowExecutor:
                 results = await future
                 for result in results:
                     yield result
+            except WorkflowCancelledError:
+                raise
             except Exception as e:
                 logger.error(f"스레드 풀에서 워크플로우 실행 중 오류 발생: {e}", exc_info=True)
                 raise
@@ -955,6 +1008,26 @@ class AsyncWorkflowExecutor:
             # 직접 실행 (테스트용)
             for result in self._execute_workflow_sync():
                 yield result
+
+    def cancel(self) -> None:
+        """Request cancellation of the running workflow."""
+        if not self._cancel_event.is_set():
+            logger.info(
+                "Cancellation requested for workflow %s (interaction_id=%s, user_id=%s)",
+                self.workflow_id,
+                self.interaction_id,
+                self.user_id,
+            )
+            self._cancel_event.set()
+            self._cancelled = True
+            self._execution_status = "cancelled"
+            self._end_time = self._get_current_time()
+            if self._is_streaming:
+                # 큐가 비어있을 경우를 대비해 취소 신호 전달
+                self._streaming_queue.put(('cancelled', None))
+
+    def is_cancelled(self) -> bool:
+        return self._cancel_event.is_set()
 
     def get_execution_status(self) -> Dict[str, Any]:
         """실행 상태 정보를 반환합니다."""
@@ -1081,6 +1154,17 @@ class WorkflowExecutionManager:
         logger.info(f"새로운 워크플로우 실행기 생성: {execution_id}")
         return executor
 
+    def cancel_execution(self, execution_id: str) -> bool:
+        """요청된 실행을 취소합니다."""
+        with self._execution_lock:
+            executor = self.active_executions.get(execution_id)
+            if executor:
+                executor.cancel()
+                logger.info("실행 취소 요청: %s", execution_id)
+                return True
+        logger.warning("취소할 워크플로우 실행을 찾지 못했습니다: %s", execution_id)
+        return False
+
     def get_execution_status(self, execution_id: str) -> Optional[Dict[str, Any]]:
         """특정 실행의 상태를 조회합니다."""
         with self._execution_lock:
@@ -1103,7 +1187,7 @@ class WorkflowExecutionManager:
             completed_ids = []
             for execution_id, executor in self.active_executions.items():
                 status = executor.get_execution_status()
-                if status['status'] in ['completed', 'error']:
+                if status['status'] in ['completed', 'error', 'cancelled']:
                     completed_ids.append(execution_id)
 
             for execution_id in completed_ids:
