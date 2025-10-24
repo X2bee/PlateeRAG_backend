@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
+from service.data_manager.timezone_utils import now_kst_iso
 from functools import wraps
 import collections
 import collections.abc
@@ -775,7 +776,7 @@ async def upload_dataset_to_mlflow(request: Request, upload_request: UploadToMlf
             "version_history": version_history,
             "transformations": [v["operation"] for v in version_history],
             "final_checksum": manager._calculate_checksum(manager.dataset),
-            "uploaded_at": datetime.now().isoformat(),
+            "uploaded_at": now_kst_iso(),
             "uploaded_by": user_id
         }
 

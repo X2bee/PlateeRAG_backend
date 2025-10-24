@@ -5,7 +5,8 @@ RAG 시스템의 문서 및 컬렉션 관련 API 엔드포인트를 제공합니
 문서 업로드, 검색, 컬렉션 관리 등의 기능을 담당합니다.
 """
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 import logging
@@ -16,6 +17,7 @@ from pathlib import Path
 import datetime
 import uuid
 from zoneinfo import ZoneInfo
+import asyncio
 from service.database.models.vectordb import VectorDB, VectorDBFolders, VectorDBChunkMeta, VectorDBChunkEdge
 from service.database.models.user import User
 
@@ -28,6 +30,7 @@ from service.embedding.embedding_factory import EmbeddingFactory
 from service.vector_db.vector_manager import VectorManager
 from service.retrieval.document_processor.document_processor import DocumentProcessor
 from service.retrieval.document_info_generator.document_info_generator import DocumentInfoGenerator
+from service.retrieval.sse_session_manager import sse_session_manager
 
 logger = logging.getLogger("retrieval-controller")
 router = APIRouter(prefix="/retrieval", tags=["retrieval"])
@@ -303,6 +306,299 @@ async def get_collection_info(request: Request, collection_name: str):
         raise HTTPException(status_code=500, detail=f"Failed to get collection info: {str(e)}")
 
 # Document Management Endpoints
+async def _process_repository_upload_background(
+    task_id: str,
+    gitlab_url: str,
+    gitlab_token: str,
+    repository_path: str,
+    branch: str,
+    collection_name: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    user_id: int,
+    metadata_str: Optional[str],
+    enable_annotation: bool,
+    enable_api_extraction: bool,
+    request: Request
+):
+    """백그라운드에서 레포지토리 업로드 처리"""
+    from service.retrieval.upload_progress_manager import upload_progress_manager
+
+    app_db = get_db_manager(request)
+    backend_log = create_logger(app_db, user_id, request)
+
+    try:
+        backend_log.info("Starting repository upload",
+                        metadata={"gitlab_url": gitlab_url, "repository_path": repository_path,
+                                "branch": branch, "collection_name": collection_name,
+                                "chunk_size": chunk_size, "chunk_overlap": chunk_overlap,
+                                "enable_annotation": enable_annotation,
+                                "enable_api_extraction": enable_api_extraction,
+                                "task_id": task_id})
+
+        rag_service = get_rag_service(request)
+        document_processor = rag_service.document_processor
+
+        # Define progress callback with cancel check
+        def progress_callback(**kwargs):
+            # Check if task is cancelled
+            if upload_progress_manager.is_cancelled(task_id):
+                raise Exception("Upload cancelled by user")
+            upload_progress_manager.update_progress(task_id, **kwargs)
+
+        # 레포지토리에서 코드 추출
+        backend_log.info("Extracting code from repository")
+
+        # Check cancellation before starting
+        if upload_progress_manager.is_cancelled(task_id):
+            logger.info(f"Task {task_id} cancelled before extraction")
+            return
+
+        upload_progress_manager.update_progress(
+            task_id,
+            status='extracting',
+            progress=5.0,
+            current_step='Starting code extraction from repository...',
+            current_step_number=1,
+            message='Preparing to extract code'
+        )
+
+        extraction_result = await document_processor.extract_text_from_repository(
+            gitlab_url=gitlab_url,
+            gitlab_token=gitlab_token,
+            repository_path=repository_path,
+            branch=branch,
+            enable_annotation=enable_annotation,
+            enable_api_extraction=enable_api_extraction,
+            progress_callback=progress_callback
+        )
+
+        # extraction_result는 dict: {'files': [...], 'api_info': ..., 'metadata': ...}
+        files_data = extraction_result.get('files', [])
+
+        if not files_data:
+            upload_progress_manager.update_progress(
+                task_id,
+                status='error',
+                error="No code files found or repository is empty"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="No code files found or repository is empty"
+            )
+
+        backend_log.info("Code extracted successfully",
+                        metadata={"total_files": len(files_data)})
+
+        # Update progress: extraction complete, start processing files
+        upload_progress_manager.update_progress(
+            task_id,
+            status='chunking',
+            progress=55.0,
+            current_step='Processing files...',
+            current_step_number=5,
+            message=f'Processing {len(files_data)} files individually',
+            total_files=len(files_data),
+            processed_files=0
+        )
+
+        # 공통 메타데이터
+        base_metadata = {
+            "source_type": "gitlab_repository",
+            "gitlab_url": gitlab_url,
+            "repository_path": repository_path,
+            "branch": branch,
+            "enable_annotation": enable_annotation,
+            "enable_api_extraction": enable_api_extraction
+        }
+
+        if metadata_str:
+            try:
+                user_metadata = json.loads(metadata_str)
+                base_metadata.update(user_metadata)
+            except json.JSONDecodeError:
+                backend_log.warn("Invalid metadata JSON provided",
+                               metadata={"raw_metadata": metadata_str})
+
+        # 각 파일을 개별 문서로 처리
+        upload_dir = Path("downloads") / collection_name
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        processed_count = 0
+        total_files = len(files_data)
+
+        for idx, file_info in enumerate(files_data):
+            # Check cancellation
+            if upload_progress_manager.is_cancelled(task_id):
+                logger.info(f"Task {task_id} cancelled during file processing")
+                return
+
+            file_path = file_info.get('path', 'unknown')
+            file_content = file_info.get('content', '')
+
+            # Skip empty files
+            if not file_content or len(file_content.strip()) < 10:
+                logger.info(f"Skipping empty file: {file_path}")
+                continue
+
+            # Progress update
+            progress_pct = 55.0 + (40.0 * (idx + 1) / total_files)
+            upload_progress_manager.update_progress(
+                task_id,
+                status='chunking',
+                progress=progress_pct,
+                current_step=f'Processing file {idx + 1}/{total_files}',
+                current_step_number=5,
+                message=f'Processing {file_path}',
+                total_files=total_files,
+                processed_files=idx + 1,
+                current_file=file_path
+            )
+
+            # 파일별 메타데이터
+            file_metadata = {
+                **base_metadata,
+                "file_path": file_path,
+                "file_language": file_info.get('language', 'unknown'),
+                "file_size": file_info.get('size', 0),
+                "original_filename": os.path.basename(file_path)
+            }
+
+            # 임시 파일 저장
+            safe_filename = file_path.replace('/', '_').replace('\\', '_')
+            temp_file_path = upload_dir / f"{safe_filename}"
+
+            async with aiofiles.open(temp_file_path, 'w', encoding='utf-8') as f:
+                await f.write(file_content)
+
+            # 개별 파일 처리
+            try:
+                await rag_service.process_document(
+                    user_id,
+                    app_db,
+                    str(temp_file_path),
+                    collection_name,
+                    chunk_size,
+                    chunk_overlap,
+                    file_metadata,
+                    use_llm_metadata=True,
+                    process_type="default"
+                )
+                processed_count += 1
+
+                # 임시 파일 삭제
+                temp_file_path.unlink()
+
+            except Exception as e:
+                logger.error(f"Failed to process file {file_path}: {e}")
+                # 계속 진행
+
+        # Update progress: storing complete
+        upload_progress_manager.update_progress(
+            task_id,
+            status='storing',
+            progress=95.0,
+            current_step='Finalizing storage...',
+            current_step_number=6,
+            message=f'Processed {processed_count}/{total_files} files successfully'
+        )
+
+        # Mark as completed
+        upload_progress_manager.update_progress(
+            task_id,
+            status='completed',
+            progress=100.0,
+            current_step='Repository upload completed successfully',
+            current_step_number=7,
+            message=f'Successfully processed {processed_count} files from {repository_path} ({branch})'
+        )
+
+        backend_log.success("Repository uploaded and processed successfully",
+                          metadata={"repository_path": repository_path, "branch": branch,
+                                  "collection_name": collection_name,
+                                  "total_files": total_files,
+                                  "processed_files": processed_count,
+                                  "chunk_size": chunk_size, "chunk_overlap": chunk_overlap,
+                                  "enable_annotation": enable_annotation,
+                                  "enable_api_extraction": enable_api_extraction,
+                                  "task_id": task_id})
+
+    except Exception as e:
+        backend_log.error("Repository upload failed", exception=e,
+                         metadata={"repository_path": repository_path,
+                                 "branch": branch,
+                                 "collection_name": collection_name,
+                                 "task_id": task_id})
+        logger.error("Repository upload failed: %s", e)
+
+        # Update progress with error
+        upload_progress_manager.update_progress(
+            task_id,
+            status='error',
+            error=str(e)
+        )
+
+
+@router.post("/documents/upload/repository")
+async def upload_repository(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    gitlab_url: str = Form(...),
+    gitlab_token: str = Form(...),
+    repository_path: str = Form(...),
+    branch: str = Form("main"),
+    collection_name: str = Form(...),
+    chunk_size: int = Form(4000),
+    chunk_overlap: int = Form(1000),
+    user_id: int = Form(...),
+    metadata: Optional[str] = Form(None),
+    enable_annotation: bool = Form(False),
+    enable_api_extraction: bool = Form(False)
+):
+    """GitLab 레포지토리 업로드 및 처리 (비동기)"""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    # Import progress manager
+    from service.retrieval.upload_progress_manager import upload_progress_manager
+
+    # Create progress tracking task
+    task_id = upload_progress_manager.create_task(
+        user_id=user_id,
+        collection_name=collection_name,
+        repository_path=repository_path,
+        branch=branch
+    )
+
+    # 백그라운드에서 처리 시작
+    background_tasks.add_task(
+        _process_repository_upload_background,
+        task_id=task_id,
+        gitlab_url=gitlab_url,
+        gitlab_token=gitlab_token,
+        repository_path=repository_path,
+        branch=branch,
+        collection_name=collection_name,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        user_id=user_id,
+        metadata_str=metadata,
+        enable_annotation=enable_annotation,
+        enable_api_extraction=enable_api_extraction,
+        request=request
+    )
+
+    logger.info(f"Repository upload started in background: task_id={task_id}")
+
+    # 즉시 task_id 반환
+    return {
+        "success": True,
+        "task_id": task_id,
+        "message": "Repository upload started. Use task_id to track progress.",
+        "repository_path": repository_path,
+        "branch": branch
+    }
+
 @router.post("/documents/upload")
 async def upload_document(
     request: Request,
@@ -414,6 +710,250 @@ async def upload_document(
                                  "process_type": process_type})
         logger.error("Document upload failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to upload document: {str(e)}")
+
+@router.post("/documents/upload-sse")
+async def upload_document_sse(
+    request: Request,
+    file: UploadFile = File(...),
+    collection_name: str = Form(...),
+    chunk_size: int = Form(1000),
+    chunk_overlap: int = Form(200),
+    user_id: int = Form(...),
+    session: str = Form(...),
+    metadata: Optional[str] = Form(None),
+    process_type: Optional[str] = Form("default")
+):
+    """문서 업로드 및 처리 (SSE 지원)
+
+    세션 단위로 청크 처리 진행 상황을 Server-Sent Events로 스트리밍합니다.
+
+    병렬 처리 지원:
+    - 각 세션은 독립적으로 처리됩니다.
+    - 세션별 진행 상황은 격리된 큐를 통해 추적됩니다.
+    - 여러 세션이 동시에 실행될 수 있습니다.
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    if not session:
+        raise HTTPException(status_code=400, detail="Session ID is required")
+
+    # 파일 내용을 미리 읽어서 메모리에 저장 (파일이 닫히기 전에)
+    file_content = await file.read()
+    filename = file.filename
+
+    # user_id 타입 확인 및 변환
+    user_id = int(user_id) if user_id else None
+
+    logger.info(f"Creating SSE session: session_id={session}, user_id={user_id} ({type(user_id)}), filename={filename}")
+
+    # 세션 생성 (세션 관리자를 통해 격리)
+    sse_session = await sse_session_manager.create_session(
+        session_id=session,
+        user_id=user_id,
+        collection_name=collection_name,
+        filename=filename
+    )
+
+    async def event_generator():
+        app_db = get_db_manager(request)
+        backend_log = create_logger(app_db, user_id, request)
+
+        # process_type을 여기서 초기화
+        current_process_type = process_type
+
+        try:
+            sse_session.update_status("processing")
+            file_extension = Path(filename).suffix[1:].lower() if filename else ""
+
+            # SSE 이벤트: 시작
+            yield f"data: {json.dumps({'event': 'start', 'session': session, 'filename': filename})}\n\n"
+            await asyncio.sleep(0)
+
+            backend_log.info("Starting document upload (SSE)",
+                            metadata={"filename": filename, "collection_name": collection_name,
+                                    "file_extension": file_extension, "chunk_size": chunk_size,
+                                    "chunk_overlap": chunk_overlap, "process_type": current_process_type,
+                                    "session": session})
+
+            rag_service = get_rag_service(request)
+
+            # 파일 유형에 따른 process_type 검증
+            if file_extension == 'pdf':
+                valid_process_types = ["default", "text", "ocr"]
+                if current_process_type not in valid_process_types:
+                    backend_log.warn("Invalid process_type for PDF",
+                                   metadata={"process_type": current_process_type, "valid_types": valid_process_types})
+                    yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': f'Invalid process_type for PDF files. Must be one of: {valid_process_types}'})}\n\n"
+                    return
+            elif file_extension in ['docx', 'doc']:
+                valid_process_types = ["default", "text", "html", "ocr", "html_pdf_ocr"]
+                if current_process_type not in valid_process_types:
+                    backend_log.warn("Invalid process_type for DOCX",
+                                   metadata={"process_type": current_process_type, "valid_types": valid_process_types})
+                    yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': f'Invalid process_type for DOCX files. Must be one of: {valid_process_types}'})}\n\n"
+                    return
+            else:
+                if current_process_type != "default":
+                    backend_log.warn("process_type not supported for file type, using default",
+                                   metadata={"file_extension": file_extension, "requested_process_type": current_process_type})
+                    logger.warning(f"process_type '{current_process_type}' is only supported for PDF and DOCX files. Using 'default' for {file_extension} files.")
+                    current_process_type = "default"
+
+            # SSE 이벤트: 파일 저장 시작
+            yield f"data: {json.dumps({'event': 'file_saving', 'session': session})}\n\n"
+            await asyncio.sleep(0)
+
+            # 파일 저장 (미리 읽어둔 내용 사용)
+            upload_dir = Path("downloads") / collection_name
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / filename
+
+            file_size = len(file_content)
+            async with aiofiles.open(file_path, 'wb') as f:
+                await f.write(file_content)
+
+            # SSE 이벤트: 파일 저장 완료
+            yield f"data: {json.dumps({'event': 'file_saved', 'session': session, 'file_size': file_size})}\n\n"
+            await asyncio.sleep(0)
+
+            # 메타데이터 파싱
+            doc_metadata = {}
+            if metadata:
+                try:
+                    doc_metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    backend_log.warn("Invalid metadata JSON provided",
+                                   metadata={"raw_metadata": metadata})
+                    logger.warning("Invalid metadata JSON: %s", metadata)
+
+            # SSE 이벤트: 문서 처리 시작
+            yield f"data: {json.dumps({'event': 'processing_start', 'session': session})}\n\n"
+            await asyncio.sleep(0)
+
+            # 진행 상황을 SSE로 전송하기 위한 큐 (세션별로 격리됨)
+            progress_queue = sse_session.progress_queue
+
+            # 진행 상황 콜백 함수
+            async def progress_callback(event_data):
+                await sse_session.put_event(event_data)
+
+            # 백그라운드에서 문서 처리 실행
+            async def process_task():
+                try:
+                    result = await rag_service.process_document_with_progress(
+                        user_id=user_id,
+                        app_db=app_db,
+                        file_path=str(file_path),
+                        collection_name=collection_name,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                        metadata=doc_metadata,
+                        use_llm_metadata=True,
+                        process_type=current_process_type,
+                        progress_callback=progress_callback
+                    )
+                    await sse_session.put_event({'event': 'processing_complete', 'result': result})
+                except Exception as e:
+                    await sse_session.put_event({'event': 'processing_error', 'error': str(e)})
+
+            # 문서 처리 태스크 시작 (세션에 태스크 저장)
+            sse_session.task = asyncio.create_task(process_task())
+
+            # 진행 상황 이벤트를 SSE로 전송
+            result = None
+            while True:
+                try:
+                    # 타임아웃을 설정하여 주기적으로 체크
+                    event_data = await sse_session.get_event(timeout=1.0)
+
+                    if event_data is None:
+                        # 타임아웃 시 계속 대기
+                        continue
+
+                    if event_data['event'] == 'total_chunks':
+                        yield f"data: {json.dumps({'event': 'total_chunks', 'session': session, 'total_chunks': event_data['total_chunks']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'llm_metadata_start':
+                        # LLM 메타데이터 생성 시작
+                        yield f"data: {json.dumps({'event': 'llm_metadata_start', 'session': session, 'total_chunks': event_data['total_chunks']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'llm_chunk_processed':
+                        # 개별 LLM 청크 처리 완료
+                        llm_event = {
+                            'event': 'llm_chunk_processed',
+                            'session': session,
+                            'chunk_index': event_data['chunk_index'],
+                            'total_chunks': event_data['total_chunks']
+                        }
+                        if 'error' in event_data:
+                            llm_event['error'] = event_data['error']
+                        yield f"data: {json.dumps(llm_event)}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'llm_metadata_complete':
+                        # LLM 메타데이터 생성 완료
+                        yield f"data: {json.dumps({'event': 'llm_metadata_complete', 'session': session, 'total_chunks': event_data['total_chunks']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'llm_metadata_error':
+                        # LLM 메타데이터 생성 실패
+                        yield f"data: {json.dumps({'event': 'llm_metadata_error', 'session': session, 'error': event_data['error']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'chunk_processed':
+                        yield f"data: {json.dumps({'event': 'chunk_processed', 'session': session, 'chunk_index': event_data['chunk_index'], 'total_chunks': event_data['total_chunks']})}\n\n"
+                        await asyncio.sleep(0)
+                    elif event_data['event'] == 'processing_complete':
+                        result = event_data['result']
+                        sse_session.result = result
+                        sse_session.update_status("completed")
+                        break
+                    elif event_data['event'] == 'processing_error':
+                        sse_session.error = event_data['error']
+                        sse_session.update_status("error")
+                        raise Exception(event_data['error'])
+
+                except asyncio.TimeoutError:
+                    # 타임아웃 시 계속 대기
+                    continue
+                except Exception as e:
+                    # 에러 발생 시 세션 상태 업데이트
+                    sse_session.update_status("error")
+                    sse_session.error = str(e)
+                    raise
+
+            # SSE 이벤트: 완료
+            backend_log.success("Document uploaded and processed successfully (SSE)",
+                              metadata={"filename": filename, "collection_name": collection_name,
+                                      "file_size": file_size, "file_extension": file_extension,
+                                      "chunk_size": chunk_size, "chunk_overlap": chunk_overlap,
+                                      "process_type": current_process_type, "result": result, "session": session})
+
+            yield f"data: {json.dumps({'event': 'complete', 'session': session, 'result': result})}\n\n"
+            await asyncio.sleep(0)
+
+        except HTTPException as he:
+            sse_session.update_status("error")
+            sse_session.error = he.detail
+            backend_log.error("Document upload failed (SSE)", exception=he,
+                             metadata={"filename": filename if 'filename' in locals() else None,
+                                     "collection_name": collection_name,
+                                     "process_type": process_type,
+                                     "session": session})
+            yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': he.detail})}\n\n"
+        except Exception as e:
+            sse_session.update_status("error")
+            sse_session.error = str(e)
+            backend_log.error("Document upload failed (SSE)", exception=e,
+                             metadata={"filename": filename if 'filename' in locals() else None,
+                                     "collection_name": collection_name,
+                                     "process_type": current_process_type,
+                                     "session": session})
+            logger.error("Document upload failed: %s", e)
+            yield f"data: {json.dumps({'event': 'error', 'session': session, 'message': str(e)})}\n\n"
+        finally:
+            # 세션 정리 (1시간 후 자동 정리됨)
+            logger.info(f"Session {session} generator completed. Status: {sse_session.status}")
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.post("/documents/search")
 async def search_documents(request: Request, search_request: DocumentSearchRequest):
@@ -818,3 +1358,136 @@ async def remake_collection(request: Request, remake_request: CollectionRemakeRe
     except Exception as e:
         logger.error(f"Failed to remake collection '{remake_request.collection_name}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to remake collection: {str(e)}")
+
+
+# SSE 세션 관리 API
+@router.get("/sessions/info")
+async def get_sessions_info(request: Request):
+    """모든 SSE 세션 정보 조회"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    try:
+        sessions_info = await sse_session_manager.get_all_sessions_info()
+        return sessions_info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get sessions info: {str(e)}")
+
+
+@router.get("/sessions/{session_id}/status")
+async def get_session_status(request: Request, session_id: str):
+    """특정 SSE 세션 상태 조회"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    try:
+        session = await sse_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # 사용자 권한 확인 (타입 변환하여 비교)
+        session_user_id = int(session.user_id) if session.user_id else None
+        request_user_id = int(user_id) if user_id else None
+
+        logger.debug(f"Session access check: session_user_id={session_user_id} ({type(session_user_id)}), request_user_id={request_user_id} ({type(request_user_id)})")
+
+        if session_user_id != request_user_id:
+            logger.warning(f"Session access denied: session_user_id={session_user_id}, request_user_id={request_user_id}")
+            raise HTTPException(status_code=403, detail=f"Not authorized to access this session (session owner: {session_user_id}, requester: {request_user_id})")
+
+        return {
+            "session_id": session.session_id,
+            "user_id": session.user_id,
+            "filename": session.filename,
+            "collection_name": session.collection_name,
+            "status": session.status,
+            "created_at": session.created_at.isoformat(),
+            "updated_at": session.updated_at.isoformat(),
+            "result": session.result,
+            "error": session.error
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get session status: {str(e)}")
+
+
+@router.post("/sessions/{session_id}/cancel")
+async def cancel_session(request: Request, session_id: str):
+    """SSE 세션 취소"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    try:
+        session = await sse_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # 사용자 권한 확인 (타입 변환하여 비교)
+        session_user_id = int(session.user_id) if session.user_id else None
+        request_user_id = int(user_id) if user_id else None
+
+        if session_user_id != request_user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to cancel this session")
+
+        success = await sse_session_manager.cancel_session(session_id)
+        return {
+            "success": success,
+            "message": "Session cancelled successfully" if success else "Failed to cancel session"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cancel session: {str(e)}")
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(request: Request, session_id: str):
+    """SSE 세션 삭제"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    try:
+        session = await sse_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # 사용자 권한 확인 (타입 변환하여 비교)
+        session_user_id = int(session.user_id) if session.user_id else None
+        request_user_id = int(user_id) if user_id else None
+
+        if session_user_id != request_user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this session")
+
+        success = await sse_session_manager.remove_session(session_id)
+        return {
+            "success": success,
+            "message": "Session deleted successfully" if success else "Failed to delete session"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
+
+
+@router.post("/sessions/cleanup")
+async def cleanup_expired_sessions(request: Request, timeout_minutes: int = 60):
+    """만료된 SSE 세션 정리"""
+    user_id = extract_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID not found in request")
+
+    try:
+        await sse_session_manager.cleanup_expired_sessions(timeout_minutes)
+        sessions_info = await sse_session_manager.get_all_sessions_info()
+        return {
+            "success": True,
+            "message": "Expired sessions cleaned up successfully",
+            "remaining_sessions": sessions_info
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cleanup sessions: {str(e)}")

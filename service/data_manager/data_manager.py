@@ -9,6 +9,7 @@ import hashlib
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import gc
+from .timezone_utils import now_kst, now_kst_iso
 from huggingface_hub import hf_hub_download, list_repo_files
 import pyarrow.parquet as pq
 import pyarrow as pa
@@ -72,10 +73,33 @@ class DataManager:
             self.manager_id = f"mgr_{uuid.uuid4().hex[:12]}"  # 새 생성 시에만 UUID
             self._is_restored = False
             logger.info(f"✨ 새 Manager ID 생성: {self.manager_id}")
-        
+
         self.user_id = str(user_id)
         self.user_name = user_name
-        self.created_at = datetime.now()
+
+        # ========== ✨ created_at 복원 로직 ==========
+        # 복원 시에는 Redis에서 원본 생성 시간 가져오기
+        if self._is_restored and redis_manager:
+            try:
+                saved_state = redis_manager.get_manager_state(self.manager_id)
+                if saved_state and 'created_at' in saved_state:
+                    # Redis에 저장된 원본 생성 시간 사용
+                    from .timezone_utils import parse_iso_to_kst
+                    self.created_at = parse_iso_to_kst(saved_state['created_at'])
+                    logger.info(f"  └─ ✅ 원본 생성 시간 복원: {self.created_at.isoformat()}")
+                else:
+                    # Redis에 없으면 현재 시간 (fallback)
+                    self.created_at = now_kst()
+                    logger.warning(f"  └─ ⚠️  Redis에 생성 시간 없음, 현재 시간 사용")
+            except Exception as e:
+                logger.warning(f"  └─ ⚠️  생성 시간 복원 실패: {e}, 현재 시간 사용")
+                self.created_at = now_kst()
+        else:
+            # 새로 생성하는 경우
+            self.created_at = now_kst()
+            if not self._is_restored:
+                logger.info(f"  └─ 🆕 새 생성 시간: {self.created_at.isoformat()}")
+
         self.is_active = True
         
         # ========== 데이터셋 관리 (Dataset-Centric) ==========
@@ -92,16 +116,21 @@ class DataManager:
         
         self.dataset_load_count = 0  # 데이터셋 로드 횟수
 
-        # ========== 메모리 모니터링 ==========
+        # ========== 메모리 모니터링 (Redis 통합) ==========
         gc.collect()
         self.initial_memory = self._get_object_memory_size()
         self._monitoring = True
-        self._resource_stats = {
-            'instance_memory_usage': [],
-            'dataset_memory': [],
-            'peak_instance_memory': self.initial_memory,
-            'current_instance_memory': self.initial_memory
-        }
+
+        # Redis에서 기존 통계 로드 또는 초기화
+        if self.redis_manager and self._is_restored:
+            cached_stats = self.redis_manager.get_resource_stats(self.manager_id)
+            if cached_stats:
+                self._resource_stats = cached_stats
+                logger.info(f"♻️ Redis에서 리소스 통계 복원: {self.manager_id}")
+            else:
+                self._resource_stats = self._init_resource_stats()
+        else:
+            self._resource_stats = self._init_resource_stats()
         
         # 모니터링 스레드 시작
         self._monitor_thread = threading.Thread(
@@ -111,22 +140,44 @@ class DataManager:
         self._monitor_thread.start()
         
         # ========== Manager 세션 등록 ==========
-        # ✅ 복원된 경우 Redis 재등록 하지 않음 (이미 연결되어 있음)
-        if self.redis_manager and not self._is_restored:
+        if self.redis_manager:
             try:
-                # 아직 dataset이 없으므로 None으로 등록
-                self.redis_manager.link_manager_to_dataset(
-                    self.manager_id, 
-                    None,  # dataset_id는 첫 로드 시 설정
-                    self.user_id
-                )
-                logger.info(f"✅ Manager 세션 등록: {self.manager_id}")
+                # 복원된 경우: owner 정보 확인 후 없으면 재등록
+                if self._is_restored:
+                    existing_owner = self.redis_manager.get_manager_owner(self.manager_id)
+                    if not existing_owner:
+                        logger.warning(f"  └─ ⚠️  복원된 Manager의 owner 정보 없음, 재등록")
+                        self.redis_manager.link_manager_to_dataset(
+                            self.manager_id,
+                            None,  # dataset_id는 나중에 설정
+                            self.user_id
+                        )
+                        logger.info(f"  └─ ✅ Owner 정보 재등록 완료")
+                    else:
+                        logger.debug(f"  └─ ✅ Owner 정보 확인: {existing_owner}")
+                else:
+                    # 새로 생성된 경우: 신규 등록
+                    self.redis_manager.link_manager_to_dataset(
+                        self.manager_id,
+                        None,  # dataset_id는 첫 로드 시 설정
+                        self.user_id
+                    )
+                    logger.info(f"✅ Manager 세션 등록: {self.manager_id}")
             except Exception as e:
                 logger.warning(f"Manager 세션 등록 실패: {e}")
         
         logger.info(f"DataManager {'복원' if self._is_restored else '생성'}: {self.manager_id} (user: {self.user_id})")
 
     # ========== 메모리 관리 메서드 ==========
+
+    def _init_resource_stats(self) -> Dict[str, Any]:
+        """리소스 통계 초기화"""
+        return {
+            'instance_memory_usage': [],
+            'dataset_memory': [],
+            'peak_instance_memory': self.initial_memory,
+            'current_instance_memory': self.initial_memory
+        }
 
     def _get_object_memory_size(self) -> int:
         """DataManager 인스턴스의 메모리 사용량 계산"""
@@ -212,9 +263,10 @@ class DataManager:
         return size
 
     def _monitor_instance_memory(self):
-        """DataManager 인스턴스 메모리 사용량 모니터링 스레드"""
+        """DataManager 인스턴스 메모리 사용량 모니터링 스레드 (Redis 통합)"""
         consecutive_errors = 0
         max_errors = 5
+        redis_save_counter = 0
 
         while self._monitoring and self.is_active:
             try:
@@ -235,6 +287,12 @@ class DataManager:
                     for key in ['instance_memory_usage', 'dataset_memory']:
                         if len(self._resource_stats[key]) > 50:
                             self._resource_stats[key] = self._resource_stats[key][-50:]
+
+                    # Redis에 주기적으로 저장 (30초마다)
+                    redis_save_counter += 1
+                    if self.redis_manager and redis_save_counter >= 3:
+                        self.redis_manager.save_resource_stats(self.manager_id, self._resource_stats)
+                        redis_save_counter = 0
 
                 except Exception as e:
                     logger.warning(f"통계 업데이트 실패: {e}")
@@ -284,7 +342,7 @@ class DataManager:
             version_info = {
                 "version": self.current_version,
                 "operation": operation_name,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": now_kst_iso(),
                 "minio_path": None,
                 "checksum": self._calculate_checksum(self.dataset),
                 "num_rows": self.dataset.num_rows,
@@ -472,7 +530,7 @@ class DataManager:
                 "total_columns": 0,
                 "columns": [],
                 "column_info": "",
-                "sampled_at": datetime.now().isoformat()
+                "sampled_at": now_kst_iso()
             }
 
         try:
@@ -503,7 +561,7 @@ class DataManager:
                 "total_columns": self.dataset.num_columns,
                 "columns": sample_table.column_names,
                 "column_info": column_info,
-                "sampled_at": datetime.now().isoformat()
+                "sampled_at": now_kst_iso()
             }
 
         except Exception as e:
@@ -573,7 +631,7 @@ class DataManager:
                             "repo_id": repo_id,
                             "filename": filename,
                             "split": split,
-                            "created_at": datetime.now().isoformat(),
+                            "created_at": now_kst_iso(),
                             "created_by": self.user_id,
                             "original_rows": combined_table.num_rows,
                             "original_columns": combined_table.num_columns
@@ -603,7 +661,7 @@ class DataManager:
                 "filename": filename,
                 "split": split,
                 "file_type": file_type,
-                "loaded_at": datetime.now().isoformat(),
+                "loaded_at": now_kst_iso(),
                 "checksum": self._calculate_checksum(self.dataset),
                 "num_rows": combined_table.num_rows,
                 "num_columns": combined_table.num_columns,
@@ -674,7 +732,7 @@ class DataManager:
                         dataset_metadata = {
                             "source_type": "local",
                             "filenames": filenames,
-                            "created_at": datetime.now().isoformat(),
+                            "created_at": now_kst_iso(),
                             "created_by": self.user_id,
                             "original_rows": combined_table.num_rows,
                             "original_columns": combined_table.num_columns
@@ -704,7 +762,7 @@ class DataManager:
             source_info = {
                 "type": "local",
                 "filenames": filenames,
-                "loaded_at": datetime.now().isoformat(),
+                "loaded_at": now_kst_iso(),
                 "checksum": self._calculate_checksum(self.dataset),
                 "num_rows": self.dataset.num_rows,
                 "num_columns": self.dataset.num_columns,
@@ -735,7 +793,7 @@ class DataManager:
                 "num_rows": combined_table.num_rows,
                 "num_columns": combined_table.num_columns,
                 "columns": combined_table.column_names,
-                "loaded_at": datetime.now().isoformat(),
+                "loaded_at": now_kst_iso(),
                 "load_count": self.dataset_load_count,
                 "is_new_version": not is_first_load,
                 "current_version": self.current_version - 1
@@ -1269,7 +1327,7 @@ class DataManager:
                             "database": db_config['database'],
                             "table_name": table_name,
                             "query": query if query else f"SELECT * FROM {table_name}",
-                            "created_at": datetime.now().isoformat(),
+                            "created_at": now_kst_iso(),
                             "created_by": self.user_id,
                             "original_rows": combined_table.num_rows,
                             "original_columns": combined_table.num_columns
@@ -1304,7 +1362,7 @@ class DataManager:
                 "database": db_config['database'],
                 "table_name": table_name,
                 "query": query if query else f"SELECT * FROM {table_name}",
-                "loaded_at": datetime.now().isoformat(),
+                "loaded_at": now_kst_iso(),
                 "checksum": self._calculate_checksum(self.dataset),
                 "num_rows": combined_table.num_rows,
                 "num_columns": combined_table.num_columns,
@@ -1340,7 +1398,7 @@ class DataManager:
                 "num_rows": combined_table.num_rows,
                 "num_columns": combined_table.num_columns,
                 "columns": combined_table.column_names,
-                "loaded_at": datetime.now().isoformat(),
+                "loaded_at": now_kst_iso(),
                 "is_new_dataset": is_first_load,
                 "current_version": self.current_version - 1,
                 "load_count": self.dataset_load_count,
@@ -1360,8 +1418,8 @@ class DataManager:
 
     # ========== 정리 및 소멸자 ==========
 
-    def cleanup(self):
-        """리소스 정리 및 매니저 종료"""
+    def cleanup(self, persist_to_redis: bool = True):
+        """리소스 정리 및 매니저 종료 (Redis 상태 저장 옵션)"""
         logger.info(f"Cleaning up DataManager {self.manager_id}")
 
         self.is_active = False
@@ -1371,16 +1429,39 @@ class DataManager:
         if hasattr(self, '_monitor_thread') and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=2)
 
-        # 데이터 정리
+        # Redis에 마지막 상태 저장 (메모리 해제 전)
+        if persist_to_redis and self.redis_manager:
+            try:
+                # 리소스 통계 저장
+                self.redis_manager.save_resource_stats(self.manager_id, self._resource_stats)
+
+                # Manager 상태 저장 (dataset은 MinIO에 이미 저장되어 있음)
+                state = {
+                    'user_id': self.user_id,
+                    'user_name': self.user_name,
+                    'dataset_id': self.dataset_id,
+                    'current_version': self.current_version,
+                    'viewing_version': self.viewing_version,
+                    'dataset_load_count': self.dataset_load_count,
+                    'initial_memory': self.initial_memory,
+                    'created_at': self.created_at.isoformat(),
+                    'cleaned_at': now_kst_iso()
+                }
+                self.redis_manager.save_manager_state(self.manager_id, state)
+                logger.info(f"✅ Manager 상태 Redis 저장 완료: {self.manager_id}")
+            except Exception as e:
+                logger.warning(f"Manager 상태 저장 실패: {e}")
+
+        # 데이터 정리 (메모리 해제)
         self.dataset = None
 
-        # Redis Manager 세션 해제
-        if self.redis_manager:
-            try:
-                self.redis_manager.unlink_manager(self.manager_id, self.user_id)
-                logger.info(f"Manager 세션 해제: {self.manager_id}")
-            except Exception as e:
-                logger.warning(f"Manager 세션 해제 실패: {e}")
+        # Redis Manager 세션 유지 (unlink 하지 않음 - 복원 가능하도록)
+        # if self.redis_manager:
+        #     try:
+        #         self.redis_manager.unlink_manager(self.manager_id, self.user_id)
+        #         logger.info(f"Manager 세션 해제: {self.manager_id}")
+        #     except Exception as e:
+        #         logger.warning(f"Manager 세션 해제 실패: {e}")
 
         # 강제 가비지 컬렉션
         gc.collect()

@@ -1,9 +1,26 @@
 """
-Manager 복구 스크립트 (개선 버전)
+⚠️ 긴급 Manager 복구 스크립트 ⚠️
+
+주의: 이 스크립트는 **긴급 상황에서만** 사용하세요!
+
+정상 상황에서는 자동 복원 메커니즘이 작동합니다:
+- 시작 시 자동 로드: main.py (Step 7.6)
+- API 호출 시 Lazy Loading: DataManagerRegistry.get_manager()
+
+이 스크립트가 필요한 경우:
+1. ❌ Redis 데이터 손상 (Manager-Dataset 매핑 깨짐)
+2. ❌ 시스템 마이그레이션 (데이터 구조 변경)
+3. ❌ 비정상 종료 후 메타데이터 손실
+
+사용법:
+    python fix_existing_managers.py
+
+자세한 내용은 README_RECOVERY.md를 참조하세요.
+
+복구 작업:
 - Manager ID 보존
-- Manager 레지스트리 복원
+- Manager ↔ Dataset ↔ User 연결 복원
 - 소유자 정보 복구
-- Dataset 연결 보장
 """
 import logging
 import redis

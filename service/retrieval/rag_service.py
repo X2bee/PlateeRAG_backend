@@ -500,6 +500,452 @@ class RAGService:
             logger.error(f"Failed to process document {file_path}: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to process document: {e}")
 
+    async def process_document_with_progress(self, user_id, app_db, file_path: str, collection_name: str,
+                                chunk_size: int = 1000, chunk_overlap: int = 200,
+                                metadata: Dict[str, Any] = None,
+                                use_llm_metadata: bool = True,
+                                process_type: str = "default",
+                                progress_callback=None
+                                ) -> Dict[str, Any]:
+        """문서를 처리하여 컬렉션에 저장 (진행 상황 콜백 지원)
+
+        Args:
+            file_path: 처리할 문서 파일 경로
+            collection_name: 저장할 컬렉션 이름
+            chunk_size: 청크 크기
+            chunk_overlap: 청크 간 중복 크기
+            metadata: 사용자 정의 메타데이터
+            use_llm_metadata: LLM을 사용한 메타데이터 생성 여부
+            process_type: 문서 처리 타입
+            progress_callback: 진행 상황 콜백 함수 (event_data를 인자로 받음)
+
+        Returns:
+            처리 결과 정보
+
+        Raises:
+            HTTPException: 문서 처리 실패
+        """
+        if not self.vector_manager.is_connected():
+            raise HTTPException(status_code=500, detail="Vector database not connected")
+
+        try:
+            processed_chunks = []
+            is_valid, file_extension = self.document_processor.validate_file_format(file_path)
+            if not is_valid:
+                raise ValueError(f"Unsupported file type: {file_extension}")
+
+            # 텍스트 추출
+            logger.info(f"Extracting text from {file_path}")
+            text = await self.document_processor.extract_text_from_file(file_path, file_extension, process_type)
+
+            if not text.strip():
+                raise ValueError("No text content found in the document")
+
+            logger.info(f"Chunking text with size {chunk_size} and overlap {chunk_overlap}")
+            try:
+                chunks_with_metadata = self.document_processor.chunk_text_with_metadata(
+                    text, file_extension, chunk_size, chunk_overlap
+                )
+            except AttributeError:
+                chunks = self.document_processor.chunk_text(text, chunk_size, chunk_overlap)
+
+                if hasattr(self.document_processor, '_build_line_starts'):
+                    line_starts = self.document_processor._build_line_starts(text)
+                    pos_to_line = getattr(self.document_processor, '_pos_to_line')
+                    find_pos = getattr(self.document_processor, '_find_chunk_position')
+                    get_page = getattr(self.document_processor, '_get_page_number_for_chunk', None)
+                else:
+                    line_starts = [0]
+                    def pos_to_line(p, ls=line_starts):
+                        return 1
+                    def find_pos(chunk, full_text, sp=0):
+                        return full_text.find(chunk, sp)
+                    find_pos = find_pos
+                    get_page = None
+
+                chunks_with_metadata = []
+                search_pos = 0
+                last_line_end = 0
+                for i, chunk in enumerate(chunks):
+                    chunk_pos = find_pos(chunk, text, search_pos)
+                    if chunk_pos != -1:
+                        start_pos = chunk_pos
+                        end_pos = min(chunk_pos + len(chunk) - 1, len(text) - 1)
+                        try:
+                            line_start = pos_to_line(start_pos, line_starts)
+                            line_end = pos_to_line(end_pos, line_starts)
+                        except Exception:
+                            line_start = text[:start_pos].count('\n') + 1
+                            line_end = text[:end_pos].count('\n') + 1
+                        search_pos = chunk_pos + len(chunk)
+                        last_line_end = line_end
+                    else:
+                        lines_in_chunk = chunk.count('\n') or 1
+                        line_start = last_line_end + 1
+                        line_end = line_start + lines_in_chunk - 1
+                        last_line_end = line_end
+
+                    if get_page is not None:
+                        try:
+                            page_number = get_page(chunk, chunk_pos, [])
+                        except Exception:
+                            page_number = 1
+                    else:
+                        page_number = 1
+
+                    chunks_with_metadata.append({
+                        "text": chunk,
+                        "page_number": page_number,
+                        "line_start": line_start,
+                        "line_end": line_end,
+                        "chunk_index": i
+                    })
+
+            chunks = [chunk_data["text"] for chunk_data in chunks_with_metadata]
+            total_chunks = len(chunks)
+
+            # 콜백: 총 청크 개수 알림
+            if progress_callback:
+                await progress_callback({'event': 'total_chunks', 'total_chunks': total_chunks})
+
+            #TODO LLM으로 chunk 데이터 Gen하는 것 임시로 구현. 후에 검토 필요
+            llm_gen_chunk_metadatas = None
+            if use_llm_metadata and await self.metadata_generator.is_enabled():
+                logger.info(f"Generating LLM metadata for {len(chunks)} chunks")
+
+                # 콜백: LLM 메타데이터 생성 시작
+                if progress_callback:
+                    await progress_callback({
+                        'event': 'llm_metadata_start',
+                        'total_chunks': len(chunks)
+                    })
+
+                try:
+                    # LLM 메타데이터 생성 (개별 진행 상황 추적)
+                    llm_gen_chunk_metadatas = []
+
+                    # max_concurrent=3으로 배치 처리하되, 개별 완료를 추적
+                    import asyncio
+                    from typing import List, Optional
+
+                    async def process_chunk_with_callback(chunk_index: int, chunk_text: str):
+                        """개별 청크 메타데이터 생성 및 콜백"""
+                        try:
+                            # 단일 청크 메타데이터 생성
+                            result = await self.metadata_generator.generate_batch_metadata(
+                                [chunk_text], None, max_concurrent=1
+                            )
+                            metadata = result[0] if result else {}
+
+                            # 콜백: 개별 LLM 처리 완료
+                            if progress_callback:
+                                await progress_callback({
+                                    'event': 'llm_chunk_processed',
+                                    'chunk_index': chunk_index,
+                                    'total_chunks': len(chunks)
+                                })
+
+                            return metadata
+                        except Exception as e:
+                            logger.warning(f"Failed to generate LLM metadata for chunk {chunk_index}: {e}")
+                            if progress_callback:
+                                await progress_callback({
+                                    'event': 'llm_chunk_processed',
+                                    'chunk_index': chunk_index,
+                                    'total_chunks': len(chunks),
+                                    'error': str(e)
+                                })
+                            return {}
+
+                    # 최대 3개씩 동시 처리
+                    semaphore = asyncio.Semaphore(3)
+
+                    async def bounded_process(chunk_index: int, chunk_text: str):
+                        async with semaphore:
+                            return await process_chunk_with_callback(chunk_index, chunk_text)
+
+                    # 모든 청크를 비동기로 처리
+                    tasks = [
+                        bounded_process(i, chunk)
+                        for i, chunk in enumerate(chunks)
+                    ]
+                    llm_gen_chunk_metadatas = await asyncio.gather(*tasks)
+
+                    # 콜백: LLM 메타데이터 생성 완료
+                    if progress_callback:
+                        await progress_callback({
+                            'event': 'llm_metadata_complete',
+                            'total_chunks': len(chunks)
+                        })
+
+                except Exception as e:
+                    logger.error(f"Failed to generate LLM metadata: {e}")
+                    llm_gen_chunk_metadatas = None
+
+                    # 콜백: LLM 메타데이터 생성 실패
+                    if progress_callback:
+                        await progress_callback({
+                            'event': 'llm_metadata_error',
+                            'error': str(e)
+                        })
+
+            processed_chunks = []
+            if llm_gen_chunk_metadatas:
+                for i, (chunk, chunk_metadata) in enumerate(zip(chunks, llm_gen_chunk_metadatas)):
+                    summary = chunk_metadata.get("summary")
+                    summary_info = f"문서 요약: {summary}" if summary and summary.strip() else ""
+                    additional_info = {
+                        "keywords": chunk_metadata.get("keywords", []),
+                        "topics": chunk_metadata.get("topics", []),
+                        "entities": chunk_metadata.get("entities", []),
+                        "sentiment": chunk_metadata.get("sentiment", ""),
+                        "document_type": chunk_metadata.get("document_type", ""),
+                        "complexity_level": chunk_metadata.get("complexity_level", ""),
+                        "main_concepts": chunk_metadata.get("main_concepts", [])
+                    }
+
+                    uuid_pattern = r'_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                    display_collection_name = re.sub(uuid_pattern, '', collection_name, flags=re.IGNORECASE)
+                    processed_chunk = f"""이는 '{display_collection_name}' 콜렉션에 존재하는 {(Path(file_path).name)} 파일의 내용입니다.
+{summary_info}
+{additional_info}
+
+{chunk}"""
+                    processed_chunks.append(processed_chunk)
+
+            logger.info(f"Generating embeddings for {len(chunks)} chunks")
+            if processed_chunks and len(processed_chunks) == len(chunks):
+                logger.info("Using processed chunks for embedding generation")
+                embeddings = await self.generate_embeddings(processed_chunks)
+                chunks = processed_chunks
+            else:
+                embeddings = await self.generate_embeddings(chunks)
+
+            # 포인트 생성 및 삽입
+            points = []
+            document_id = str(uuid.uuid4())
+            file_name = Path(file_path).name
+            stored_file_path = f"{collection_name}/{file_name}"
+
+            if metadata and isinstance(metadata, dict):
+                final_metadata = dict(metadata)
+            else:
+                final_metadata = {}
+
+            final_metadata.update({
+                "user_id": user_id,
+                "collection_name": collection_name,
+                "file_name": file_name,
+                "file_path": stored_file_path
+            })
+
+            if llm_gen_chunk_metadatas is None:
+                llm_gen_chunk_metadatas = [{} for _ in range(len(chunks_with_metadata))]
+
+            for i, (chunk, chunk_data, embedding, llm_gen_chunk_metadata) in enumerate(zip(chunks, chunks_with_metadata, embeddings, llm_gen_chunk_metadatas)):
+                page_number = chunk_data["page_number"]
+                line_start = chunk_data["line_start"]
+                line_end = chunk_data["line_end"]
+
+                chunk_metadata = {
+                    "document_id": document_id,
+                    "chunk_index": i,
+                    "chunk_text": chunk,
+                    "file_name": file_name,
+                    "file_path": stored_file_path,
+                    "file_type": file_extension,
+                    "processed_at": datetime.now(TIMEZONE).isoformat(),
+                    "chunk_size": len(chunk),
+                    "total_chunks": len(chunks),
+                    "line_start": line_start,
+                    "line_end": line_end,
+                    "page_number": page_number,
+                    "global_start": chunk_data.get("global_start", -1),
+                    "global_end": chunk_data.get("global_end", -1)
+                }
+
+                payload = dict(final_metadata) if isinstance(final_metadata, dict) else {}
+                payload.update(chunk_metadata)
+
+                if llm_gen_chunk_metadata and isinstance(llm_gen_chunk_metadata, dict):
+                    payload.update(llm_gen_chunk_metadata)
+
+                if use_llm_metadata and await self.metadata_generator.is_enabled():
+                    payload['llm_metadata_generated'] = True
+
+                chunk_id = str(uuid.uuid4())
+
+                point = {
+                    "id": chunk_id,
+                    "vector": embedding,
+                    "payload": payload
+                }
+                points.append(point)
+
+                # 콜백: 개별 청크 처리 완료
+                if progress_callback:
+                    await progress_callback({
+                        'event': 'chunk_processed',
+                        'chunk_index': i,
+                        'total_chunks': total_chunks
+                    })
+
+            # 벡터 DB에 삽입
+            operation_info = self.vector_manager.insert_points(collection_name, points)
+
+            # 컬렉션 메타데이터 업데이트
+            self.vector_manager.update_collection_document_count(collection_name, 1)
+
+            # DB 메타데이터 저장 (기존 로직과 동일)
+            for point in points:
+                payload = point["payload"]
+
+                def safe_list_to_string(value):
+                    if isinstance(value, list):
+                        if not value:
+                            return None
+                        escaped_items = [str(item).replace('"', '""') for item in value]
+                        return "{" + ",".join(f'"{item}"' for item in escaped_items) + "}"
+                    elif isinstance(value, str) and value.startswith('[') and value.endswith(']'):
+                        try:
+                            import json
+                            parsed_list = json.loads(value)
+                            if isinstance(parsed_list, list):
+                                if not parsed_list:
+                                    return None
+                                escaped_items = [str(item).replace('"', '""') for item in parsed_list]
+                                return "{" + ",".join(f'"{item}"' for item in escaped_items) + "}"
+                        except (json.JSONDecodeError, Exception):
+                            pass
+                    return value
+
+                def safe_parse_to_list(value):
+                    if isinstance(value, list):
+                        return value
+                    elif isinstance(value, str) and value.startswith('[') and value.endswith(']'):
+                        try:
+                            import json
+                            parsed_list = json.loads(value)
+                            if isinstance(parsed_list, list):
+                                return parsed_list
+                        except (json.JSONDecodeError, Exception):
+                            pass
+                    return []
+
+                provider_info = self.embeddings_client.get_provider_info()
+                embedding_provider=provider_info.get("provider", "unknown")
+                if embedding_provider == 'openai':
+                    embedding_model_name = self.config_composer.get_config_by_name('OPENAI_EMBEDDING_MODEL_NAME').value
+                elif embedding_provider == 'huggingface':
+                    embedding_model_name = self.config_composer.get_config_by_name('HUGGINGFACE_EMBEDDING_MODEL_NAME').value
+                elif embedding_provider == 'custom_http':
+                    embedding_model_name = self.config_composer.get_config_by_name('CUSTOM_EMBEDDING_MODEL_NAME').value
+                else:
+                    embedding_model_name = provider_info.get("model_name", "unknown")
+
+                vectordb_chunk_meta = VectorDBChunkMeta(
+                    user_id=user_id,
+                    collection_name=collection_name,
+                    file_name=file_name,
+                    chunk_id=point['id'],
+                    chunk_text=payload.get("chunk_text"),
+                    chunk_index=payload.get("chunk_index"),
+                    total_chunks=payload.get("total_chunks"),
+                    chunk_size=payload.get("chunk_size"),
+                    summary=payload.get("summary"),
+                    keywords=safe_list_to_string(payload.get("keywords")),
+                    topics=safe_list_to_string(payload.get("topics")),
+                    entities=safe_list_to_string(payload.get("entities")),
+                    sentiment=payload.get("sentiment"),
+                    document_id=document_id,
+                    document_type=payload.get("document_type"),
+                    language=payload.get("language"),
+                    complexity_level=payload.get("complexity_level"),
+                    main_concepts=safe_list_to_string(payload.get("main_concepts")),
+                    embedding_provider=embedding_provider,
+                    embedding_model_name=embedding_model_name,
+                    embedding_dimension=provider_info.get("dimension", 0)
+                )
+                app_db.insert(vectordb_chunk_meta)
+                app_db.insert(VectorDBChunkEdge(
+                    user_id=user_id,
+                    collection_name=collection_name,
+                    document_id=document_id,
+                    target=point['id'],
+                    source=collection_name,
+                    relation_type="chunk",
+                ))
+
+                doc_type_val = payload.get("document_type")
+                if doc_type_val and doc_type_val.strip() != "기타":
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        collection_name=collection_name,
+                        document_id=document_id,
+                        target=doc_type_val,
+                        source=point['id'],
+                        relation_type="document_type"
+                    ))
+                for keyword in safe_parse_to_list(payload.get("keywords")):
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        collection_name=collection_name,
+                        document_id=document_id,
+                        target=keyword,
+                        source=point['id'],
+                        relation_type="keyword"
+                    ))
+                for topic in safe_parse_to_list(payload.get("topics")):
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        collection_name=collection_name,
+                        document_id=document_id,
+                        target=topic,
+                        source=point['id'],
+                        relation_type="topic"
+                    ))
+                for entity in safe_parse_to_list(payload.get("entities")):
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        collection_name=collection_name,
+                        document_id=document_id,
+                        target=entity,
+                        source=point['id'],
+                        relation_type="entity"
+                    ))
+                for main_concept in safe_parse_to_list(payload.get("main_concepts")):
+                    app_db.insert(VectorDBChunkEdge(
+                        user_id=user_id,
+                        collection_name=collection_name,
+                        document_id=document_id,
+                        target=main_concept,
+                        source=point['id'],
+                        relation_type="main_concept"
+                    ))
+
+            vector_db_collection_meta = app_db.find_by_condition(VectorDB, {'collection_name': collection_name})[0]
+            if vector_db_collection_meta.init_embedding_model == None:
+                vector_db_collection_meta.init_embedding_model = embedding_model_name
+                app_db.update(vector_db_collection_meta)
+
+            llm_enabled = use_llm_metadata and await self.metadata_generator.is_enabled()
+            logger.info(f"use_llm_metadata: {use_llm_metadata}, LLM metadata enabled: {await self.metadata_generator.is_enabled()}")
+            logger.info(f"Document processed successfully: {len(chunks)} chunks inserted (LLM metadata: {llm_enabled})")
+
+            return {
+                "message": "Document processed successfully",
+                "document_id": document_id,
+                "file_name": file_name,
+                "chunks_created": len(chunks),
+                "llm_metadata_generated": llm_enabled,
+                "operation_id": operation_info.get("operation_id"),
+                "status": operation_info.get("status")
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to process document {file_path}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to process document: {e}")
+
     async def search_documents(self, collection_name: str, query_text: str,
                              limit: int = 5, score_threshold: float = 0.7,
                              filter_criteria: Dict[str, Any] = None,
