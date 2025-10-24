@@ -29,6 +29,7 @@ class AgentPublicStreamNode(Node):
     nodeName = "Agent Public Stream"
     description = "도구, 메모리 및 RAG 컨텍스트 등을 활용하여 채팅 응답을 스트리밍으로 생성하는 Agent"
     tags = ["agent", "chat", "rag", "public_model", "stream"]
+    disable = True
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},
