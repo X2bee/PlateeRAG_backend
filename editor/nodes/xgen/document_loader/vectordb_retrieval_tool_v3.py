@@ -28,7 +28,8 @@ class QdrantRetrievalTool(Node):
     categoryId = "xgen"
     functionId = "document_loaders"
     nodeId = "document_loaders/QdrantRetrievalTool_V3"
-    nodeName = "Qdrant Retrieval Tool V3"
+    # 임시로 nodeName에서 V3를 제외하여 버전 없이 사용
+    nodeName = "Qdrant Retrieval Tool"
     description = "VectorDB 검색 Tool을 전달"
     tags = ["document_loader", "qdrant", "vector_db", "rag", "setup"]
 

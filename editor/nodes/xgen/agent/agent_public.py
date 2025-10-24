@@ -29,6 +29,7 @@ class AgentPublicNode(Node):
     nodeName = "Agent Public"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 생성하는 Agent 노드"
     tags = ["agent", "chat", "rag", "public_model"]
+    disable = True
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},

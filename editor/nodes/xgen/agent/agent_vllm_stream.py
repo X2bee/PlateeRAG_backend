@@ -21,6 +21,7 @@ class AgentVLLMStreamNode(Node):
     nodeName = "Agent VLLM Stream"
     description = "RAG 컨텍스트를 사용하여 채팅 응답을 스트리밍으로 생성하는 Agent 노드"
     tags = ["agent", "chat", "rag", "vllm", "stream"]
+    disable = True
 
     inputs = [
         {"id": "text", "name": "Text", "type": "STR", "multi": False, "required": True},

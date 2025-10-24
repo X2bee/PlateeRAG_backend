@@ -11,7 +11,8 @@ class DBMemoryNode(Node):
     categoryId = "xgen"
     functionId = "memory"
     nodeId = "memory/db_memory_v1"
-    nodeName = "DB Memory v1"
+    # 임시로 nodeName에서 V1를 제외하여 버전 없이 사용
+    nodeName = "DB Memory"
     description = "DB에서 대화 기록을 로드하여 메시지 리스트로 반환 (LangChain 1.0.0)"
     tags = ["memory", "database", "chat_history", "xgen", "langchain_1.0"]
 
