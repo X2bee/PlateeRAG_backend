@@ -892,19 +892,47 @@ async def upload_model(
 
 @router.get("/")
 @router.get("")
-async def list_models(request: Request, limit: int = 100, offset: int = 0):
+async def list_models(request: Request, admin: bool = False, limit: int = 100, offset: int = 0):
     user_id = extract_user_id_from_request(request)
     app_db = get_db_manager(request)
     backend_log = create_logger(app_db, _coerce_user_id(user_id), request)
 
     logger.info(
-        "[list_models] Listing models | user_id=%s limit=%s offset=%s",
+        "[list_models] Listing models | user_id=%s admin=%s limit=%s offset=%s",
         user_id,
+        admin,
         limit,
         offset,
     )
     registry_service = ModelRegistryService(app_db)
     models = registry_service.list_models(limit=limit, offset=offset)
+
+    '''logger.info(
+        "[list_models] Raw models fetched | count=%s model_ids=%s",
+        len(models),
+        [model.id for model in models]
+    )'''
+
+    for model in models:
+        model_info = {
+            "id": model.id,
+            "model_name": model.model_name,
+            "model_version": model.model_version,
+            "framework": model.framework,
+            "description": getattr(model, "description", None),
+            "file_path": model.file_path,
+            "file_size": model.file_size,
+            "file_checksum": model.file_checksum,
+            "input_schema": model.input_schema,
+            "output_schema": model.output_schema,
+            "metadata": model.metadata,
+            "status": model.status,
+            "uploaded_by": model.uploaded_by,
+            "created_at": model.created_at.isoformat() if model.created_at else None,
+            "updated_at": model.updated_at.isoformat() if model.updated_at else None,
+        }
+        model_json = json.dumps(model_info, ensure_ascii=False, default=str)
+        '''logger.info(f"[list_models] Model full info | model_id={model.id} data={model_json}")'''
 
     serialized = [
         {
@@ -1616,6 +1644,7 @@ async def sync_model_artifacts(request: Request):
                 input_schema=remote_info.get("input_schema_fields"),
                 output_schema=remote_info.get("output_schema_fields"),
                 metadata=metadata_payload,
+                uploaded_by=_coerce_user_id(user_id),
                 status="active",
             )
         except Exception as exc:  # pragma: no cover - persistence failure
