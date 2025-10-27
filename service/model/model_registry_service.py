@@ -65,7 +65,15 @@ class ModelRegistryService:
         )
         return results[0] if results else None
 
-    def list_models(self, limit: int = 100, offset: int = 0) -> List[MLModel]:
+    def list_models(self, limit: int = 100, offset: int = 0, uploaded_by: Optional[int] = None) -> List[MLModel]:
+        if uploaded_by is not None:
+            # 특정 사용자가 업로드한 모델 또는 uploaded_by가 null인 모델만 조회
+            all_models = self.app_db.find_all(MLModel, limit=10000, offset=0)
+            filtered = [
+                model for model in all_models
+                if model.uploaded_by == uploaded_by or model.uploaded_by is None
+            ]
+            return filtered[offset:offset + limit]
         return self.app_db.find_all(MLModel, limit=limit, offset=offset)
 
     def update_model(self, model: MLModel) -> bool:
