@@ -905,13 +905,17 @@ async def list_models(request: Request, admin: bool = False, limit: int = 100, o
         offset,
     )
     registry_service = ModelRegistryService(app_db)
-    models = registry_service.list_models(limit=limit, offset=offset)
 
-    '''logger.info(
-        "[list_models] Raw models fetched | count=%s model_ids=%s",
+    # admin이 아닌 경우, 현재 사용자가 업로드한 모델만 조회
+    filter_user_id = None if admin else _coerce_user_id(user_id)
+    models = registry_service.list_models(limit=limit, offset=offset, uploaded_by=filter_user_id)
+
+    logger.info(
+        "[list_models] Raw models fetched | count=%s model_ids=%s filter_user_id=%s",
         len(models),
-        [model.id for model in models]
-    )'''
+        [model.id for model in models],
+        filter_user_id
+    )
 
     for model in models:
         model_info = {
@@ -932,7 +936,7 @@ async def list_models(request: Request, admin: bool = False, limit: int = 100, o
             "updated_at": model.updated_at.isoformat() if model.updated_at else None,
         }
         model_json = json.dumps(model_info, ensure_ascii=False, default=str)
-        '''logger.info(f"[list_models] Model full info | model_id={model.id} data={model_json}")'''
+        logger.info(f"[list_models] Model full info | model_id={model.id} data={model_json}")
 
     serialized = [
         {
