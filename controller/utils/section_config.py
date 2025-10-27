@@ -28,5 +28,5 @@ available_admin_sections = [
     # MCP
     "mcp-market", "mcp-station",
     # ML
-    "ml-model-control"
+    "ml-model-control", # "ml-model-healthcheck",
 ]
