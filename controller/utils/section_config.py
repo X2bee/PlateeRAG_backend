@@ -27,4 +27,6 @@ available_admin_sections = [
     "security-settings", "audit-logs", "error-logs",
     # MCP
     "mcp-market", "mcp-station",
+    # ML
+    "ml-model-control", # "ml-model-healthcheck",
 ]
