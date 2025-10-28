@@ -157,6 +157,9 @@ class MachineLearningTool(Node):
             model_id = model.get("id")
             model_name = model.get("model_name") or "Unnamed Model"
             model_version = model.get("model_version") or ""
+            model_stage = model.get("stage") or ""
+            if model_stage is not 'Production':
+                continue
             label = model_name
             if model_version:
                 label = f"{model_name} (v{model_version})"

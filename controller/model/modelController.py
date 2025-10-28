@@ -948,6 +948,7 @@ async def list_models(request: Request, admin: bool = False, limit: int = 100, o
             "file_size": model.file_size,
             "file_checksum": model.file_checksum,
             "status": model.status,
+            "stage": model.metadata.get("stage") if isinstance(model.metadata, dict) else None,
             "uploaded_by": model.uploaded_by,
             "created_at": model.created_at.isoformat() if model.created_at else None,
             "updated_at": model.updated_at.isoformat() if model.updated_at else None,
